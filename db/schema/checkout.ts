@@ -13,7 +13,7 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 import { carts } from "./cart";
-import { productVariants, products } from "./catalog";
+import { products } from "./catalog";
 import { createdAt, currency, id, money, updatedAt } from "./columns";
 import {
   approvalStatusEnum,
@@ -54,21 +54,19 @@ export const checkoutProposals = pgTable(
     merchantId: uuid("merchant_id")
       .notNull()
       .references(() => merchants.id, { onDelete: "restrict" }),
-    version: integer("version").notNull().default(1),
     cartVersion: integer("cart_version").notNull(),
     status: checkoutProposalStatusEnum("status").notNull().default("PREPARED"),
     policyDecision: policyDecisionEnum("policy_decision").notNull(),
-    policyReasons: jsonb("policy_reasons").$type<string[]>().notNull().default([]),
+    policyReasons: jsonb("policy_reasons")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
     subtotalMinor: money("subtotal_minor"),
     discountMinor: money("discount_minor"),
     shippingMinor: money("shipping_minor"),
     taxMinor: money("tax_minor"),
     totalMinor: money("total_minor"),
     currency: currency(),
-    priceChanges: jsonb("price_changes")
-      .$type<JsonObject[]>()
-      .notNull()
-      .default([]),
     stockWarnings: jsonb("stock_warnings")
       .$type<JsonObject[]>()
       .notNull()
@@ -80,7 +78,6 @@ export const checkoutProposals = pgTable(
   (table) => [
     index("checkout_proposals_customer_idx").on(table.userId, table.merchantId),
     index("checkout_proposals_cart_idx").on(table.cartId),
-    check("checkout_proposals_version_positive", sql`${table.version} > 0`),
     check(
       "checkout_proposals_cart_version_positive",
       sql`${table.cartVersion} > 0`,
@@ -102,9 +99,6 @@ export const checkoutProposalItems = pgTable(
     productId: uuid("product_id")
       .notNull()
       .references(() => products.id, { onDelete: "restrict" }),
-    variantId: uuid("variant_id").references(() => productVariants.id, {
-      onDelete: "restrict",
-    }),
     nameSnapshot: varchar("name_snapshot", { length: 240 }).notNull(),
     quantity: integer("quantity").notNull(),
     unitPriceMinor: money("unit_price_minor"),

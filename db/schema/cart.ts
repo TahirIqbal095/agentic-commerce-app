@@ -7,7 +7,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import { productVariants, products } from "./catalog";
+import { products } from "./catalog";
 import { createdAt, currency, id, money, updatedAt } from "./columns";
 import { cartStatusEnum } from "./enums";
 import { merchants, users } from "./identity";
@@ -47,21 +47,16 @@ export const cartItems = pgTable(
     productId: uuid("product_id")
       .notNull()
       .references(() => products.id, { onDelete: "restrict" }),
-    variantId: uuid("variant_id").references(() => productVariants.id, {
-      onDelete: "restrict",
-    }),
     quantity: integer("quantity").notNull(),
     unitPriceSnapshotMinor: money("unit_price_snapshot_minor"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (table) => [
-    uniqueIndex("cart_items_unvarianted_selection_unique")
-      .on(table.cartId, table.productId)
-      .where(sql`${table.variantId} is null`),
-    uniqueIndex("cart_items_variant_selection_unique")
-      .on(table.cartId, table.variantId)
-      .where(sql`${table.variantId} is not null`),
+    uniqueIndex("cart_items_product_selection_unique").on(
+      table.cartId,
+      table.productId,
+    ),
     index("cart_items_cart_idx").on(table.cartId),
     check(
       "cart_items_quantity_range",

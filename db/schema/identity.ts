@@ -1,6 +1,5 @@
 import { index, pgTable, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
 import { createdAt, currency, id, updatedAt } from "./columns";
-import { userRoleEnum } from "./enums";
 
 export const merchants = pgTable(
   "merchants",
@@ -21,7 +20,6 @@ export const users = pgTable(
     id: id(),
     email: varchar("email", { length: 320 }).notNull(),
     name: varchar("name", { length: 160 }).notNull(),
-    role: userRoleEnum("role").notNull().default("CUSTOMER"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

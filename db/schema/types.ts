@@ -2,7 +2,7 @@ import type { agentActions, conversations, messages } from "./agent";
 import type { recommendationEvents } from "./analytics";
 import type { auditEvents } from "./audit";
 import type { cartItems, carts } from "./cart";
-import type { productRelations, products, productVariants } from "./catalog";
+import type { productRelations, products } from "./catalog";
 import type {
   approvals,
   checkoutProposalItems,
@@ -25,8 +25,6 @@ export type NewMerchantAdmin = typeof merchantAdmins.$inferInsert;
 
 export type Product = typeof products.$inferSelect;
 export type NewProduct = typeof products.$inferInsert;
-export type ProductVariant = typeof productVariants.$inferSelect;
-export type NewProductVariant = typeof productVariants.$inferInsert;
 export type ProductRelation = typeof productRelations.$inferSelect;
 export type NewProductRelation = typeof productRelations.$inferInsert;
 

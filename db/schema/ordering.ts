@@ -9,7 +9,7 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 import { carts } from "./cart";
-import { productVariants, products } from "./catalog";
+import { products } from "./catalog";
 import { approvals, checkoutProposals } from "./checkout";
 import { createdAt, currency, id, money, updatedAt } from "./columns";
 import { orderStatusEnum } from "./enums";
@@ -65,9 +65,6 @@ export const orderItems = pgTable(
     productId: uuid("product_id")
       .notNull()
       .references(() => products.id, { onDelete: "restrict" }),
-    variantId: uuid("variant_id").references(() => productVariants.id, {
-      onDelete: "restrict",
-    }),
     nameSnapshot: varchar("name_snapshot", { length: 240 }).notNull(),
     quantity: integer("quantity").notNull(),
     unitPriceMinor: money("unit_price_minor"),

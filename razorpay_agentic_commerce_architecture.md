@@ -62,7 +62,7 @@ The agent should:
 5. Add a selected item to cart.
 6. Recommend a relevant cross-sell or upsell.
 7. Respect budget and merchant policies.
-8. Revalidate price and inventory before checkout.
+8. Validate inventory and prepare a final-price checkout proposal.
 9. Ask for explicit approval.
 10. Create a Razorpay order in test mode.
 11. Complete and verify payment.
@@ -508,7 +508,6 @@ The major domain entities are:
 Merchant
 User
 Product
-ProductVariant
 ProductRelation
 Cart
 CartItem
@@ -552,21 +551,29 @@ updated_at
 id
 email
 name
-role
 created_at
 updated_at
 ```
 
-Roles:
-
-```text
-CUSTOMER
-MERCHANT_ADMIN
-```
+Every user can shop as a customer. Merchant administration is granted through a
+merchant-specific membership rather than a global user role.
 
 ---
 
-## 8.3 products
+## 8.3 merchant_admins
+
+```text
+merchant_id
+user_id
+created_at
+```
+
+One user may administer multiple merchants, and one merchant may have multiple
+administrators.
+
+---
+
+## 8.4 products
 
 ```text
 id
@@ -592,24 +599,6 @@ updated_at
   "batteryHours": 40,
   "noiseCancellation": true
 }
-```
-
----
-
-## 8.4 product_variants
-
-Optional but useful.
-
-```text
-id
-product_id
-sku
-name
-price_override
-stock
-attributes_json
-created_at
-updated_at
 ```
 
 ---
@@ -669,14 +658,13 @@ ABANDONED
 id
 cart_id
 product_id
-variant_id
 quantity
 unit_price_snapshot
 created_at
 updated_at
 ```
 
-`unit_price_snapshot` is useful for detecting price changes later.
+`unit_price_snapshot` records the price displayed in the cart. Checkout preparation fixes the final payable price in an immutable proposal snapshot.
 
 ---
 
@@ -717,7 +705,6 @@ FULFILLED
 id
 order_id
 product_id
-variant_id
 name_snapshot
 quantity
 unit_price
@@ -1079,7 +1066,6 @@ Returns authoritative cart state.
 ```ts
 {
   productId: string;
-  variantId?: string;
   quantity: number;
 }
 ```
@@ -1372,13 +1358,9 @@ If cart is ₹4,000:
 maximum recommended incremental spend = ₹1,000
 ```
 
-## Price Change
+## Final Proposal Price
 
-If price changed after cart creation:
-
-```text
-REQUIRES_APPROVAL
-```
+For the MVP, prices do not change after checkout preparation. The amount stored in the approved checkout proposal is the final amount used to create the order and payment attempt.
 
 ## Refund
 
@@ -1803,31 +1785,30 @@ At least one failure should be deliberately demonstrated.
 
 Recommended failure scenarios:
 
-1. price changed,
-2. item went out of stock,
-3. payment failed,
-4. spending limit exceeded,
-5. duplicate checkout attempt,
-6. webhook delivered twice.
+1. item went out of stock,
+2. payment failed,
+3. spending limit exceeded,
+4. duplicate checkout attempt,
+5. webhook delivered twice.
 
 ---
 
-# 28. Best Demo Failure: Price Change
+# 28. Best Demo Failure: Out of Stock
 
 Sequence:
 
 ```text
-Agent recommends product at ₹4,499
+Agent recommends a product with one unit in stock
         ↓
 User adds to cart
         ↓
-Merchant updates price to ₹4,799
+Another customer buys the final unit
         ↓
 User asks to checkout
         ↓
-CheckoutService revalidates
+CheckoutService validates current inventory
         ↓
-Price mismatch detected
+Out-of-stock condition detected
         ↓
 Payment NOT created
         ↓
@@ -1837,19 +1818,16 @@ User informed
 User-facing response:
 
 ```text
-The price of SoundMax Pro changed from ₹4,499 to ₹4,799.
-
-Your previous total was ₹4,798.
-Your updated total is ₹5,098.
+SoundMax Pro is no longer in stock.
 
 No payment has been initiated.
 
-Please confirm the updated amount before continuing.
+Please remove it from your cart or choose another product.
 ```
 
 This demonstrates:
 
-- revalidation,
+- inventory validation,
 - bounded money actions,
 - user approval,
 - explainability,
@@ -2382,9 +2360,9 @@ COMMIT
 BEGIN
 
 mark payment CAPTURED
+decrement product inventory
 mark order PAID
 mark cart CONVERTED
-decrement/reserve inventory if not already done
 write audit event
 
 COMMIT
@@ -2401,7 +2379,6 @@ Examples:
 ```text
 PRODUCT_NOT_FOUND
 OUT_OF_STOCK
-PRICE_CHANGED
 POLICY_BLOCKED
 APPROVAL_REQUIRED
 APPROVAL_EXPIRED
@@ -2416,11 +2393,10 @@ API response:
 ```json
 {
   "error": {
-    "code": "PRICE_CHANGED",
-    "message": "One or more product prices changed.",
+    "code": "OUT_OF_STOCK",
+    "message": "One or more products are no longer in stock.",
     "details": {
-      "oldTotal": 4798,
-      "newTotal": 5098
+      "productId": "prod_123"
     }
   }
 }
@@ -2596,35 +2572,24 @@ System:
 
 # 43. End-to-End Failure Path
 
-Suppose:
-
-```text
-Original product price:
-₹4,499
-```
-
-Before checkout, merchant updates price:
-
-```text
-₹4,799
-```
+Suppose the cart total exceeds the merchant's configured transaction limit.
 
 Flow:
 
 ```text
 User requests checkout
         ↓
-CheckoutService loads latest product
+CheckoutService prepares the final proposal
         ↓
-Detects mismatch
+Policy engine evaluates the total
         ↓
-PRICE_CHANGED
+POLICY_BLOCKED
         ↓
-Policy / approval invalidated
+No approval is created
         ↓
 Payment not created
         ↓
-User receives updated total
+User receives the policy explanation
         ↓
 Audit event written
 ```
@@ -2632,7 +2597,7 @@ Audit event written
 Result:
 
 ```text
-No money action occurred without renewed approval.
+No money action occurred outside merchant policy.
 ```
 
 This directly satisfies the assignment bar.
@@ -3213,12 +3178,6 @@ analytics
 Add one deliberate scenario:
 
 ```text
-price change
-```
-
-or:
-
-```text
 spending limit
 ```
 
@@ -3283,8 +3242,6 @@ REQUIRE_PAYMENT_APPROVAL = true
 
 MAX_UPSELL_PERCENT_OF_CART = 25
 
-REVALIDATE_PRICE_BEFORE_PAYMENT = true
-
 REVALIDATE_INVENTORY_BEFORE_PAYMENT = true
 ```
 
@@ -3313,7 +3270,7 @@ User accepts/rejects
  ↓
 Checkout requested
  ↓
-Backend revalidates pricing and inventory
+Backend validates inventory and uses the proposal's final prices
  ↓
 Policy engine evaluates
  ↓

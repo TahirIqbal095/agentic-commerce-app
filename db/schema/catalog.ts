@@ -1,6 +1,5 @@
 import { sql } from "drizzle-orm";
 import {
-  bigint,
   boolean,
   check,
   index,
@@ -47,33 +46,6 @@ export const products = pgTable(
     ),
     check("products_price_nonnegative", sql`${table.priceMinor} >= 0`),
     check("products_stock_nonnegative", sql`${table.stock} >= 0`),
-  ],
-);
-
-export const productVariants = pgTable(
-  "product_variants",
-  {
-    id: id(),
-    productId: uuid("product_id")
-      .notNull()
-      .references(() => products.id, { onDelete: "cascade" }),
-    sku: varchar("sku", { length: 100 }).notNull(),
-    name: varchar("name", { length: 160 }).notNull(),
-    priceOverrideMinor: bigint("price_override_minor", { mode: "number" }),
-    stock: integer("stock").notNull().default(0),
-    attributes: jsonb("attributes").$type<JsonObject>().notNull().default({}),
-    active: boolean("active").notNull().default(true),
-    createdAt: createdAt(),
-    updatedAt: updatedAt(),
-  },
-  (table) => [
-    uniqueIndex("product_variants_sku_unique").on(table.sku),
-    index("product_variants_product_idx").on(table.productId),
-    check(
-      "product_variants_price_nonnegative",
-      sql`${table.priceOverrideMinor} is null or ${table.priceOverrideMinor} >= 0`,
-    ),
-    check("product_variants_stock_nonnegative", sql`${table.stock} >= 0`),
   ],
 );
 

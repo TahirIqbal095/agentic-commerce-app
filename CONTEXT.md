@@ -4,6 +4,10 @@ This context describes a merchant storefront where customers and an AI shopping 
 
 ## People and ownership
 
+**User**:
+A person with one identity who may shop as a customer and may administer any merchant that has granted them access.
+_Avoid_: Account, Customer, Merchant Admin
+
 **Merchant**:
 The business that owns a catalog, policies, carts, orders, and audit history.
 _Avoid_: Store, seller account
@@ -13,7 +17,7 @@ A user who browses products, owns a cart, authorizes checkout, and places orders
 _Avoid_: Buyer, shopper account
 
 **Merchant Admin**:
-A user authorized to manage one merchant's catalog, policies, approvals, and operational data.
+A user authorized through a merchant-specific membership to manage that merchant's catalog, policies, approvals, and operational data.
 _Avoid_: Merchant, administrator account
 
 ## Catalog and shopping
@@ -21,10 +25,6 @@ _Avoid_: Merchant, administrator account
 **Product**:
 A merchant-owned item offered for sale, with an authoritative base price and inventory state.
 _Avoid_: Listing, catalog item
-
-**Product Variant**:
-A purchasable selection of a product distinguished by attributes such as color or size and optionally carrying its own price and stock.
-_Avoid_: Option, SKU
 
 **Product Relation**:
 A merchant-curated relationship between two products used to generate cross-sell, upsell, accessory, bundle, alternative, or compatibility candidates.
@@ -41,7 +41,7 @@ _Avoid_: Product relation
 ## Checkout and authorization
 
 **Checkout Proposal**:
-An immutable, versioned summary of a revalidated cart, including item snapshots, totals, warnings, and the policy decision at preparation time.
+An immutable commercial summary of a cart, including final item prices, totals, stock warnings, and the policy decision at preparation time.
 _Avoid_: Checkout, quote, payment request
 
 **Policy Evaluation**:

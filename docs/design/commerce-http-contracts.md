@@ -25,8 +25,8 @@ Expected errors use:
 ```json
 {
   "error": {
-    "code": "PRICE_CHANGED",
-    "message": "One or more product prices changed.",
+    "code": "POLICY_BLOCKED",
+    "message": "The requested checkout is blocked by merchant policy.",
     "details": {}
   }
 }
@@ -108,7 +108,7 @@ Audit: catalog reads are not individually audited for the storefront. Agent-orig
 
 ### `GET /api/products/:productId`
 
-Returns an active product with its purchasable variants. A product from another merchant is treated as not found.
+Returns an active product. A product from another merchant is treated as not found.
 
 Errors: `PRODUCT_NOT_FOUND`.
 
@@ -129,12 +129,10 @@ type CartResponse = {
   items: Array<{
     id: string;
     productId: string;
-    variantId?: string;
     name: string;
     quantity: number;
     unitPriceMinor: number;
     lineTotalMinor: number;
-    priceChanged: boolean;
   }>;
   subtotalMinor: number;
   discountMinor: number;
@@ -144,7 +142,7 @@ type CartResponse = {
 };
 ```
 
-The response is calculated from current server data; stored cart-item prices are comparison snapshots, not final prices.
+The response is calculated from current server data. Final payable prices are fixed when the checkout proposal is prepared.
 
 ### `POST /api/cart/items`
 
@@ -153,15 +151,14 @@ Request:
 ```ts
 type AddCartItemRequest = {
   productId: string;
-  variantId?: string;
   quantity: number; // integer, 1..10
   expectedCartVersion?: number;
 };
 ```
 
-The module validates merchant ownership, product activity, variant membership, inventory, and currency. Adding an existing selection increases its quantity.
+The module validates merchant ownership, product activity, inventory, and currency. Adding an existing product increases its quantity.
 
-Errors: `PRODUCT_NOT_FOUND`, `VARIANT_NOT_FOUND`, `OUT_OF_STOCK`, `CART_NOT_ACTIVE`, `CART_VERSION_CONFLICT`, `INVALID_QUANTITY`.
+Errors: `PRODUCT_NOT_FOUND`, `OUT_OF_STOCK`, `CART_NOT_ACTIVE`, `CART_VERSION_CONFLICT`, `INVALID_QUANTITY`.
 
 Audit: `CART_ITEM_ADDED` with IDs, quantity, and resulting cart total.
 
@@ -194,12 +191,12 @@ Audit: `CART_ITEM_REMOVED`.
 
 No cart ID is accepted. The module resolves the customer's active cart, then:
 
-1. Reads current products and variants.
+1. Reads current products.
 2. Validates inventory.
 3. Calculates authoritative totals.
-4. Compares current prices with cart snapshots.
+4. Fixes those prices in an immutable checkout proposal.
 5. Evaluates active merchant policies.
-6. Persists an immutable checkout proposal and its item snapshots.
+6. Persists the proposal and its item snapshots.
 7. Creates an approval when the policy decision requires one.
 
 Request:
@@ -216,7 +213,6 @@ Response:
 type PrepareCheckoutResponse = {
   proposal: {
     id: string;
-    version: number;
     cartId: string;
     cartVersion: number;
     items: CheckoutItemSnapshot[];
@@ -226,7 +222,6 @@ type PrepareCheckoutResponse = {
     taxMinor: number;
     totalMinor: number;
     currency: string;
-    priceChanges: PriceChange[];
     stockWarnings: StockWarning[];
     expiresAt: string;
   };
@@ -242,11 +237,11 @@ type PrepareCheckoutResponse = {
 };
 ```
 
-An empty cart or hard policy block produces no approval. A price change produces a new proposal that must be explicitly approved; no payment operation occurs.
+An empty cart or hard policy block produces no approval. Prices in a prepared proposal are final for that checkout and are not recalculated during confirmation.
 
 Errors: `CART_EMPTY`, `CART_VERSION_CONFLICT`, `OUT_OF_STOCK`, `POLICY_BLOCKED`.
 
-Audit: `CHECKOUT_PREPARED`, `PRICE_CHANGE_DETECTED`, `POLICY_EVALUATED`, `APPROVAL_CREATED`, or `ACTION_BLOCKED` as applicable.
+Audit: `CHECKOUT_PREPARED`, `POLICY_EVALUATED`, `APPROVAL_CREATED`, or `ACTION_BLOCKED` as applicable.
 
 ## Approval
 
@@ -259,7 +254,6 @@ Request:
 ```ts
 type ApproveRequest = {
   proposalId: string;
-  proposalVersion: number;
 };
 ```
 
@@ -288,7 +282,7 @@ type ConfirmCheckoutRequest = {
 };
 ```
 
-The module atomically validates the approval and proposal, revalidates current prices and stock, creates the internal order and immutable order items, marks the cart `CHECKOUT_PENDING`, and creates one payment attempt/provider order. Repeating the same key returns the same order and payment attempt.
+The module atomically validates the approval and proposal, checks current stock without decrementing it, creates the internal order and immutable order items from the proposal, marks the cart `CHECKOUT_PENDING`, and creates one payment attempt/provider order. Repeating the same key returns the same order and payment attempt.
 
 Response:
 
@@ -311,7 +305,7 @@ type ConfirmCheckoutResponse = {
 };
 ```
 
-Errors: `IDEMPOTENCY_KEY_REQUIRED`, `APPROVAL_REQUIRED`, `APPROVAL_EXPIRED`, `APPROVAL_ALREADY_USED`, `PROPOSAL_EXPIRED`, `CART_CHANGED`, `PRICE_CHANGED`, `OUT_OF_STOCK`, `POLICY_BLOCKED`, `PAYMENT_CREATION_FAILED`.
+Errors: `IDEMPOTENCY_KEY_REQUIRED`, `APPROVAL_REQUIRED`, `APPROVAL_EXPIRED`, `APPROVAL_ALREADY_USED`, `PROPOSAL_EXPIRED`, `CART_CHANGED`, `OUT_OF_STOCK`, `POLICY_BLOCKED`, `PAYMENT_CREATION_FAILED`.
 
 Audit: `ORDER_CREATED`, `PAYMENT_ATTEMPT_CREATED`, `PROVIDER_ORDER_CREATED`; failure events are recorded without claiming money moved.
 
@@ -332,7 +326,7 @@ type VerifyPaymentRequest = {
 };
 ```
 
-The module loads the expected provider order and amount, verifies the signature server-side, and applies an idempotent state transition. It never accepts an amount or success flag from the browser.
+The module loads the expected provider order and amount, verifies the signature server-side, and applies an idempotent state transition. After payment is verified, the same database transaction decrements product stock, marks the order paid, and converts the cart. It never accepts an amount or success flag from the browser.
 
 Errors: `PAYMENT_ATTEMPT_NOT_FOUND`, `PAYMENT_ORDER_MISMATCH`, `PAYMENT_VERIFICATION_FAILED`, `ORDER_ALREADY_PAID`.
 
@@ -396,6 +390,7 @@ State transitions occur inside domain modules and database transactions. Route h
 - At most one active cart exists for a customer and merchant.
 - Cart mutations increment a monotonic cart version.
 - A checkout proposal records the cart version and immutable item/price snapshots it evaluated.
+- Product stock is decremented only after verified payment, in the transaction that marks the order paid.
 - An approval belongs to one customer, one proposal, one amount, and one currency, and has an expiry.
 - One approval can create at most one internal order.
 - One idempotency key can create at most one payment attempt.
