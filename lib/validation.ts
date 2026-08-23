@@ -9,3 +9,7 @@ export function isUuid(value: string): boolean {
 export function isUnsignedInteger(value: string): boolean {
   return UNSIGNED_INTEGER_PATTERN.test(value);
 }
+
+export function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
+}

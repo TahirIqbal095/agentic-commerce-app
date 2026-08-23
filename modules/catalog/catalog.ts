@@ -13,12 +13,12 @@ import {
 import { db } from "@/db";
 import { products } from "@/db/schema/catalog";
 import type {
-  CatalogModule,
   CatalogProduct,
   CatalogSearch,
   CatalogSearchResult,
   ProductDetailResult,
 } from "./types";
+import { escapeLikePattern } from "@/lib/validation";
 
 const productSelection = {
   id: products.id,
@@ -50,8 +50,9 @@ function toCatalogProduct(
   };
 }
 
-function escapeLikePattern(value: string): string {
-  return value.replace(/[\\%_]/g, "\\$&");
+export interface CatalogModule {
+  search(input: CatalogSearch): Promise<CatalogSearchResult>;
+  getProduct(productId: string): Promise<ProductDetailResult>;
 }
 
 export function createCatalogModule(merchantId: string): CatalogModule {

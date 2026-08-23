@@ -36,8 +36,3 @@ export type CatalogError = {
 export type ProductDetailResult =
   | { ok: true; value: CatalogProduct }
   | { ok: false; error: CatalogError };
-
-export interface CatalogModule {
-  search(input: CatalogSearch): Promise<CatalogSearchResult>;
-  getProduct(productId: string): Promise<ProductDetailResult>;
-}
