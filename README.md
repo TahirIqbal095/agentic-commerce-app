@@ -18,6 +18,18 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## Commerce API configuration
+
+The product API resolves its merchant context on the server. Set `MERCHANT_ID` to
+the UUID of the storefront merchant. For local, single-merchant databases it can
+be omitted; the API will use the only merchant present. If the database contains
+zero or multiple merchants, `MERCHANT_ID` is required.
+
+The catalog endpoints are:
+
+- `GET /api/products`
+- `GET /api/products/:productId`
+
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
 ## Learn More

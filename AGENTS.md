@@ -7,3 +7,11 @@ This version has breaking changes — APIs, conventions, and file structure may 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
+
+## Test-driven development
+
+Use TDD for every new feature, behavior change, and bug fix. Before writing a
+test, identify the public behavior seam and confirm that seam with the user.
+Then work in vertical slices: write one failing behavior test, implement only
+enough production code to make it pass, and repeat. Refactor only after the
+behavior is covered and the test suite is green.
