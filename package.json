@@ -8,8 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "test": "node --import tsx --test \"**/*.test.ts\"",
+    "test:integration": "node --import tsx --test db/seed.integration.ts",
     "db:generate": "npx drizzle-kit generate",
-    "db:migrate": "npx drizzle-kit migrate"
+    "db:migrate": "npx drizzle-kit migrate",
+    "db:seed": "tsx db/run-seed.ts"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
