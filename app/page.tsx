@@ -1,5 +1,5 @@
-import Image from "next/image";
+import { ShoppingAssistant } from "./shopping-assistant";
 
 export default function Home() {
-  return <div></div>;
+  return <ShoppingAssistant />;
 }
