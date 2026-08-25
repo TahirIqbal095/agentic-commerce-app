@@ -267,7 +267,7 @@ function Composer({
               onChange={(event) => setPrompt(event.target.value)}
               placeholder="What are you looking for?"
               autoComplete="off"
-              className="max-h-36 min-h-14 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-0 py-3.5 text-[15px] leading-6 text-[#1d2a24] shadow-none field-sizing-content placeholder:text-[#8c958f] focus-visible:ring-0"
+              className="max-h-36 min-h-18 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-0 py-3.5 text-[20px] font-medium leading-6 text-[#1d2a24] shadow-none field-sizing-content placeholder:text-[#8c958f] focus-visible:ring-0"
             />
           </div>
 
@@ -276,7 +276,7 @@ function Composer({
             size="icon"
             disabled={isLoading || prompt.trim().length === 0}
             aria-label={isLoading ? "Searching catalog" : "Send"}
-            className="mb-1 size-12 shrink-0 rounded-2xl bg-[#1d2a24] text-white shadow-lg shadow-[#1d2a24]/15 transition-all duration-300 hover:-translate-y-0.5 hover:bg-[#31463a] hover:shadow-xl disabled:translate-y-0 disabled:bg-[#dfe3df] disabled:text-[#9da49f] disabled:shadow-none"
+            className="mb-1 size-10 shrink-0 rounded-2xl bg-[#1d2a24] text-white shadow-lg shadow-[#1d2a24]/15 transition-all duration-300 hover:-translate-y-0.5 hover:bg-[#31463a] hover:shadow-xl disabled:translate-y-0 disabled:bg-[#dfe3df] disabled:text-[#9da49f] disabled:shadow-none"
           >
             {isLoading ? (
               <span className="size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
