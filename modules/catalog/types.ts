@@ -14,9 +14,15 @@ export type CatalogProduct = {
 
 export type CatalogSearch = {
   query?: string;
+  queries?: string[];
+  productTypes?: string[];
+  useCases?: string[];
+  features?: string[];
   category?: string;
   minPriceMinor?: number;
   maxPriceMinor?: number;
+  size?: string;
+  inStockOnly?: boolean;
   attributes?: JsonObject;
   cursor?: string;
   limit: number;

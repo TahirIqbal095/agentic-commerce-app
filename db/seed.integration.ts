@@ -4,16 +4,23 @@ import test, { after } from "node:test";
 import { promisify } from "node:util";
 import { GET } from "@/app/api/products/route";
 import { db } from "@/db";
+import { createCatalogModule } from "@/modules/catalog/catalog";
 
 const execFileAsync = promisify(execFile);
 const DEMO_MERCHANT_ID = "11111111-1111-4111-8111-111111111111";
 const EXPECTED_ACTIVE_PRODUCTS = [
-  { slug: "aerotune-wireless-headphones", inStock: true },
-  { slug: "pocket-bluetooth-speaker", inStock: false },
-  { slug: "sprint-running-shoes", inStock: true },
-  { slug: "commuter-backpack", inStock: true },
-  { slug: "pulse-smart-watch", inStock: true },
-  { slug: "compact-coffee-maker", inStock: true },
+  { slug: "strideflow-daily-running-shoes", inStock: true },
+  { slug: "trailcrest-grip-running-shoes", inStock: true },
+  { slug: "cloudstep-walking-shoes", inStock: false },
+  { slug: "flexforge-training-shoes", inStock: true },
+  { slug: "courtline-casual-sneakers", inStock: true },
+  { slug: "heritage-oxford-formal-shoes", inStock: true },
+  { slug: "everyday-comfort-sandals", inStock: true },
+  { slug: "performance-ankle-socks", inStock: true },
+  { slug: "cushioned-crew-socks", inStock: true },
+  { slug: "support-gel-insoles", inStock: true },
+  { slug: "reflective-running-laces", inStock: true },
+  { slug: "complete-shoe-care-kit", inStock: true },
 ];
 const originalMerchantId = process.env.MERCHANT_ID;
 
@@ -58,5 +65,64 @@ test("demo catalog seed is repeatable and exposes only active products", async (
       }),
     ),
     EXPECTED_ACTIVE_PRODUCTS,
+  );
+
+  const roadRunningShoe = secondBody.data.products.find(
+    (product: { slug: string }) =>
+      product.slug === "strideflow-daily-running-shoes",
+  );
+  assert.deepEqual(roadRunningShoe?.attributes, {
+    brand: "StrideFlow",
+    audience: "Unisex",
+    colors: ["Midnight Blue", "Cloud White"],
+    sizes: ["UK 6", "UK 7", "UK 8", "UK 9", "UK 10", "UK 11"],
+    useCases: ["road running", "daily training"],
+    surface: "Road",
+    cushioning: "Responsive",
+    support: "Neutral",
+  });
+});
+
+test("catalog search matches related footwear product types", async () => {
+  await runSeedCommand();
+  const catalog = createCatalogModule(DEMO_MERCHANT_ID);
+
+  const result = await catalog.search({
+    queries: ["running shoes", "trainers", "sneakers"],
+    category: "Footwear",
+    limit: 20,
+  });
+
+  assert.deepEqual(
+    result.products.map((product) => product.slug),
+    [
+      "strideflow-daily-running-shoes",
+      "trailcrest-grip-running-shoes",
+      "flexforge-training-shoes",
+      "courtline-casual-sneakers",
+    ],
+  );
+});
+
+test("catalog retrieval combines intent, commerce, and availability criteria", async () => {
+  await runSeedCommand();
+  const catalog = createCatalogModule(DEMO_MERCHANT_ID);
+
+  const result = await catalog.search({
+    productTypes: ["running shoes"],
+    useCases: ["road running"],
+    features: ["breathable"],
+    category: "Footwear",
+    minPriceMinor: 200000,
+    maxPriceMinor: 500000,
+    size: "UK 9",
+    inStockOnly: true,
+    attributes: { support: "Neutral" },
+    limit: 20,
+  });
+
+  assert.deepEqual(
+    result.products.map((product) => product.slug),
+    ["strideflow-daily-running-shoes"],
   );
 });

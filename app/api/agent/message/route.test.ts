@@ -9,7 +9,18 @@ test("accepts a user prompt and returns the structured agent response", async ()
     async respond(input) {
       messages.push(input.message);
       return {
-        message: "Here are the products currently available in our catalog.",
+        message: "I found products matching your request.",
+        intent: {
+          productTypes: ["headphones"],
+          useCases: [],
+          features: [],
+          category: "Audio",
+          minPriceMinor: null,
+          maxPriceMinor: null,
+          size: null,
+          inStockOnly: true,
+          attributes: {},
+        },
         products: [],
       };
     },
@@ -28,7 +39,18 @@ test("accepts a user prompt and returns the structured agent response", async ()
   assert.deepEqual(messages, ["show me products"]);
   assert.deepEqual(await response.json(), {
     data: {
-      message: "Here are the products currently available in our catalog.",
+      message: "I found products matching your request.",
+      intent: {
+        productTypes: ["headphones"],
+        useCases: [],
+        features: [],
+        category: "Audio",
+        minPriceMinor: null,
+        maxPriceMinor: null,
+        size: null,
+        inStockOnly: true,
+        attributes: {},
+      },
       products: [],
     },
   });

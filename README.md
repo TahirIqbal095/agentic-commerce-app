@@ -9,3 +9,21 @@ The catalog endpoints are:
 
 - `GET /api/products`
 - `GET /api/products/:productId`
+
+## AI shopping assistant
+
+The shopping assistant uses the Vercel AI SDK with Google's Gemini Developer
+API to convert a customer message into a structured catalog intent before
+retrieving products. It calls Google directly and does not use Vercel AI
+Gateway. Add these values to `.env` for local development:
+
+```dotenv
+GOOGLE_GENERATIVE_AI_API_KEY=your_google_ai_studio_key
+GOOGLE_GENERATIVE_AI_MODEL=
+```
+
+The assistant endpoint is `POST /api/agent/message` with a JSON body such as:
+
+```json
+{ "message": "I want good sound quality earphones under ₹5,000" }
+```

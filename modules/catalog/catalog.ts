@@ -72,8 +72,80 @@ export function createCatalogModule(merchantId: string): CatalogModule {
         );
         if (textMatch) filters.push(textMatch);
       }
+      if (input.queries !== undefined) {
+        const relatedMatches = input.queries
+          .map((query) => query.trim())
+          .filter((query) => query.length > 0)
+          .map((query) => {
+            const pattern = `%${escapeLikePattern(query)}%`;
+            return or(
+              ilike(products.name, pattern),
+              ilike(products.description, pattern),
+              ilike(products.slug, pattern),
+            );
+          })
+          .filter((match): match is SQL => match !== undefined);
+        const relatedTextMatch = or(...relatedMatches);
+        if (relatedTextMatch) filters.push(relatedTextMatch);
+      }
+      if (input.productTypes !== undefined) {
+        const productTypeMatches = input.productTypes
+          .map((productType) => productType.trim())
+          .filter((productType) => productType.length > 0)
+          .map((productType) => {
+            const pattern = `%${escapeLikePattern(productType)}%`;
+            return or(
+              ilike(products.name, pattern),
+              ilike(products.description, pattern),
+              ilike(products.slug, pattern),
+            );
+          })
+          .filter((match): match is SQL => match !== undefined);
+        const productTypeMatch = or(...productTypeMatches);
+        if (productTypeMatch) filters.push(productTypeMatch);
+      }
+      if (input.useCases !== undefined) {
+        const useCaseMatches = input.useCases
+          .map((useCase) => useCase.trim())
+          .filter((useCase) => useCase.length > 0)
+          .map((useCase) => {
+            const pattern = `%${escapeLikePattern(useCase)}%`;
+            return or(
+              ilike(products.description, pattern),
+              sql`exists (
+                select 1
+                from jsonb_array_elements_text(
+                  coalesce(${products.attributes}->'useCases', '[]'::jsonb)
+                ) as use_case(value)
+                where use_case.value ilike ${pattern}
+              )`,
+            );
+          })
+          .filter((match): match is SQL => match !== undefined);
+        const useCaseMatch = or(...useCaseMatches);
+        if (useCaseMatch) filters.push(useCaseMatch);
+      }
+      if (input.features !== undefined) {
+        const featureMatches = input.features
+          .map((feature) => feature.trim())
+          .filter((feature) => feature.length > 0)
+          .map((feature) => {
+            const pattern = `%${escapeLikePattern(feature)}%`;
+            return or(
+              ilike(products.name, pattern),
+              ilike(products.description, pattern),
+              ilike(products.slug, pattern),
+              sql`${products.attributes}::text ilike ${pattern}`,
+            );
+          })
+          .filter((match): match is SQL => match !== undefined);
+        const featureMatch = or(...featureMatches);
+        if (featureMatch) filters.push(featureMatch);
+      }
       if (input.category !== undefined) {
-        filters.push(eq(products.category, input.category));
+        filters.push(
+          ilike(products.category, escapeLikePattern(input.category)),
+        );
       }
       if (input.minPriceMinor !== undefined) {
         filters.push(gte(products.priceMinor, input.minPriceMinor));
@@ -81,10 +153,26 @@ export function createCatalogModule(merchantId: string): CatalogModule {
       if (input.maxPriceMinor !== undefined) {
         filters.push(lte(products.priceMinor, input.maxPriceMinor));
       }
+      if (input.size !== undefined) {
+        filters.push(sql`exists (
+          select 1
+          from jsonb_array_elements_text(
+            coalesce(${products.attributes}->'sizes', '[]'::jsonb)
+          ) as available_size(value)
+          where lower(available_size.value) = lower(${input.size})
+        )`);
+      }
+      if (input.inStockOnly === true) {
+        filters.push(gt(products.stock, 0));
+      }
       if (input.attributes !== undefined) {
-        filters.push(
-          sql`${products.attributes} @> ${JSON.stringify(input.attributes)}::jsonb`,
-        );
+        for (const [key, value] of Object.entries(input.attributes)) {
+          filters.push(
+            typeof value === "string"
+              ? sql`lower(${products.attributes}->>${key}) = lower(${value})`
+              : sql`${products.attributes} @> ${JSON.stringify({ [key]: value })}::jsonb`,
+          );
+        }
       }
       if (input.cursor !== undefined) {
         filters.push(gt(products.id, input.cursor));

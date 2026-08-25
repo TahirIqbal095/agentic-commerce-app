@@ -1,5 +1,5 @@
 {
-  "name": "ai-growth-agentic-commerce",
+  "name": "cartwise",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -14,7 +14,9 @@
     "db:seed": "tsx db/run-seed.ts"
   },
   "dependencies": {
+    "@ai-sdk/google": "^4.0.50",
     "@radix-ui/react-slot": "^1.3.3",
+    "ai": "^7.0.77",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dotenv": "^17.4.2",

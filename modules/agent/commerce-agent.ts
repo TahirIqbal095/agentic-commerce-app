@@ -1,20 +1,48 @@
 import type { CatalogModule } from "@/modules/catalog/catalog";
-import { AgentMessage, AgentResponse } from "./types";
+import type { AgentMessage, AgentResponse, ShoppingIntent } from "./types";
 
 export interface CommerceAgent {
   respond(input: AgentMessage): Promise<AgentResponse>;
 }
 
-export function createCommerceAgent(catalog: CatalogModule): CommerceAgent {
+export interface IntentInterpreter {
+  interpret(message: string): Promise<ShoppingIntent>;
+}
+
+export function createCommerceAgent(
+  catalog: CatalogModule,
+  interpreter: IntentInterpreter,
+): CommerceAgent {
   return {
-    async respond(): Promise<AgentResponse> {
-      const result = await catalog.search({ limit: 20 });
+    async respond(input): Promise<AgentResponse> {
+      const intent = await interpreter.interpret(input.message);
+      const result = await catalog.search({
+        ...(intent.productTypes.length > 0
+          ? { productTypes: intent.productTypes }
+          : {}),
+        ...(intent.useCases.length > 0 ? { useCases: intent.useCases } : {}),
+        ...(intent.features.length > 0 ? { features: intent.features } : {}),
+        ...(intent.category !== null ? { category: intent.category } : {}),
+        ...(intent.minPriceMinor !== null
+          ? { minPriceMinor: intent.minPriceMinor }
+          : {}),
+        ...(intent.maxPriceMinor !== null
+          ? { maxPriceMinor: intent.maxPriceMinor }
+          : {}),
+        ...(intent.size !== null ? { size: intent.size } : {}),
+        inStockOnly: intent.inStockOnly,
+        ...(Object.keys(intent.attributes).length > 0
+          ? { attributes: intent.attributes }
+          : {}),
+        limit: 20,
+      });
 
       return {
         message:
           result.products.length === 0
-            ? "There are no products available right now."
-            : "Here are the products currently available in our catalog.",
+            ? "I couldn't find products matching that request. Try a broader product type, feature, or price range."
+            : `I found ${result.products.length} ${result.products.length === 1 ? "product" : "products"} matching your request.`,
+        intent,
         products: result.products,
       };
     },

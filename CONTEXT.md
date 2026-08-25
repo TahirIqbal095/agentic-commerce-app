@@ -1,24 +1,28 @@
 # Agentic Commerce
 
-This context describes a merchant storefront where customers and an AI shopping assistant use the same trusted commerce rules. The assistant may propose actions, while authoritative commerce modules control products, totals, authorization, orders, and payments.
+This context describes an agentic commerce platform where each merchant makes a catalog and payment account available to a conversational commerce agent. The agent helps customers discover products and complete purchases, while authoritative commerce rules control products, totals, authorization, orders, and payments.
 
 ## People and ownership
 
 **User**:
-A person with one identity who may shop as a customer and may administer any merchant that has granted them access.
+A person with one identity who may shop as a customer or operate a merchant's storefront.
 _Avoid_: Account, Customer, Merchant Admin
 
 **Merchant**:
-The business that owns a catalog, policies, carts, orders, and audit history.
+A business that owns a storefront, catalog, policies, orders, payment account, and audit history.
 _Avoid_: Store, seller account
+
+**Storefront**:
+The merchant's customer-facing shop where products are discovered and purchased.
+_Avoid_: Marketplace, platform
 
 **Customer**:
 A user who browses products, owns a cart, authorizes checkout, and places orders.
 _Avoid_: Buyer, shopper account
 
 **Merchant Admin**:
-A user authorized through a merchant-specific membership to manage that merchant's catalog, policies, approvals, and operational data.
-_Avoid_: Merchant, administrator account
+A user authorized to operate the merchant's catalog, payment configuration, policies, and operational data.
+_Avoid_: Seller, tenant administrator
 
 ## Catalog and shopping
 
@@ -38,7 +42,15 @@ _Avoid_: Basket, draft order
 A product suggestion shown in the context of a customer's intent or cart, whose presentation and acceptance can be measured.
 _Avoid_: Product relation
 
+**Commerce Agent**:
+The conversational shopping participant that interprets customer needs, searches a merchant's catalog, recommends products, changes the cart, and prepares checkout through trusted commerce rules.
+_Avoid_: Autonomous buyer, payment authority
+
 ## Checkout and authorization
+
+**Conversational Checkout**:
+A checkout experience in which the Commerce Agent helps a customer shape a cart, prepares an exact purchase for explicit approval, and initiates payment after approval.
+_Avoid_: Autonomous purchase, chat payment
 
 **Checkout Proposal**:
 An immutable commercial summary of a cart, including final item prices, totals, stock warnings, and the policy decision at preparation time.
@@ -53,6 +65,10 @@ A customer's explicit, expiring authorization for one exact checkout proposal an
 _Avoid_: Confirmation, consent flag
 
 ## Ordering and payment
+
+**Payment Account**:
+The merchant's configured account with a payment provider, through which customer payments are collected for the merchant.
+_Avoid_: Payment wall, paywall
 
 **Order**:
 The durable, immutable commercial record created from an approved checkout proposal before external payment begins.

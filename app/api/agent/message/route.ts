@@ -7,6 +7,7 @@ import {
   createCommerceAgent,
   type CommerceAgent,
 } from "@/modules/agent/commerce-agent";
+import { createAiIntentInterpreter } from "@/modules/agent/ai-intent-interpreter";
 import { createCatalogModule } from "@/modules/catalog/catalog";
 import { resolveMerchantContext } from "@/modules/identity/merchant-context";
 
@@ -14,7 +15,10 @@ type AgentFactory = () => Promise<CommerceAgent>;
 
 async function createAgentForCurrentMerchant(): Promise<CommerceAgent> {
   const { merchantId } = await resolveMerchantContext();
-  return createCommerceAgent(createCatalogModule(merchantId));
+  return createCommerceAgent(
+    createCatalogModule(merchantId),
+    createAiIntentInterpreter(),
+  );
 }
 
 export function createPostHandler(createAgent: AgentFactory) {
