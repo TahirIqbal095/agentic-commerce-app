@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   ArrowRight,
@@ -42,17 +42,27 @@ const suggestions = [
   "Something useful for travel",
 ];
 
+const progressStages = [
+  "Understanding your request",
+  "Searching the live catalog",
+  "Comparing the strongest matches",
+  "Preparing your shortlist",
+];
+
 export function ShoppingAssistant() {
   const [prompt, setPrompt] = useState("");
   const [result, setResult] = useState<AgentResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [submittedMessage, setSubmittedMessage] = useState<string | null>(null);
 
   async function submitPrompt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const message = prompt.trim();
     if (!message || isLoading) return;
 
+    setSubmittedMessage(message);
+    setPrompt("");
     setIsLoading(true);
     setError(null);
 
@@ -73,7 +83,6 @@ export function ShoppingAssistant() {
       }
 
       setResult(payload.data);
-      setPrompt("");
     } catch (requestError) {
       setError(
         requestError instanceof Error
@@ -87,7 +96,10 @@ export function ShoppingAssistant() {
 
   return (
     <main className="min-h-screen bg-[#f4f1eb] text-[#1d2a24]">
-      <div className="pointer-events-none fixed inset-0 overflow-hidden" aria-hidden="true">
+      <div
+        className="pointer-events-none fixed inset-0 overflow-hidden"
+        aria-hidden="true"
+      >
         <div className="absolute left-1/2 top-[-28rem] size-[48rem] -translate-x-1/2 rounded-full bg-white/80 blur-3xl" />
         <div className="absolute bottom-[-20rem] right-[-18rem] size-[38rem] rounded-full bg-[#dce5db]/50 blur-3xl" />
       </div>
@@ -95,7 +107,14 @@ export function ShoppingAssistant() {
       <div className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 pb-52 pt-5 sm:px-8 sm:pb-56 sm:pt-7">
         <Header />
 
-        <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col justify-center py-14 sm:py-20">
+        <div
+          className={cn(
+            "mx-auto flex w-full max-w-4xl flex-1 flex-col py-14 sm:py-20",
+            !result && !isLoading && !error
+              ? "justify-center"
+              : "justify-start",
+          )}
+        >
           {!result && !isLoading && !error ? (
             <Hero onSuggestion={setPrompt} />
           ) : (
@@ -103,6 +122,7 @@ export function ShoppingAssistant() {
               error={error}
               isLoading={isLoading}
               result={result}
+              submittedMessage={submittedMessage}
             />
           )}
         </div>
@@ -121,7 +141,10 @@ export function ShoppingAssistant() {
 function Header() {
   return (
     <header className="flex items-center justify-between">
-      <div className="flex items-center gap-2.5" aria-label="Arc shopping assistant">
+      <div
+        className="flex items-center gap-2.5"
+        aria-label="Arc shopping assistant"
+      >
         <span className="grid size-9 place-items-center rounded-xl bg-[#1d2a24] text-white shadow-sm">
           <Sparkles className="size-4" />
         </span>
@@ -146,7 +169,11 @@ function Header() {
   );
 }
 
-function Hero({ onSuggestion }: { onSuggestion: (suggestion: string) => void }) {
+function Hero({
+  onSuggestion,
+}: {
+  onSuggestion: (suggestion: string) => void;
+}) {
   const reduceMotion = useReducedMotion();
 
   return (
@@ -264,7 +291,9 @@ function Composer({
             <span className="size-1 rounded-full bg-[#57a773]" />
             Searches the live merchant catalog
           </span>
-          <span className="hidden sm:inline">Be specific or wonderfully vague</span>
+          <span className="hidden sm:inline">
+            Be specific or wonderfully vague
+          </span>
         </div>
       </motion.form>
     </div>
@@ -275,37 +304,34 @@ function ResultArea({
   error,
   isLoading,
   result,
+  submittedMessage,
 }: {
   error: string | null;
   isLoading: boolean;
   result: AgentResult | null;
+  submittedMessage: string | null;
 }) {
   const reduceMotion = useReducedMotion();
 
   return (
-    <section aria-live="polite" aria-busy={isLoading} className="w-full">
+    <section
+      aria-live="polite"
+      aria-busy={isLoading}
+      className="w-full space-y-7"
+    >
+      {submittedMessage ? <CustomerMessage message={submittedMessage} /> : null}
+
       <AnimatePresence initial={false}>
         {isLoading ? (
           <motion.div
             key="loading"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
+            initial={{ opacity: 0, y: reduceMotion ? 0 : 8 }}
+            animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            className="flex min-h-72 flex-col items-center justify-center gap-5 text-center"
           >
-            <motion.div
-              animate={reduceMotion ? undefined : { rotate: 360 }}
-              transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
-              className="grid size-14 place-items-center rounded-2xl border border-[#1d2a24]/5 bg-white/70 text-[#1d2a24] shadow-sm"
-            >
-              <Sparkles />
-            </motion.div>
-            <div>
-              <p className="font-medium">Reading the catalog</p>
-              <p className="mt-1 text-sm text-[#778079]">
-                Looking for the strongest matches…
-              </p>
-            </div>
+            <AgentMessage>
+              <AgentProgress />
+            </AgentMessage>
           </motion.div>
         ) : null}
 
@@ -314,9 +340,12 @@ function ResultArea({
             key="error"
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            className="rounded-2xl border border-red-200 bg-red-50/90 px-5 py-4 text-sm text-red-700 shadow-sm"
           >
-            {error}
+            <AgentMessage>
+              <div className="rounded-2xl border border-red-200 bg-red-50/90 px-5 py-4 text-sm text-red-700">
+                {error}
+              </div>
+            </AgentMessage>
           </motion.div>
         ) : null}
 
@@ -327,40 +356,108 @@ function ResultArea({
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4 }}
           >
-            <div className="mb-8 flex flex-col gap-6">
-              <div>
-                <p className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-[#708176]">
-                  Curated response
-                </p>
+            <AgentMessage>
+              <div className="mb-8 flex flex-col gap-5">
                 <p className="max-w-3xl text-balance text-2xl font-medium leading-snug tracking-[-0.025em] sm:text-3xl">
                   {result.message}
                 </p>
+                {result.intent ? (
+                  <IntentSummary intent={result.intent} />
+                ) : null}
               </div>
-              {result.intent ? <IntentSummary intent={result.intent} /> : null}
-            </div>
 
-            {result.products.length > 0 ? (
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {result.products.map((product, index) => (
-                  <ProductCard
-                    key={product.id}
-                    product={product}
-                    index={index}
-                  />
-                ))}
-              </div>
-            ) : (
-              <Card className="border-[#1d2a24]/10 border-dashed bg-white/35 py-10 text-center shadow-none">
-                <CardContent className="pb-0">
-                  <PackageSearch className="mx-auto mb-4 size-7 opacity-50" />
-                  <p>No close matches yet. Try broadening the request.</p>
-                </CardContent>
-              </Card>
-            )}
+              {result.products.length > 0 ? (
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {result.products.map((product, index) => (
+                    <ProductCard
+                      key={product.id}
+                      product={product}
+                      index={index}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <Card className="border-[#1d2a24]/10 border-dashed bg-white/35 py-10 text-center shadow-none">
+                  <CardContent className="pb-0">
+                    <PackageSearch className="mx-auto mb-4 size-7 opacity-50" />
+                    <p>No close matches yet. Try broadening the request.</p>
+                  </CardContent>
+                </Card>
+              )}
+            </AgentMessage>
           </motion.div>
         ) : null}
       </AnimatePresence>
     </section>
+  );
+}
+
+function CustomerMessage({ message }: { message: string }) {
+  return (
+    <article className="ml-auto max-w-2xl text-right">
+      <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#7b857e]">
+        You
+      </p>
+      <div className="ml-auto w-fit max-w-full rounded-2xl rounded-tr-md border border-[#1d2a24]/8 bg-white/55 px-5 py-3.5 text-left text-[15px] leading-6 shadow-sm shadow-[#1d2a24]/4">
+        {message}
+      </div>
+    </article>
+  );
+}
+
+function AgentMessage({ children }: { children: React.ReactNode }) {
+  return (
+    <article className="w-full">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="grid size-6 place-items-center rounded-lg bg-[#1d2a24] text-white">
+          <Sparkles className="size-3" />
+        </span>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#708176]">
+          Commerce Agent
+        </p>
+      </div>
+      {children}
+    </article>
+  );
+}
+
+function AgentProgress() {
+  const [activeStage, setActiveStage] = useState(0);
+  const reduceMotion = useReducedMotion();
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setActiveStage((stage) => Math.min(stage + 1, progressStages.length - 1));
+    }, 2500);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="h-8 max-w-xl overflow-hidden pt-0.5">
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.p
+          key={progressStages[activeStage]}
+          aria-current="step"
+          initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -16 }}
+          transition={{
+            duration: reduceMotion ? 0.15 : 0.35,
+            ease: [0.22, 1, 0.36, 1],
+          }}
+          className="flex items-center gap-2.5 text-sm text-[#526158]"
+        >
+          <motion.span
+            aria-hidden="true"
+            animate={reduceMotion ? undefined : { opacity: [0.4, 1, 0.4] }}
+            transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
+            className="size-1.5 shrink-0 rounded-full bg-[#57a773]"
+          />
+          {progressStages[activeStage]}
+        </motion.p>
+      </AnimatePresence>
+    </div>
   );
 }
 

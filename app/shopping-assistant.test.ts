@@ -3,6 +3,61 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import React from "react";
 
+test("customer can read one Commerce Agent progress update beside their submitted request", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+
+  globalThis.fetch = async () => new Promise<Response>(() => undefined);
+
+  const [{ render, cleanup }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+
+  const view = render(React.createElement(ShoppingAssistant));
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+  const composer = view.getByRole("textbox", {
+    name: "Message the shopping assistant",
+  });
+
+  await user.type(composer, "A minimal desk upgrade");
+  await user.click(view.getByRole("button", { name: "Send" }));
+
+  assert.equal(view.getByText("You").textContent, "You");
+  assert.equal(
+    view.getByText("A minimal desk upgrade").textContent,
+    "A minimal desk upgrade",
+  );
+  assert.equal(view.getByText("Commerce Agent").textContent, "Commerce Agent");
+  assert.equal(
+    view.getByText("Understanding your request").getAttribute("aria-current"),
+    "step",
+  );
+  assert.equal(view.queryByText("Searching the live catalog"), null);
+  assert.equal(view.queryByText("Comparing the strongest matches"), null);
+  assert.equal(view.queryByText("Preparing your shortlist"), null);
+});
+
 test("customer can submit a request and read product results above the persistent composer", async () => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
