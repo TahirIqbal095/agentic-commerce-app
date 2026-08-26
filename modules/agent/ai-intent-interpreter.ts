@@ -52,7 +52,8 @@ const shoppingIntentSchema = jsonSchema<ShoppingIntent>(
       maxPriceMinor: {
         type: ["integer", "null"],
         minimum: 0,
-        description: "Maximum price in minor currency units, or null.",
+        description:
+          "Inclusive maximum price in paise, or null. A bare user amount such as 2000 means ₹2,000 INR and therefore 200000 paise.",
       },
       size: {
         type: ["string", "null"],
@@ -146,7 +147,7 @@ function isShoppingIntent(value: unknown): value is ShoppingIntent {
 
 export function createAiIntentInterpreter(
   model: LanguageModel = google(
-    process.env.GOOGLE_GENERATIVE_AI_MODEL ?? "gemini-3.7-flash",
+    process.env.GOOGLE_GENERATIVE_AI_MODEL ?? "gemini-3.5-flash-lite",
   ),
 ): IntentInterpreter {
   return {
