@@ -15,7 +15,7 @@ export function AgentProgress() {
   useEffect(() => {
     const interval = window.setInterval(() => {
       setActiveStage((stage) => Math.min(stage + 1, progressStages.length - 1));
-    }, 2500);
+    }, 800);
 
     return () => window.clearInterval(interval);
   }, []);
