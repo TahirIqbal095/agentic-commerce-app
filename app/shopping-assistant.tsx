@@ -10,6 +10,7 @@ import {
   PackageSearch,
   ShoppingBag,
   Sparkles,
+  X,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -35,6 +36,9 @@ type AgentResult = {
 };
 
 type AgentApiResponse = { data: AgentResult } | { error: { message: string } };
+type ProductApiResponse =
+  | { data: CatalogProduct }
+  | { error: { message: string } };
 
 const suggestions = [
   "Everyday headphones under ₹5,000",
@@ -55,6 +59,48 @@ export function ShoppingAssistant() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [submittedMessage, setSubmittedMessage] = useState<string | null>(null);
+  const [selectedProduct, setSelectedProduct] =
+    useState<CatalogProduct | null>(null);
+  const [detailProductName, setDetailProductName] = useState<string | null>(null);
+  const [isDetailLoading, setIsDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
+  async function showProductDetails(product: CatalogProduct) {
+    setDetailProductName(product.name);
+    setSelectedProduct(null);
+    setDetailError(null);
+    setIsDetailLoading(true);
+
+    try {
+      const response = await fetch(`/api/products/${product.id}`);
+      const payload = (await response.json()) as ProductApiResponse;
+
+      if (!response.ok || !("data" in payload)) {
+        throw new Error(
+          "error" in payload
+            ? payload.error.message
+            : "The product details could not be loaded.",
+        );
+      }
+
+      setSelectedProduct(payload.data);
+    } catch (requestError) {
+      setDetailError(
+        requestError instanceof Error
+          ? requestError.message
+          : "The product details could not be loaded.",
+      );
+    } finally {
+      setIsDetailLoading(false);
+    }
+  }
+
+  function closeProductDetails() {
+    setDetailProductName(null);
+    setSelectedProduct(null);
+    setDetailError(null);
+    setIsDetailLoading(false);
+  }
 
   async function submitPrompt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -121,12 +167,23 @@ export function ShoppingAssistant() {
             <ResultArea
               error={error}
               isLoading={isLoading}
+              onViewProduct={showProductDetails}
               result={result}
               submittedMessage={submittedMessage}
             />
           )}
         </div>
       </div>
+
+      {detailProductName ? (
+        <ProductDetails
+          error={detailError}
+          isLoading={isDetailLoading}
+          name={detailProductName}
+          product={selectedProduct}
+          onClose={closeProductDetails}
+        />
+      ) : null}
 
       <Composer
         prompt={prompt}
@@ -303,11 +360,13 @@ function Composer({
 function ResultArea({
   error,
   isLoading,
+  onViewProduct,
   result,
   submittedMessage,
 }: {
   error: string | null;
   isLoading: boolean;
+  onViewProduct: (product: CatalogProduct) => void;
   result: AgentResult | null;
   submittedMessage: string | null;
 }) {
@@ -373,6 +432,7 @@ function ResultArea({
                       key={product.id}
                       product={product}
                       index={index}
+                      onView={() => onViewProduct(product)}
                     />
                   ))}
                 </div>
@@ -494,9 +554,11 @@ function IntentSummary({ intent }: { intent: ShoppingIntent }) {
 function ProductCard({
   product,
   index,
+  onView,
 }: {
   product: CatalogProduct;
   index: number;
+  onView: () => void;
 }) {
   const reduceMotion = useReducedMotion();
   const icon = index % 2 === 0 ? <Headphones /> : <ShoppingBag />;
@@ -547,6 +609,7 @@ function ProductCard({
               size="icon"
               variant="outline"
               aria-label={`View ${product.name}`}
+              onClick={onView}
               className="rounded-full border-[#1d2a24]/10 bg-white/40 text-[#1d2a24] shadow-none hover:bg-[#1d2a24] hover:text-white"
             >
               <ArrowRight />
@@ -556,4 +619,124 @@ function ProductCard({
       </Card>
     </motion.article>
   );
+}
+
+function ProductDetails({
+  error,
+  isLoading,
+  name,
+  product,
+  onClose,
+}: {
+  error: string | null;
+  isLoading: boolean;
+  name: string;
+  product: CatalogProduct | null;
+  onClose: () => void;
+}) {
+  const attributes = product ? Object.entries(product.attributes) : [];
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-end bg-[#1d2a24]/35 p-3 backdrop-blur-sm sm:place-items-center sm:p-6">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${name} details`}
+        aria-busy={isLoading}
+        className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-[1.75rem] border border-white/60 bg-[#f8f6f1] p-6 shadow-2xl shadow-[#1d2a24]/25 sm:p-8"
+      >
+        <div className="flex items-start justify-between gap-5">
+          <div>
+            {product ? (
+              <Badge
+                variant="outline"
+                className="border-[#1d2a24]/10 bg-white/55 font-normal text-[#526158]"
+              >
+                {product.category}
+              </Badge>
+            ) : null}
+            <h2 className="mt-4 text-3xl font-semibold tracking-[-0.035em]">
+              {name}
+            </h2>
+          </div>
+          <div className="flex items-center gap-3">
+            {product ? (
+              <span
+                className={cn(
+                  "flex shrink-0 items-center gap-1.5 text-sm",
+                  product.inStock ? "text-emerald-700" : "text-amber-700",
+                )}
+              >
+                <span className="size-1.5 rounded-full bg-current" />
+                {product.inStock ? "In stock" : "Unavailable"}
+              </span>
+            ) : null}
+            <Button
+              type="button"
+              size="icon"
+              variant="outline"
+              aria-label="Close details"
+              onClick={onClose}
+              className="rounded-full border-[#1d2a24]/10 bg-white/55 shadow-none"
+            >
+              <X />
+            </Button>
+          </div>
+        </div>
+
+        {isLoading ? (
+          <p className="mt-8 text-sm text-[#59665f]">Loading product details…</p>
+        ) : null}
+
+        {error ? (
+          <p
+            role="alert"
+            className="mt-8 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+          >
+            {error}
+          </p>
+        ) : null}
+
+        {product ? (
+          <>
+            <p className="mt-6 text-base leading-7 text-[#59665f]">
+              {product.description}
+            </p>
+            <p className="mt-6 text-2xl font-semibold">
+              {formatMoney(product.priceMinor, product.currency)}
+            </p>
+          </>
+        ) : null}
+
+        {attributes.length > 0 ? (
+          <dl className="mt-8 grid gap-3 border-t border-[#1d2a24]/10 pt-6 sm:grid-cols-2">
+            {attributes.map(([name, value]) => (
+              <div
+                key={name}
+                className="rounded-2xl border border-[#1d2a24]/8 bg-white/55 px-4 py-3"
+              >
+                <dt className="text-xs font-medium text-[#7b857e]">
+                  {formatAttributeName(name)}
+                </dt>
+                <dd className="mt-1 text-sm font-medium">
+                  {formatAttributeValue(value)}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function formatAttributeName(name: string): string {
+  const words = name.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_-]/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1).toLowerCase();
+}
+
+function formatAttributeValue(value: unknown): string {
+  if (Array.isArray(value)) return value.join(", ");
+  if (value !== null && typeof value === "object") return JSON.stringify(value);
+  return String(value);
 }

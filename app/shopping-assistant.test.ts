@@ -143,3 +143,217 @@ test("customer can submit a request and read product results above the persisten
   cleanup();
   dom.window.close();
 });
+
+test("customer can request and read the details of a product", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+
+  const detailRequests: string[] = [];
+  globalThis.fetch = async (input) => {
+    if (input === "/api/agent/message") {
+      return new Response(
+        JSON.stringify({
+          data: {
+            message: "I found one precise match.",
+            products: [
+              {
+                id: "product-1",
+                slug: "quiet-buds",
+                name: "Quiet Buds",
+                description: "Compact wireless earphones.",
+                category: "Audio",
+                priceMinor: 349900,
+                currency: "INR",
+                inStock: true,
+                attributes: {},
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    detailRequests.push(String(input));
+    return new Response(
+      JSON.stringify({
+        data: {
+          id: "product-1",
+          slug: "quiet-buds",
+          name: "Quiet Buds",
+          description:
+            "Compact wireless earphones with active noise cancellation.",
+          category: "Audio",
+          priceMinor: 349900,
+          currency: "INR",
+          inStock: true,
+          attributes: {
+            batteryLife: "30 hours",
+            colors: ["Black", "Sand"],
+          },
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  const [{ render, cleanup, within }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+
+  const view = render(React.createElement(ShoppingAssistant));
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  await user.type(
+    view.getByRole("textbox", { name: "Message the shopping assistant" }),
+    "noise cancelling earphones",
+  );
+  await user.click(view.getByRole("button", { name: "Send" }));
+  await user.click(
+    await view.findByRole("button", { name: "View Quiet Buds" }),
+  );
+
+  const details = await view.findByRole("dialog", {
+    name: "Quiet Buds details",
+  });
+  const detailView = within(details);
+
+  assert.deepEqual(detailRequests, ["/api/products/product-1"]);
+  assert.equal(
+    detailView.getByText(
+      "Compact wireless earphones with active noise cancellation.",
+    ).textContent,
+    "Compact wireless earphones with active noise cancellation.",
+  );
+  assert.equal(detailView.getByText("₹3,499").textContent, "₹3,499");
+  assert.equal(detailView.getByText("In stock").textContent, "In stock");
+  assert.equal(detailView.getByText("Battery life").textContent, "Battery life");
+  assert.equal(detailView.getByText("30 hours").textContent, "30 hours");
+  assert.equal(detailView.getByText("Black, Sand").textContent, "Black, Sand");
+
+  await user.click(detailView.getByRole("button", { name: "Close details" }));
+  assert.equal(view.queryByRole("dialog", { name: "Quiet Buds details" }), null);
+});
+
+test("customer sees the status when product details cannot be loaded", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+
+  let resolveDetails!: (response: Response) => void;
+  const detailsResponse = new Promise<Response>((resolve) => {
+    resolveDetails = resolve;
+  });
+  globalThis.fetch = async (input) => {
+    if (input === "/api/agent/message") {
+      return new Response(
+        JSON.stringify({
+          data: {
+            message: "I found one precise match.",
+            products: [
+              {
+                id: "product-1",
+                slug: "quiet-buds",
+                name: "Quiet Buds",
+                description: "Compact wireless earphones.",
+                category: "Audio",
+                priceMinor: 349900,
+                currency: "INR",
+                inStock: true,
+                attributes: {},
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    return detailsResponse;
+  };
+
+  const [{ render, cleanup, act }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+
+  const view = render(React.createElement(ShoppingAssistant));
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  await user.type(
+    view.getByRole("textbox", { name: "Message the shopping assistant" }),
+    "noise cancelling earphones",
+  );
+  await user.click(view.getByRole("button", { name: "Send" }));
+  await user.click(
+    await view.findByRole("button", { name: "View Quiet Buds" }),
+  );
+
+  assert.equal(
+    view
+      .getByRole("dialog", { name: "Quiet Buds details" })
+      .getAttribute("aria-busy"),
+    "true",
+  );
+  assert.equal(
+    view.getByText("Loading product details…").textContent,
+    "Loading product details…",
+  );
+
+  await act(async () => {
+    resolveDetails(
+      new Response(
+        JSON.stringify({
+          error: { message: "Those product details are unavailable." },
+        }),
+        { status: 404, headers: { "content-type": "application/json" } },
+      ),
+    );
+    await detailsResponse;
+  });
+
+  assert.equal(
+    (await view.findByRole("alert")).textContent,
+    "Those product details are unavailable.",
+  );
+});
