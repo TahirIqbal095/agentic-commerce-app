@@ -22,6 +22,7 @@ export function ShoppingAssistant() {
   const [submittedMessage, setSubmittedMessage] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] =
     useState<CatalogProduct | null>(null);
+  const [cartQuantity, setCartQuantity] = useState(0);
 
   async function submitPrompt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -37,7 +38,10 @@ export function ShoppingAssistant() {
       const response = await fetch("/api/agent/message", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...(conversationId ? { conversationId } : {}), message }),
+        body: JSON.stringify({
+          ...(conversationId ? { conversationId } : {}),
+          message,
+        }),
       });
       const payload = (await response.json()) as AgentApiResponse;
 
@@ -52,6 +56,9 @@ export function ShoppingAssistant() {
       setResult(payload.data);
       if (payload.data.conversationId) {
         setConversationId(payload.data.conversationId);
+      }
+      if (payload.data.cart) {
+        setCartQuantity(payload.data.cart.totalQuantity);
       }
     } catch (requestError) {
       setError(
@@ -75,7 +82,7 @@ export function ShoppingAssistant() {
       </div>
 
       <div className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 pb-52 pt-5 sm:px-8 sm:pb-56 sm:pt-7">
-        <Header />
+        <Header cartQuantity={cartQuantity} />
 
         <div
           className={cn(

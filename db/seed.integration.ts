@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import test, { after } from "node:test";
 import { promisify } from "node:util";
+import { eq } from "drizzle-orm";
 import { GET } from "@/app/api/products/route";
 import { db } from "@/db";
+import { carts } from "@/db/schema/cart";
 import { createCatalogModule } from "@/modules/catalog/catalog";
+import { createCartModule } from "@/modules/cart/cart";
+import { DEMO_CUSTOMER_ID } from "@/db/seed";
 
 const execFileAsync = promisify(execFile);
 const DEMO_MERCHANT_ID = "11111111-1111-4111-8111-111111111111";
@@ -125,4 +129,24 @@ test("catalog retrieval combines intent, commerce, and availability criteria", a
     result.products.map((product) => product.slug),
     ["strideflow-daily-running-shoes"],
   );
+});
+
+test("customer can add a product to an authoritative active cart", async () => {
+  await runSeedCommand();
+  await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
+
+  const catalog = createCatalogModule(DEMO_MERCHANT_ID);
+  const result = await catalog.search({
+    query: "StrideFlow Daily Running Shoes",
+    limit: 1,
+  });
+  const product = result.products[0];
+  assert.ok(product);
+
+  const cart = createCartModule(DEMO_CUSTOMER_ID, DEMO_MERCHANT_ID);
+  const summary = await cart.addItem(product, 2);
+
+  assert.equal(summary.totalQuantity, 2);
+  assert.equal(summary.subtotalMinor, 799800);
+  assert.equal(summary.currency, "INR");
 });

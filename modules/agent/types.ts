@@ -19,6 +19,14 @@ export type ShoppingIntent = {
   attributes: ShoppingAttributes;
 };
 
+export type AddToCartIntent = {
+  action: "ADD_TO_CART";
+  productName: string;
+  quantity: number;
+};
+
+export type CommerceIntent = ShoppingIntent | AddToCartIntent;
+
 export type IntentBrief = {
   goal: string;
   constraints: ShoppingIntent;
@@ -72,8 +80,14 @@ export type AgentOutcome =
 export type AgentResponse = {
   conversationId: string;
   message: string;
-  intent: ShoppingIntent;
+  intent?: ShoppingIntent;
   products: CatalogProduct[];
+  cart?: {
+    id: string;
+    totalQuantity: number;
+    subtotalMinor: number;
+    currency: string;
+  };
   status?: never;
   intentBrief?: never;
 };

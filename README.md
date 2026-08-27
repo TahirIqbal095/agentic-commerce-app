@@ -5,9 +5,12 @@ the UUID of the storefront merchant. For local, single-merchant databases it can
 be omitted; the API will use the only merchant present. If the database contains
 zero or multiple merchants, `MERCHANT_ID` is required.
 
-Conversations also resolve the current User on the server. Set `USER_ID` to the
-User UUID. It can be omitted when the database contains exactly one User.
-Running `pnpm db:seed` creates the local demo User and catalog.
+Conversations resolve the current User on the server. Set `USER_ID` to the User
+UUID. It can be omitted when the database contains exactly one User.
+
+Cart actions also resolve a customer context on the server. Set `CUSTOMER_ID` to
+the customer's user UUID. It can be omitted when the database contains exactly
+one user. Running `pnpm db:seed` creates the local demo customer and catalog.
 
 The catalog endpoints are:
 
@@ -30,4 +33,10 @@ The assistant endpoint is `POST /api/agent/message` with a JSON body such as:
 
 ```json
 { "message": "I want good sound quality earphones under ₹5,000" }
+```
+
+The same endpoint accepts explicit cart requests:
+
+```json
+{ "message": "add two StrideFlow Daily Running Shoes to my cart" }
 ```

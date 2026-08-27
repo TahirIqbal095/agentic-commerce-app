@@ -15,3 +15,19 @@ test, identify the public behavior seam and confirm that seam with the user.
 Then work in vertical slices: write one failing behavior test, implement only
 enough production code to make it pass, and repeat. Refactor only after the
 behavior is covered and the test suite is green.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked as local Markdown under `.scratch/`. See
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The project uses the default engineering-skill triage vocabulary. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+The project uses a single-context domain layout. See `docs/agents/domain.md`.

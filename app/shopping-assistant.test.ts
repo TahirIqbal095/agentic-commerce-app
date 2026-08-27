@@ -375,28 +375,132 @@ test("customer sees the status when product details cannot be loaded", async (t)
   );
 });
 
-test("Storefront reuses the server conversation identifier on later turns", async (t) => {
-  const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost/" });
-  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, Node: dom.window.Node, MutationObserver: dom.window.MutationObserver, IS_REACT_ACT_ENVIRONMENT: true });
-  Object.defineProperty(globalThis, "navigator", { configurable: true, value: dom.window.navigator });
-  const bodies: unknown[] = [];
-  globalThis.fetch = async (_input, init) => {
-    bodies.push(JSON.parse(String(init?.body)));
-    return new Response(JSON.stringify({ data: { conversationId: "41000000-0000-4000-8000-000000000001", message: bodies.length === 1 ? "First result." : "Refined result.", products: [] } }), { status: 200, headers: { "content-type": "application/json" } });
-  };
-  const [{ render, cleanup }, userEvent, { ShoppingAssistant }] = await Promise.all([import("@testing-library/react"), import("@testing-library/user-event").then((module) => module.default), import("./shopping-assistant")]);
+test("customer sees the updated cart after the agent adds a product", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        data: {
+          message: "Added 2 × Quiet Buds to your cart.",
+          products: [],
+          cart: {
+            id: "31000000-0000-4000-8000-000000000001",
+            totalQuantity: 2,
+            subtotalMinor: 699800,
+            currency: "INR",
+          },
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+
+  const [{ render, cleanup }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+
   const view = render(React.createElement(ShoppingAssistant));
-  t.after(() => { cleanup(); dom.window.close(); });
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
   const user = userEvent.setup({ document: dom.window.document });
-  const composer = view.getByRole("textbox", { name: "Message the shopping assistant" });
-  await user.type(composer, "show me shoes");
+
+  await user.type(
+    view.getByRole("textbox", { name: "Message the shopping assistant" }),
+    "add two Quiet Buds to my cart",
+  );
   await user.click(view.getByRole("button", { name: "Send" }));
-  await view.findByText("First result.");
-  await user.type(composer, "only waterproof");
+
+  assert.equal(
+    (await view.findByText("Added 2 × Quiet Buds to your cart.")).textContent,
+    "Added 2 × Quiet Buds to your cart.",
+  );
+  assert.equal(view.getByRole("button", { name: "Cart · 2" }).textContent, " Cart · 2");
+  assert.equal(view.queryByText("No close matches yet. Try broadening the request."), null);
+});
+
+test("Storefront reuses the server conversation identifier on later turns", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+
+  const requestBodies: unknown[] = [];
+  globalThis.fetch = async (_input, init) => {
+    requestBodies.push(JSON.parse(String(init?.body)));
+    const turn = requestBodies.length;
+    return new Response(
+      JSON.stringify({
+        data: {
+          conversationId: "41000000-0000-4000-8000-000000000001",
+          message: turn === 1 ? "Here are running shoes." : "Here are waterproof options.",
+          products: [],
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  const [{ render, cleanup }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+
+  const view = render(React.createElement(ShoppingAssistant));
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+  const composer = view.getByRole("textbox", {
+    name: "Message the shopping assistant",
+  });
+
+  await user.type(composer, "show me running shoes");
   await user.click(view.getByRole("button", { name: "Send" }));
-  await view.findByText("Refined result.");
-  assert.deepEqual(bodies, [
-    { message: "show me shoes" },
-    { conversationId: "41000000-0000-4000-8000-000000000001", message: "only waterproof" },
+  await view.findByText("Here are running shoes.");
+  await user.type(composer, "only waterproof ones");
+  await user.click(view.getByRole("button", { name: "Send" }));
+  await view.findByText("Here are waterproof options.");
+
+  assert.deepEqual(requestBodies, [
+    { message: "show me running shoes" },
+    {
+      conversationId: "41000000-0000-4000-8000-000000000001",
+      message: "only waterproof ones",
+    },
   ]);
 });

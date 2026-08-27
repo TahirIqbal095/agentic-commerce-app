@@ -5,7 +5,7 @@ import { merchants, users } from "@/db/schema/identity";
 import type { NewProduct } from "@/db/schema/types";
 
 export const DEMO_MERCHANT_ID = "11111111-1111-4111-8111-111111111111";
-export const DEMO_USER_ID = "12000000-0000-4000-8000-000000000001";
+export const DEMO_CUSTOMER_ID = "12000000-0000-4000-8000-000000000001";
 
 const DEMO_PRODUCTS = [
   {
@@ -317,7 +317,7 @@ export async function seedDemoCatalog(): Promise<void> {
     await transaction
       .insert(users)
       .values({
-        id: DEMO_USER_ID,
+        id: DEMO_CUSTOMER_ID,
         email: "customer@agentic-commerce.demo",
         name: "Demo Customer",
       })

@@ -2,7 +2,7 @@ import { ShoppingBag, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
-export function Header() {
+export function Header({ cartQuantity }: { cartQuantity: number }) {
   return (
     <header className="flex items-center justify-between">
       <div className="flex items-center gap-2.5" aria-label="Arc shopping assistant">
@@ -23,7 +23,7 @@ export function Header() {
           size="sm"
           className="rounded-full border-[#1d2a24]/10 bg-white/45 text-[#39483f] shadow-none hover:bg-white"
         >
-          <ShoppingBag /> Cart · 0
+          <ShoppingBag /> Cart · {cartQuantity}
         </Button>
       </div>
     </header>

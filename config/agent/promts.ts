@@ -1,8 +1,9 @@
 export const intentInterpreterConfig = {
-  name: "shopping_intent",
-  description: "Structured catalog retrieval intent",
+  name: "commerce_intent",
+  description: "Structured catalog retrieval or cart mutation intent",
   prompt: `You interpret requests for a shopping assistant.
-Return a concise structured intent for catalog retrieval.
+When the customer explicitly asks to add a product to their cart, return only action ADD_TO_CART, the specific productName, and a quantity from 1 to 10. Treat a missing quantity as 1.
+Otherwise, return a concise structured intent for catalog retrieval and do not return cart-action fields.
 Expand the requested product into close retail synonyms and subtypes. For example, earphones can include earbuds, earphones, and headphones.
 Separate intended activities or situations into useCases. Keep feature phrases short. Use a broad title-cased category when clear, otherwise null.
 Treat monetary amounts without an explicit currency as INR in major units. For example, a budget of 2000 means ₹2,000 INR and must be returned as 200000 paise, not 2000 paise.

@@ -8,89 +8,118 @@ import {
   type LanguageModel,
 } from "ai";
 import type { IntentInterpreter } from "./commerce-agent";
-import type { IntentBrief, ShoppingIntent } from "./types";
+import type { CommerceIntent, IntentBrief, ShoppingIntent } from "./types";
 import {
   intentAnalyzerConfig,
   intentInterpreterConfig,
 } from "@/config/agent/promts";
 
-const shoppingIntentSchema = jsonSchema<ShoppingIntent>(
+const shoppingIntentSchema = jsonSchema<CommerceIntent>(
   {
-    type: "object",
-    additionalProperties: false,
-    required: [
-      "productTypes",
-      "useCases",
-      "features",
-      "category",
-      "minPriceMinor",
-      "maxPriceMinor",
-      "size",
-      "inStockOnly",
-      "attributes",
-    ],
-    properties: {
-      productTypes: {
-        type: "array",
-        items: { type: "string", minLength: 1 },
-        maxItems: 8,
-        description:
-          "The requested product type plus close retail synonyms and subtypes.",
-      },
-      useCases: {
-        type: "array",
-        items: { type: "string", minLength: 1 },
-        maxItems: 8,
-        description:
-          "Activities or situations the product should suit, without product-type synonyms.",
-      },
-      features: {
-        type: "array",
-        items: { type: "string", minLength: 1 },
-        maxItems: 8,
-        description: "Capabilities or qualities the customer cares about.",
-      },
-      category: {
-        type: ["string", "null"],
-        description: "A broad catalog category, or null when uncertain.",
-      },
-      minPriceMinor: {
-        type: ["integer", "null"],
-        minimum: 0,
-        description: "Minimum price in minor currency units, or null.",
-      },
-      maxPriceMinor: {
-        type: ["integer", "null"],
-        minimum: 0,
-        description:
-          "Inclusive maximum price in paise, or null. A bare user amount such as 2000 means ₹2,000 INR and therefore 200000 paise.",
-      },
-      size: {
-        type: ["string", "null"],
-        description:
-          "The requested merchant catalog size such as UK 9, or null.",
-      },
-      inStockOnly: {
-        type: "boolean",
-        description:
-          "True unless the customer explicitly asks to include unavailable products.",
-      },
-      attributes: {
+    anyOf: [
+      {
         type: "object",
-        additionalProperties: {
-          type: ["string", "number", "boolean"],
+        additionalProperties: false,
+        required: [
+          "productTypes",
+          "useCases",
+          "features",
+          "category",
+          "minPriceMinor",
+          "maxPriceMinor",
+          "size",
+          "inStockOnly",
+          "attributes",
+        ],
+        properties: {
+          productTypes: {
+            type: "array",
+            items: { type: "string", minLength: 1 },
+            maxItems: 8,
+            description:
+              "The requested product type plus close retail synonyms and subtypes.",
+          },
+          useCases: {
+            type: "array",
+            items: { type: "string", minLength: 1 },
+            maxItems: 8,
+            description:
+              "Activities or situations the product should suit, without product-type synonyms.",
+          },
+          features: {
+            type: "array",
+            items: { type: "string", minLength: 1 },
+            maxItems: 8,
+            description: "Capabilities or qualities the customer cares about.",
+          },
+          category: {
+            type: ["string", "null"],
+            description: "A broad catalog category, or null when uncertain.",
+          },
+          minPriceMinor: {
+            type: ["integer", "null"],
+            minimum: 0,
+            description: "Minimum price in minor currency units, or null.",
+          },
+          maxPriceMinor: {
+            type: ["integer", "null"],
+            minimum: 0,
+            description:
+              "Inclusive maximum price in paise, or null. A bare user amount such as 2000 means ₹2,000 INR and therefore 200000 paise.",
+          },
+          size: {
+            type: ["string", "null"],
+            description:
+              "The requested merchant catalog size such as UK 9, or null.",
+          },
+          inStockOnly: {
+            type: "boolean",
+            description:
+              "True unless the customer explicitly asks to include unavailable products.",
+          },
+          attributes: {
+            type: "object",
+            additionalProperties: {
+              type: ["string", "number", "boolean"],
+            },
+            description:
+              "Other explicit structured requirements using lowerCamelCase keys.",
+          },
         },
-        description:
-          "Other explicit structured requirements using lowerCamelCase keys.",
       },
-    },
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["action", "productName", "quantity"],
+        properties: {
+          action: {
+            type: "string",
+            const: "ADD_TO_CART",
+            description:
+              "Use ADD_TO_CART only when the customer explicitly asks to add a product to their cart.",
+          },
+          productName: {
+            type: "string",
+            minLength: 1,
+            description:
+              "The specific product name requested for a cart addition.",
+          },
+          quantity: {
+            type: "integer",
+            minimum: 1,
+            maximum: 10,
+            description: "The quantity requested for the cart addition.",
+          },
+        },
+      },
+    ],
   },
   {
     validate(value) {
-      if (!isShoppingIntent(value)) {
+      if (!isCommerceIntent(value)) {
         return {
           success: false,
-          error: new Error("The model returned an invalid shopping intent."),
+          error: new Error("The model returned an invalid commerce intent."),
         };
       }
 
@@ -113,7 +142,7 @@ const intentBriefSchema = jsonSchema<IntentBrief>(
     ],
     properties: {
       goal: { type: "string", minLength: 1, maxLength: 240 },
-      constraints: shoppingIntentSchema.jsonSchema as JSONSchema7,
+      constraints: (shoppingIntentSchema.jsonSchema as JSONSchema7).anyOf![0],
       knownEntities: {
         type: "array",
         maxItems: 12,
@@ -224,6 +253,21 @@ function isShoppingIntent(value: unknown): value is ShoppingIntent {
     (intent.minPriceMinor === null ||
       intent.maxPriceMinor === null ||
       Number(intent.minPriceMinor) <= Number(intent.maxPriceMinor))
+  );
+}
+
+function isCommerceIntent(value: unknown): value is CommerceIntent {
+  if (isShoppingIntent(value)) return true;
+  if (typeof value !== "object" || value === null) return false;
+
+  const intent = value as Record<string, unknown>;
+  return (
+    intent.action === "ADD_TO_CART" &&
+    typeof intent.productName === "string" &&
+    intent.productName.trim().length > 0 &&
+    Number.isInteger(intent.quantity) &&
+    Number(intent.quantity) >= 1 &&
+    Number(intent.quantity) <= 10
   );
 }
 

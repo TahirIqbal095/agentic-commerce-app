@@ -90,7 +90,7 @@ export function ResultArea({
                     />
                   ))}
                 </div>
-              ) : (
+              ) : result.cart ? null : (
                 <Card className="border-[#1d2a24]/10 border-dashed bg-white/35 py-10 text-center shadow-none">
                   <CardContent className="pb-0">
                     <PackageSearch className="mx-auto mb-4 size-7 opacity-50" />
