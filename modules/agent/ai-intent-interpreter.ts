@@ -7,12 +7,15 @@ import {
   type JSONSchema7,
   type LanguageModel,
 } from "ai";
-import type { IntentInterpreter } from "./commerce-agent";
 import type { CommerceIntent, IntentBrief, ShoppingIntent } from "./types";
 import {
   intentAnalyzerConfig,
   intentInterpreterConfig,
 } from "@/config/agent/promts";
+
+export interface IntentInterpreter {
+  interpret(message: string): Promise<CommerceIntent>;
+}
 
 const shoppingIntentSchema = jsonSchema<CommerceIntent>(
   {

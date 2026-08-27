@@ -1,41 +1,60 @@
 import type { CatalogModule } from "@/modules/catalog/catalog";
-import { CartError, type CartModule } from "@/modules/cart/cart";
-import { ConversationAccessError } from "./conversation";
 import type {
-  AgentMessage,
-  AgentOutcome,
-  AgentResponse,
-  CommerceIntent,
-  IntentBrief,
-} from "./types";
+  CatalogProduct,
+  CatalogSearch,
+  CatalogSearchResult,
+  ProductDetailResult,
+} from "@/modules/catalog/types";
+import { ConversationAccessError } from "./conversation";
+import type { AgentMessage, AgentOutcome, IntentBrief } from "./types";
 
 export interface CommerceAgent {
   respond(input: AgentMessage): Promise<AgentOutcome>;
-}
-
-export interface LegacyCommerceAgent {
-  respond(input: AgentMessage): Promise<AgentResponse>;
-}
-
-export interface IntentInterpreter {
-  interpret(message: string): Promise<CommerceIntent>;
 }
 
 export interface IntentAnalyzer {
   analyze(message: string): Promise<IntentBrief>;
 }
 
-export interface OutcomeComposer {
-  composeCompleted(input: {
-    message: string;
-    intentBrief: IntentBrief;
-    products: AgentOutcome["products"];
-  }): Promise<string>;
-  composeQuestion(input: {
-    message: string;
-    intentBrief: IntentBrief;
-  }): Promise<string>;
+export type CommerceCapabilities = {
+  searchProducts?: (input: CatalogSearch) => Promise<CatalogSearchResult>;
+  getProduct?: (productId: string) => Promise<ProductDetailResult>;
+};
+
+export type CommerceAgentLoopResult =
+  | {
+      status: "COMPLETED";
+      message: string;
+      productIds: string[];
+    }
+  | {
+      status: "NEEDS_INPUT";
+      message: string;
+      question: string;
+      missingInformation: string[];
+    }
+  | { status: "LIMIT_REACHED" };
+
+export type CommerceAgentLoopInput = {
+  message: string;
+  intentBrief: IntentBrief;
+  capabilities: CommerceCapabilities;
+  limits: CommerceAgentLimits;
+  signal: AbortSignal;
+};
+
+export interface CommerceAgentLoop {
+  run(input: CommerceAgentLoopInput): Promise<CommerceAgentLoopResult>;
 }
+
+export type CommerceAgentLimits = {
+  maxSteps: number;
+  timeoutMs: number;
+  maxOutputTokens: number;
+  maxToolProducts: number;
+};
+
+export const MAX_COMMERCE_AGENT_TOOL_PRODUCTS = 8;
 
 type AgentTurn = {
   conversationId: string;
@@ -47,15 +66,16 @@ export interface ConversationModule {
   startTurn(input: AgentMessage): Promise<AgentTurn>;
 }
 
-export interface LegacyConversationModule {
-  startTurn(input: AgentMessage): Promise<{
-    conversationId: string;
-    complete(assistantMessage: string): Promise<void>;
-  }>;
-}
-
 type CommerceAgentOptions = {
-  outcomeComposer: OutcomeComposer;
+  agentLoop: CommerceAgentLoop;
+  limits?: CommerceAgentLimits;
+};
+
+const COMMERCE_AGENT_LIMITS: CommerceAgentLimits = {
+  maxSteps: 5,
+  timeoutMs: 15_000,
+  maxOutputTokens: 2_000,
+  maxToolProducts: MAX_COMMERCE_AGENT_TOOL_PRODUCTS,
 };
 
 export function createCommerceAgent(
@@ -108,147 +128,228 @@ export function createCommerceAgent(
             products: [],
           });
         }
-        if (intentBrief.missingInformation.length > 0) {
-          let outcome: AgentOutcome;
-          try {
-            const question = await options.outcomeComposer.composeQuestion({
+        let loopResult: CommerceAgentLoopResult;
+        const observedProducts = new Map<string, CatalogProduct>();
+        const limits = boundedAgentLimits(options.limits);
+        const controller = new AbortController();
+        const capabilities = resolveCapabilities({
+          catalog,
+          intentBrief,
+          limits,
+          signal: controller.signal,
+          observedProducts,
+        });
+
+        try {
+          loopResult = await runBoundedAgentLoop(
+            options.agentLoop,
+            {
               message: input.message,
               intentBrief,
-            });
-            outcome = {
-              status: "NEEDS_INPUT",
-              conversationId: turn.conversationId,
-              message: question,
-              question,
-              missingInformation: intentBrief.missingInformation,
-              intentBrief,
-              products: [],
-            };
-          } catch {
-            outcome = {
-              status: "TEMPORARILY_UNAVAILABLE",
-              conversationId: turn.conversationId,
-              message: "I couldn't prepare a response right now. Please try again.",
-              retryable: true,
-              intentBrief,
-              products: [],
-            };
-          }
-          return completeTurn(turn, outcome);
-        }
-
-        let outcome: AgentOutcome;
-        try {
-          const result = await catalog.search(toCatalogSearch(intentBrief.constraints));
-          const message = await options.outcomeComposer.composeCompleted({
-            message: input.message,
-            intentBrief,
-            products: result.products,
-          });
-          outcome = {
-            status: "COMPLETED",
-            conversationId: turn.conversationId,
-            message,
-            intentBrief,
-            products: result.products,
-          };
+              capabilities,
+              limits,
+              signal: controller.signal,
+            },
+            controller,
+          );
         } catch {
-          outcome = {
+          if (controller.signal.aborted) {
+            return completeTurn(
+              turn,
+              limitOutcome(
+                turn.conversationId,
+                intentBrief,
+                observedProducts,
+                limits.maxToolProducts,
+              ),
+            );
+          }
+          return completeTurn(turn, {
             status: "TEMPORARILY_UNAVAILABLE",
             conversationId: turn.conversationId,
-            message: "Product discovery is temporarily unavailable. Please try again.",
+            message:
+              "Product discovery is temporarily unavailable. Please try again.",
             retryable: true,
             intentBrief,
             products: [],
-          };
+          });
         }
-        return completeTurn(turn, outcome);
+
+        if (loopResult.status === "LIMIT_REACHED") {
+          return completeTurn(
+            turn,
+            limitOutcome(
+              turn.conversationId,
+              intentBrief,
+              observedProducts,
+              limits.maxToolProducts,
+            ),
+          );
+        }
+
+        if (loopResult.status === "NEEDS_INPUT") {
+          return completeTurn(turn, {
+            ...loopResult,
+            conversationId: turn.conversationId,
+            intentBrief,
+            products: [],
+          });
+        }
+
+        if (
+          loopResult.productIds.some(
+            (productId) => !observedProducts.has(productId),
+          )
+        ) {
+          return completeTurn(
+            turn,
+            limitOutcome(
+              turn.conversationId,
+              intentBrief,
+              observedProducts,
+              limits.maxToolProducts,
+            ),
+          );
+        }
+
+        const products = loopResult.productIds.flatMap((productId) => {
+          const product = observedProducts.get(productId);
+          return product ? [product] : [];
+        });
+        return completeTurn(turn, {
+          status: "COMPLETED",
+          conversationId: turn.conversationId,
+          message: loopResult.message,
+          intentBrief,
+          products,
+        });
       },
   };
 }
 
-export function createLegacyCommerceAgent(
-  catalog: CatalogModule,
-  interpreter: IntentInterpreter,
-  conversation: LegacyConversationModule,
-  cart?: CartModule,
-): LegacyCommerceAgent {
+function resolveCapabilities({
+  catalog,
+  intentBrief,
+  limits,
+  signal,
+  observedProducts,
+}: {
+  catalog: CatalogModule;
+  intentBrief: IntentBrief;
+  limits: CommerceAgentLimits;
+  signal: AbortSignal;
+  observedProducts: Map<string, CatalogProduct>;
+}): CommerceCapabilities {
+  if (!intentBrief.requestedEffects.includes("DISCOVER_PRODUCTS")) return {};
+
+  const assertLoopActive = () => {
+    if (signal.aborted) {
+      throw new Error("The Commerce Agent run has ended.");
+    }
+  };
+
   return {
-    async respond(input): Promise<AgentResponse> {
-      const turn = await conversation.startTurn(input);
-      const response = await (async (): Promise<Omit<AgentResponse, "conversationId">> => {
-        const intent = await interpreter.interpret(input.message);
-
-        if ("action" in intent) {
-          if (!cart) throw new Error("The cart capability is unavailable.");
-
-          const result = await catalog.search({
-            query: intent.productName,
-            inStockOnly: true,
-            limit: 2,
-          });
-          const product = result.products[0];
-          if (!product || result.products.length !== 1) {
-            return {
-              message:
-                result.products.length === 0
-                  ? `I couldn't find an available product named ${intent.productName}.`
-                  : `I found multiple products matching ${intent.productName}. Please be more specific.`,
-              products: result.products,
-            };
-          }
-
-          let cartSummary;
-          try {
-            cartSummary = await cart.addItem(product, intent.quantity);
-          } catch (error) {
-            if (error instanceof CartError) {
-              return {
-                message: `I couldn't add that to your cart. ${error.message}`,
-                products: [],
-              };
-            }
-            throw error;
-          }
-          return {
-            message: `Added ${intent.quantity} × ${product.name} to your cart.`,
-            products: [],
-            cart: cartSummary,
-          };
-        }
-
-        const result = await catalog.search(toCatalogSearch(intent));
-
-        return {
-          message:
-            result.products.length === 0
-              ? "I couldn't find products matching that request. Try a broader product type, feature, or price range."
-              : `I found ${result.products.length} ${result.products.length === 1 ? "product" : "products"} matching your request.`,
-          intent,
-          products: result.products,
-        };
-      })();
-
-      await turn.complete(response.message);
-      return { ...response, conversationId: turn.conversationId };
+    async searchProducts(search) {
+      assertLoopActive();
+      const result = await catalog.search({
+        ...search,
+        limit: Math.max(1, Math.min(search.limit, limits.maxToolProducts)),
+      });
+      assertLoopActive();
+      const boundedProducts = result.products.slice(0, limits.maxToolProducts);
+      for (const product of boundedProducts) {
+        observedProducts.set(product.id, product);
+      }
+      return { ...result, products: boundedProducts };
+    },
+    async getProduct(productId) {
+      assertLoopActive();
+      const result = await catalog.getProduct(productId);
+      assertLoopActive();
+      if (result.ok) observedProducts.set(result.value.id, result.value);
+      return result;
     },
   };
 }
 
-function toCatalogSearch(intent: IntentBrief["constraints"]) {
+async function runBoundedAgentLoop(
+  agentLoop: CommerceAgentLoop,
+  input: CommerceAgentLoopInput,
+  controller: AbortController,
+): Promise<CommerceAgentLoopResult> {
+  let rejectTimeout: (reason: Error) => void = () => {};
+  const timedOut = new Promise<never>((_resolve, reject) => {
+    rejectTimeout = reject;
+  });
+  const timeout = setTimeout(() => {
+    controller.abort();
+    rejectTimeout(new Error("The Commerce Agent timed out."));
+  }, input.limits.timeoutMs);
+  timeout.unref?.();
+
+  try {
+    return await Promise.race([agentLoop.run(input), timedOut]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function boundedAgentLimits(
+  requested: CommerceAgentLimits | undefined,
+): CommerceAgentLimits {
+  if (!requested) return COMMERCE_AGENT_LIMITS;
+
   return {
-    ...(intent.productTypes.length > 0 ? { productTypes: intent.productTypes } : {}),
-    ...(intent.useCases.length > 0 ? { useCases: intent.useCases } : {}),
-    ...(intent.features.length > 0 ? { features: intent.features } : {}),
-    ...(intent.category !== null ? { category: intent.category } : {}),
-    ...(intent.minPriceMinor !== null ? { minPriceMinor: intent.minPriceMinor } : {}),
-    ...(intent.maxPriceMinor !== null ? { maxPriceMinor: intent.maxPriceMinor } : {}),
-    ...(intent.size !== null ? { size: intent.size } : {}),
-    inStockOnly: intent.inStockOnly,
-    ...(Object.keys(intent.attributes).length > 0
-      ? { attributes: intent.attributes }
-      : {}),
-    limit: 20,
+    maxSteps: positiveCeiling(requested.maxSteps, COMMERCE_AGENT_LIMITS.maxSteps),
+    timeoutMs: positiveCeiling(
+      requested.timeoutMs,
+      COMMERCE_AGENT_LIMITS.timeoutMs,
+    ),
+    maxOutputTokens: positiveCeiling(
+      requested.maxOutputTokens,
+      COMMERCE_AGENT_LIMITS.maxOutputTokens,
+    ),
+    maxToolProducts: positiveCeiling(
+      requested.maxToolProducts,
+      COMMERCE_AGENT_LIMITS.maxToolProducts,
+    ),
+  };
+}
+
+function positiveCeiling(requested: number, ceiling: number): number {
+  if (!Number.isFinite(requested)) return ceiling;
+  return Math.max(1, Math.min(Math.floor(requested), ceiling));
+}
+
+function limitOutcome(
+  conversationId: string,
+  intentBrief: IntentBrief,
+  observedProducts: Map<string, CatalogProduct>,
+  maxProducts: number,
+): AgentOutcome {
+  const products = [...observedProducts.values()].slice(0, maxProducts);
+  if (products.length > 0) {
+    return {
+      status: "COMPLETED",
+      conversationId,
+      message: `I found ${products.length} ${products.length === 1 ? "Product" : "Products"} before the search reached its limit.`,
+      intentBrief,
+      products,
+    };
+  }
+
+  const question = "Could you narrow the Product type or try the search again?";
+  return {
+    status: "NEEDS_INPUT",
+    conversationId,
+    message: question,
+    question,
+    missingInformation:
+      intentBrief.missingInformation.length > 0
+        ? intentBrief.missingInformation
+        : ["Product preferences"],
+    intentBrief,
+    products: [],
   };
 }
 
