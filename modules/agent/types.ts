@@ -1,6 +1,7 @@
 import { CatalogProduct } from "../catalog/types";
 
 export type AgentMessage = {
+  conversationId?: string;
   message: string;
 };
 
@@ -19,6 +20,7 @@ export type ShoppingIntent = {
 };
 
 export type AgentResponse = {
+  conversationId: string;
   message: string;
   intent: ShoppingIntent;
   products: CatalogProduct[];

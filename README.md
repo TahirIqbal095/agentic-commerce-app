@@ -5,6 +5,10 @@ the UUID of the storefront merchant. For local, single-merchant databases it can
 be omitted; the API will use the only merchant present. If the database contains
 zero or multiple merchants, `MERCHANT_ID` is required.
 
+Conversations also resolve the current User on the server. Set `USER_ID` to the
+User UUID. It can be omitted when the database contains exactly one User.
+Running `pnpm db:seed` creates the local demo User and catalog.
+
 The catalog endpoints are:
 
 - `GET /api/products`

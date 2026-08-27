@@ -1,10 +1,11 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { products } from "@/db/schema/catalog";
-import { merchants } from "@/db/schema/identity";
+import { merchants, users } from "@/db/schema/identity";
 import type { NewProduct } from "@/db/schema/types";
 
 export const DEMO_MERCHANT_ID = "11111111-1111-4111-8111-111111111111";
+export const DEMO_USER_ID = "12000000-0000-4000-8000-000000000001";
 
 const DEMO_PRODUCTS = [
   {
@@ -309,6 +310,22 @@ export async function seedDemoCatalog(): Promise<void> {
           name: "Agentic Commerce Demo",
           slug: "agentic-commerce-demo",
           currency: "INR",
+          updatedAt: now,
+        },
+      });
+
+    await transaction
+      .insert(users)
+      .values({
+        id: DEMO_USER_ID,
+        email: "customer@agentic-commerce.demo",
+        name: "Demo Customer",
+      })
+      .onConflictDoUpdate({
+        target: users.id,
+        set: {
+          email: "customer@agentic-commerce.demo",
+          name: "Demo Customer",
           updatedAt: now,
         },
       });

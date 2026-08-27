@@ -9,6 +9,7 @@ export type ShoppingIntent = {
 };
 
 export type AgentResult = {
+  conversationId: string;
   message: string;
   intent?: ShoppingIntent;
   products: CatalogProduct[];

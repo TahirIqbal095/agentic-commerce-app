@@ -15,6 +15,7 @@ type AgentApiResponse = { data: AgentResult } | { error: { message: string } };
 
 export function ShoppingAssistant() {
   const [prompt, setPrompt] = useState("");
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const [result, setResult] = useState<AgentResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -36,7 +37,7 @@ export function ShoppingAssistant() {
       const response = await fetch("/api/agent/message", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ ...(conversationId ? { conversationId } : {}), message }),
       });
       const payload = (await response.json()) as AgentApiResponse;
 
@@ -49,6 +50,7 @@ export function ShoppingAssistant() {
       }
 
       setResult(payload.data);
+      setConversationId(payload.data.conversationId);
     } catch (requestError) {
       setError(
         requestError instanceof Error
