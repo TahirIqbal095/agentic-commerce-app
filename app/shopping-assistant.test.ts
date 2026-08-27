@@ -82,13 +82,26 @@ test("customer can submit a request and read product results above the persisten
     return new Response(
       JSON.stringify({
         data: {
+          status: "COMPLETED",
+          conversationId: "41000000-0000-4000-8000-000000000001",
           message: "I found one precise match.",
-          intent: {
-            productTypes: ["earphones"],
-            features: ["noise cancelling"],
-            category: "Audio",
-            minPriceMinor: null,
-            maxPriceMinor: 500000,
+          intentBrief: {
+            goal: "Find noise-cancelling earphones",
+            constraints: {
+              productTypes: ["earphones"],
+              useCases: [],
+              features: ["noise cancelling"],
+              category: "Audio",
+              minPriceMinor: null,
+              maxPriceMinor: 500000,
+              size: null,
+              inStockOnly: true,
+              attributes: {},
+            },
+            knownEntities: [{ type: "PRODUCT_TYPE", value: "earphones" }],
+            missingInformation: [],
+            confidence: 0.95,
+            requestedEffects: ["DISCOVER_PRODUCTS"],
           },
           products: [
             {
@@ -138,6 +151,10 @@ test("customer can submit a request and read product results above the persisten
     dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
   );
   assert.equal(view.getByText("I found one precise match.").textContent, "I found one precise match.");
+  assert.equal(
+    view.getByText("noise cancelling").textContent?.trim(),
+    "noise cancelling",
+  );
   assert.equal((composer as HTMLInputElement).value, "");
 
   cleanup();

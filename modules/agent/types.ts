@@ -19,9 +19,61 @@ export type ShoppingIntent = {
   attributes: ShoppingAttributes;
 };
 
+export type IntentBrief = {
+  goal: string;
+  constraints: ShoppingIntent;
+  knownEntities: Array<{
+    type: "PRODUCT" | "PRODUCT_TYPE" | "CATEGORY";
+    value: string;
+  }>;
+  missingInformation: string[];
+  confidence: number;
+  requestedEffects: Array<"DISCOVER_PRODUCTS" | "ADD_TO_CART">;
+};
+
+export type CompletedAgentOutcome = {
+  status: "COMPLETED";
+  conversationId: string;
+  message: string;
+  intentBrief: IntentBrief;
+  products: CatalogProduct[];
+  intent?: never;
+  cart?: never;
+};
+
+export type NeedsInputAgentOutcome = {
+  status: "NEEDS_INPUT";
+  conversationId: string;
+  message: string;
+  question: string;
+  missingInformation: string[];
+  intentBrief: IntentBrief;
+  products: [];
+  intent?: never;
+  cart?: never;
+};
+
+export type TemporarilyUnavailableAgentOutcome = {
+  status: "TEMPORARILY_UNAVAILABLE";
+  conversationId?: string;
+  message: string;
+  retryable: true;
+  products: [];
+  intentBrief?: IntentBrief;
+  intent?: never;
+  cart?: never;
+};
+
+export type AgentOutcome =
+  | CompletedAgentOutcome
+  | NeedsInputAgentOutcome
+  | TemporarilyUnavailableAgentOutcome;
+
 export type AgentResponse = {
   conversationId: string;
   message: string;
   intent: ShoppingIntent;
   products: CatalogProduct[];
+  status?: never;
+  intentBrief?: never;
 };

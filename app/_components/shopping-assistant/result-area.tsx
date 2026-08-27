@@ -24,6 +24,7 @@ export function ResultArea({
   submittedMessage: string | null;
 }) {
   const reduceMotion = useReducedMotion();
+  const intent = result?.intentBrief?.constraints ?? result?.intent;
 
   return (
     <section
@@ -73,8 +74,8 @@ export function ResultArea({
                 <p className="max-w-3xl text-balance text-2xl font-medium leading-snug tracking-[-0.025em] sm:text-3xl">
                   {result.message}
                 </p>
-                {result.intent ? (
-                  <IntentSummary intent={result.intent} />
+                {intent ? (
+                  <IntentSummary intent={intent} />
                 ) : null}
               </div>
 

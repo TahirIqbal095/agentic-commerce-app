@@ -7,7 +7,8 @@ import {
   createCommerceAgent,
   type CommerceAgent,
 } from "@/modules/agent/commerce-agent";
-import { createAiIntentInterpreter } from "@/modules/agent/ai-intent-interpreter";
+import { createAiIntentAnalyzer } from "@/modules/agent/ai-intent-interpreter";
+import { createAiOutcomeComposer } from "@/modules/agent/ai-outcome-composer";
 import { ConversationAccessError, createConversationModule } from "@/modules/agent/conversation";
 import { createCatalogModule } from "@/modules/catalog/catalog";
 import { resolveUserContext } from "@/modules/identity/user-context";
@@ -23,8 +24,9 @@ async function createAgentForCurrentMerchant(): Promise<CommerceAgent> {
   ]);
   return createCommerceAgent(
     createCatalogModule(merchantId),
-    createAiIntentInterpreter(),
+    createAiIntentAnalyzer(),
     createConversationModule(userId, merchantId),
+    { outcomeComposer: createAiOutcomeComposer() },
   );
 }
 

@@ -1,16 +1,5 @@
-import type { CatalogProduct } from "@/modules/catalog/catalog";
+import type { AgentOutcome, AgentResponse } from "@/modules/agent/types";
 
-export type ShoppingIntent = {
-  productTypes: string[];
-  features: string[];
-  category: string | null;
-  minPriceMinor: number | null;
-  maxPriceMinor: number | null;
-};
+export type { ShoppingIntent } from "@/modules/agent/types";
 
-export type AgentResult = {
-  conversationId: string;
-  message: string;
-  intent?: ShoppingIntent;
-  products: CatalogProduct[];
-};
+export type AgentResult = AgentOutcome | AgentResponse;

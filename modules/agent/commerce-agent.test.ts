@@ -6,8 +6,8 @@ import type {
   CatalogSearch,
 } from "@/modules/catalog/catalog";
 import {
-  createCommerceAgent,
-  type ConversationModule,
+  createLegacyCommerceAgent,
+  type LegacyConversationModule,
   type IntentInterpreter,
 } from "./commerce-agent";
 import {
@@ -16,7 +16,7 @@ import {
 } from "./conversation";
 
 const conversationId = "41000000-0000-4000-8000-000000000001";
-const conversation: ConversationModule = {
+const conversation: LegacyConversationModule = {
   async startTurn() {
     return { conversationId, async complete() {} };
   },
@@ -61,7 +61,7 @@ test("turns a natural-language request into a related catalog search", async () 
     },
   };
 
-  const agent = createCommerceAgent(catalog, interpreter, conversation);
+  const agent = createLegacyCommerceAgent(catalog, interpreter, conversation);
   const result = await agent.respond({
     message: "I need breathable road-running shoes under ₹5,000 in UK 9",
   });
@@ -122,7 +122,7 @@ test("explains when no catalog products match the interpreted request", async ()
     },
   };
 
-  const agent = createCommerceAgent(catalog, interpreter, conversation);
+  const agent = createLegacyCommerceAgent(catalog, interpreter, conversation);
   const result = await agent.respond({ message: "show me products" });
 
   assert.deepEqual(result, {
@@ -151,13 +151,18 @@ test("resumes a conversation and appends USER and ASSISTANT messages in order", 
     async create(owner, message) {
       owners.set(conversationId, owner);
       entries.push(`USER:${message}:new`);
-      return conversationId;
+      return {
+        conversationId,
+        userMessageId: "51000000-0000-4000-8000-000000000001",
+      };
     },
     async findOwner(id) {
       return owners.get(id) ?? null;
     },
+    async updateMetadata() {},
     async append(id, role, message) {
       entries.push(`${role}:${message}:${id}`);
+      return "51000000-0000-4000-8000-000000000002";
     },
   };
   const scopedConversation = createConversationModule(
@@ -167,7 +172,7 @@ test("resumes a conversation and appends USER and ASSISTANT messages in order", 
   );
   const interpreter: IntentInterpreter = { async interpret() { return { productTypes: [], useCases: [], features: [], category: null, minPriceMinor: null, maxPriceMinor: null, size: null, inStockOnly: true, attributes: {} }; } };
   const catalog: CatalogModule = { async search() { return { products: [] }; }, async getProduct() { throw new Error("Not used"); } };
-  const agent = createCommerceAgent(catalog, interpreter, scopedConversation);
+  const agent = createLegacyCommerceAgent(catalog, interpreter, scopedConversation);
 
   const first = await agent.respond({ message: "show me lamps" });
   await agent.respond({ conversationId: first.conversationId, message: "only desk lamps" });
@@ -185,6 +190,7 @@ test("rejects an out-of-scope conversation before interpretation", async () => {
   const repository: ConversationRepository = {
     async create() { throw new Error("not used"); },
     async findOwner() { return { userId: "another-user", merchantId: "11111111-1111-4111-8111-111111111111" }; },
+    async updateMetadata() { throw new Error("must not update"); },
     async append() { throw new Error("must not append"); },
   };
   const inaccessible = createConversationModule(
@@ -194,7 +200,7 @@ test("rejects an out-of-scope conversation before interpretation", async () => {
   );
   const interpreter: IntentInterpreter = { async interpret() { interpreted = true; throw new Error("must not run"); } };
   const catalog = {} as CatalogModule;
-  const agent = createCommerceAgent(catalog, interpreter, inaccessible);
+  const agent = createLegacyCommerceAgent(catalog, interpreter, inaccessible);
   await assert.rejects(agent.respond({ conversationId, message: "more like those" }), /not found/);
   assert.equal(interpreted, false);
 });

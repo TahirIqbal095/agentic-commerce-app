@@ -4,25 +4,35 @@ import type { CommerceAgent } from "@/modules/agent/commerce-agent";
 import { ConversationAccessError } from "@/modules/agent/conversation";
 import { createPostHandler } from "./route";
 
+const intentBrief = {
+  goal: "Find headphones",
+  constraints: {
+    productTypes: ["headphones"],
+    useCases: [],
+    features: [],
+    category: "Audio",
+    minPriceMinor: null,
+    maxPriceMinor: null,
+    size: null,
+    inStockOnly: true,
+    attributes: {},
+  },
+  knownEntities: [{ type: "PRODUCT_TYPE" as const, value: "headphones" }],
+  missingInformation: [],
+  confidence: 0.9,
+  requestedEffects: ["DISCOVER_PRODUCTS" as const],
+};
+
 test("accepts a user prompt and returns the structured agent response", async () => {
   const messages: string[] = [];
   const agent: CommerceAgent = {
     async respond(input) {
       messages.push(input.message);
       return {
+        status: "COMPLETED",
         conversationId: "41000000-0000-4000-8000-000000000001",
         message: "I found products matching your request.",
-        intent: {
-          productTypes: ["headphones"],
-          useCases: [],
-          features: [],
-          category: "Audio",
-          minPriceMinor: null,
-          maxPriceMinor: null,
-          size: null,
-          inStockOnly: true,
-          attributes: {},
-        },
+        intentBrief,
         products: [],
       };
     },
@@ -41,19 +51,10 @@ test("accepts a user prompt and returns the structured agent response", async ()
   assert.deepEqual(messages, ["show me products"]);
   assert.deepEqual(await response.json(), {
     data: {
+      status: "COMPLETED",
       conversationId: "41000000-0000-4000-8000-000000000001",
       message: "I found products matching your request.",
-      intent: {
-        productTypes: ["headphones"],
-        useCases: [],
-        features: [],
-        category: "Audio",
-        minPriceMinor: null,
-        maxPriceMinor: null,
-        size: null,
-        inStockOnly: true,
-        attributes: {},
-      },
+      intentBrief,
       products: [],
     },
   });
@@ -61,7 +62,7 @@ test("accepts a user prompt and returns the structured agent response", async ()
 
 test("passes a valid conversation identifier to the Commerce Agent", async () => {
   let received: unknown;
-  const agent: CommerceAgent = { async respond(input) { received = input; return { conversationId: input.conversationId!, message: "Refined.", intent: { productTypes: [], useCases: [], features: [], category: null, minPriceMinor: null, maxPriceMinor: null, size: null, inStockOnly: true, attributes: {} }, products: [] }; } };
+  const agent: CommerceAgent = { async respond(input) { received = input; return { status: "COMPLETED", conversationId: input.conversationId!, message: "Refined.", intentBrief, products: [] }; } };
   const POST = createPostHandler(async () => agent);
   const response = await POST(new Request("http://localhost/api/agent/message", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversationId: "41000000-0000-4000-8000-000000000001", message: "only waterproof" }) }));
   assert.equal(response.status, 200);

@@ -50,7 +50,9 @@ export function ShoppingAssistant() {
       }
 
       setResult(payload.data);
-      setConversationId(payload.data.conversationId);
+      if (payload.data.conversationId) {
+        setConversationId(payload.data.conversationId);
+      }
     } catch (requestError) {
       setError(
         requestError instanceof Error
