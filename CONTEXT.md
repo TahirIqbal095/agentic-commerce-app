@@ -48,7 +48,7 @@ _Avoid_: Recommendation
 
 **Cart**:
 A Customer's mutable selection of the Brand's Products before an Order is
-created.
+created. It persists independently of Conversations.
 _Avoid_: Basket, draft order
 
 **Recommendation**:
@@ -56,11 +56,46 @@ A Product suggestion shown in the context of a Customer's intent or Cart,
 whose presentation and acceptance can be measured.
 _Avoid_: Product Relation
 
+**Recommendation Set**:
+An ordered group of Recommendations produced by one Conversation Turn. The
+most recent Recommendation Set is the default target of follow-up references;
+such a reference identifies a Product but does not preserve its price or stock.
+_Avoid_: Search results, Product list
+
 **Commerce Agent**:
 The conversational shopping participant that interprets Customer needs,
 searches the Catalog, recommends Products, changes the Cart, and prepares
 checkout through trusted commerce rules.
 _Avoid_: Autonomous buyer, payment authority
+
+**Conversation**:
+An ongoing exchange between a Customer and the Commerce Agent that can resume
+across devices. Each Customer has at most one current Conversation; starting a
+new one removes the previous Conversation from Customer access while leaving
+the Cart and protected commerce records unchanged.
+_Avoid_: Chat session, request
+
+**Conversation Turn**:
+One Customer message and the Commerce Agent response it produces within a
+Conversation.
+_Avoid_: Request, prompt
+
+**Conversation Context**:
+The accumulated Customer shopping intent and prior Recommendations retained
+across Conversation Turns so follow-up references can be understood.
+_Avoid_: Memory, chat history
+
+**Context Summary**:
+The Customer-visible view of the active Product constraints in Conversation
+Context, from which individual constraints can be removed to produce a new
+Recommendation Set.
+_Avoid_: Filters, model context
+
+**Conversation Transcript**:
+The Customer-visible record of Conversation Turns, retained separately from
+the privacy-minimized Conversation Context used by the Commerce Agent. Durable
+Transcripts redact recognized secrets and unnecessary personal data.
+_Avoid_: Model context, memory
 
 ## Checkout and authorization
 

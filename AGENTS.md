@@ -20,7 +20,7 @@ behavior is covered and the test suite is green.
 
 ### Issue tracker
 
-Issues and specs are tracked as local Markdown under `.scratch/`. See
+Issues and specs are tracked in GitHub Issues. See
 `docs/agents/issue-tracker.md`.
 
 ### Triage labels
