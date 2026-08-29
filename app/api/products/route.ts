@@ -5,7 +5,7 @@ import {
   unexpectedErrorResponse,
 } from "@/lib/http/responses";
 import { createCatalogModule } from "@/modules/catalog/catalog";
-import { resolveMerchantContext } from "@/modules/identity/merchant-context";
+import { requireBrand } from "@/modules/identity/brand";
 
 export async function GET(request: Request): Promise<Response> {
   const parsedQuery = parseProductSearchQuery(new URL(request.url).searchParams);
@@ -14,8 +14,8 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   try {
-    const { merchantId } = await resolveMerchantContext();
-    const catalog = createCatalogModule(merchantId);
+    await requireBrand();
+    const catalog = createCatalogModule();
     const result = await catalog.search(parsedQuery.value);
     return dataResponse(result);
   } catch (error) {

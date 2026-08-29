@@ -13,7 +13,7 @@ import { products } from "./catalog";
 import { approvals, checkoutProposals } from "./checkout";
 import { createdAt, currency, id, money, updatedAt } from "./columns";
 import { orderStatusEnum } from "./enums";
-import { merchants, users } from "./identity";
+import { users } from "./identity";
 
 export const orders = pgTable(
   "orders",
@@ -22,9 +22,6 @@ export const orders = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
-    merchantId: uuid("merchant_id")
-      .notNull()
-      .references(() => merchants.id, { onDelete: "restrict" }),
     cartId: uuid("cart_id")
       .notNull()
       .references(() => carts.id, { onDelete: "restrict" }),
@@ -47,7 +44,7 @@ export const orders = pgTable(
   (table) => [
     uniqueIndex("orders_proposal_unique").on(table.proposalId),
     uniqueIndex("orders_approval_unique").on(table.approvalId),
-    index("orders_customer_idx").on(table.userId, table.merchantId),
+    index("orders_customer_idx").on(table.userId),
     check(
       "orders_amounts_nonnegative",
       sql`${table.subtotalMinor} >= 0 and ${table.discountMinor} >= 0 and ${table.shippingMinor} >= 0 and ${table.taxMinor} >= 0 and ${table.totalMinor} >= 0`,

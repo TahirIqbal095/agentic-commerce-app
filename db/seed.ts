@@ -1,16 +1,14 @@
-import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { products } from "@/db/schema/catalog";
-import { merchants, users } from "@/db/schema/identity";
+import { brands, users } from "@/db/schema/identity";
 import type { NewProduct } from "@/db/schema/types";
 
-export const DEMO_MERCHANT_ID = "11111111-1111-4111-8111-111111111111";
+export const DEMO_BRAND_ID = "11111111-1111-4111-8111-111111111111";
 export const DEMO_CUSTOMER_ID = "12000000-0000-4000-8000-000000000001";
 
 const DEMO_PRODUCTS = [
   {
     id: "21000000-0000-4000-8000-000000000001",
-    merchantId: DEMO_MERCHANT_ID,
     name: "StrideFlow Daily Running Shoes",
     slug: "strideflow-daily-running-shoes",
     description:
@@ -21,7 +19,6 @@ const DEMO_PRODUCTS = [
     stock: 32,
     active: true,
     attributes: {
-      brand: "StrideFlow",
       audience: "Unisex",
       colors: ["Midnight Blue", "Cloud White"],
       sizes: ["UK 6", "UK 7", "UK 8", "UK 9", "UK 10", "UK 11"],
@@ -33,7 +30,6 @@ const DEMO_PRODUCTS = [
   },
   {
     id: "21000000-0000-4000-8000-000000000002",
-    merchantId: DEMO_MERCHANT_ID,
     name: "TrailCrest Grip Running Shoes",
     slug: "trailcrest-grip-running-shoes",
     description:
@@ -44,7 +40,6 @@ const DEMO_PRODUCTS = [
     stock: 18,
     active: true,
     attributes: {
-      brand: "TrailCrest",
       audience: "Unisex",
       colors: ["Forest Green", "Charcoal"],
       sizes: ["UK 7", "UK 8", "UK 9", "UK 10", "UK 11"],
@@ -57,7 +52,6 @@ const DEMO_PRODUCTS = [
   },
   {
     id: "21000000-0000-4000-8000-000000000003",
-    merchantId: DEMO_MERCHANT_ID,
     name: "CloudStep Walking Shoes",
     slug: "cloudstep-walking-shoes",
     description:
@@ -68,7 +62,6 @@ const DEMO_PRODUCTS = [
     stock: 0,
     active: true,
     attributes: {
-      brand: "CloudStep",
       audience: "Unisex",
       colors: ["Stone Grey", "Navy"],
       sizes: ["UK 6", "UK 7", "UK 8", "UK 9", "UK 10"],
@@ -80,7 +73,6 @@ const DEMO_PRODUCTS = [
   },
   {
     id: "21000000-0000-4000-8000-000000000004",
-    merchantId: DEMO_MERCHANT_ID,
     name: "FlexForge Training Shoes",
     slug: "flexforge-training-shoes",
     description:
@@ -91,7 +83,6 @@ const DEMO_PRODUCTS = [
     stock: 21,
     active: true,
     attributes: {
-      brand: "FlexForge",
       audience: "Unisex",
       colors: ["Black", "Gum"],
       sizes: ["UK 6", "UK 7", "UK 8", "UK 9", "UK 10", "UK 11"],
@@ -103,7 +94,6 @@ const DEMO_PRODUCTS = [
   },
   {
     id: "21000000-0000-4000-8000-000000000005",
-    merchantId: DEMO_MERCHANT_ID,
     name: "CourtLine Casual Sneakers",
     slug: "courtline-casual-sneakers",
     description:
@@ -114,7 +104,6 @@ const DEMO_PRODUCTS = [
     stock: 27,
     active: true,
     attributes: {
-      brand: "CourtLine",
       audience: "Unisex",
       colors: ["White", "Black"],
       sizes: ["UK 5", "UK 6", "UK 7", "UK 8", "UK 9", "UK 10"],
@@ -125,7 +114,6 @@ const DEMO_PRODUCTS = [
   },
   {
     id: "21000000-0000-4000-8000-000000000006",
-    merchantId: DEMO_MERCHANT_ID,
     name: "Heritage Oxford Formal Shoes",
     slug: "heritage-oxford-formal-shoes",
     description:
@@ -136,7 +124,6 @@ const DEMO_PRODUCTS = [
     stock: 14,
     active: true,
     attributes: {
-      brand: "Heritage",
       audience: "Men",
       colors: ["Black", "Dark Brown"],
       sizes: ["UK 7", "UK 8", "UK 9", "UK 10", "UK 11"],
@@ -147,7 +134,6 @@ const DEMO_PRODUCTS = [
   },
   {
     id: "21000000-0000-4000-8000-000000000007",
-    merchantId: DEMO_MERCHANT_ID,
     name: "Everyday Comfort Sandals",
     slug: "everyday-comfort-sandals",
     description:
@@ -158,7 +144,6 @@ const DEMO_PRODUCTS = [
     stock: 19,
     active: true,
     attributes: {
-      brand: "EaseWalk",
       audience: "Unisex",
       colors: ["Tan", "Black"],
       sizes: ["UK 5", "UK 6", "UK 7", "UK 8", "UK 9", "UK 10"],
@@ -169,7 +154,6 @@ const DEMO_PRODUCTS = [
   },
   {
     id: "21000000-0000-4000-8000-000000000008",
-    merchantId: DEMO_MERCHANT_ID,
     name: "Performance Ankle Socks",
     slug: "performance-ankle-socks",
     description:
@@ -180,7 +164,6 @@ const DEMO_PRODUCTS = [
     stock: 48,
     active: true,
     attributes: {
-      brand: "StrideFlow",
       audience: "Unisex",
       colors: ["Black", "White", "Grey"],
       sizes: ["S-M", "L-XL"],
@@ -191,7 +174,6 @@ const DEMO_PRODUCTS = [
   },
   {
     id: "21000000-0000-4000-8000-000000000009",
-    merchantId: DEMO_MERCHANT_ID,
     name: "Cushioned Crew Socks",
     slug: "cushioned-crew-socks",
     description:
@@ -202,7 +184,6 @@ const DEMO_PRODUCTS = [
     stock: 36,
     active: true,
     attributes: {
-      brand: "CloudStep",
       audience: "Unisex",
       colors: ["Navy", "Oatmeal"],
       sizes: ["S-M", "L-XL"],
@@ -213,7 +194,6 @@ const DEMO_PRODUCTS = [
   },
   {
     id: "21000000-0000-4000-8000-000000000010",
-    merchantId: DEMO_MERCHANT_ID,
     name: "Support Gel Insoles",
     slug: "support-gel-insoles",
     description:
@@ -224,7 +204,6 @@ const DEMO_PRODUCTS = [
     stock: 25,
     active: true,
     attributes: {
-      brand: "CloudStep",
       audience: "Unisex",
       sizes: ["UK 4-7", "UK 8-11"],
       useCases: ["walking", "all-day wear"],
@@ -234,7 +213,6 @@ const DEMO_PRODUCTS = [
   },
   {
     id: "21000000-0000-4000-8000-000000000011",
-    merchantId: DEMO_MERCHANT_ID,
     name: "Reflective Running Laces",
     slug: "reflective-running-laces",
     description:
@@ -245,7 +223,6 @@ const DEMO_PRODUCTS = [
     stock: 42,
     active: true,
     attributes: {
-      brand: "StrideFlow",
       colors: ["Volt Yellow", "Silver"],
       useCases: ["road running", "low-light running"],
       lengthCm: 120,
@@ -254,7 +231,6 @@ const DEMO_PRODUCTS = [
   },
   {
     id: "21000000-0000-4000-8000-000000000012",
-    merchantId: DEMO_MERCHANT_ID,
     name: "Complete Shoe Care Kit",
     slug: "complete-shoe-care-kit",
     description:
@@ -265,7 +241,6 @@ const DEMO_PRODUCTS = [
     stock: 16,
     active: true,
     attributes: {
-      brand: "FreshStep",
       useCases: ["shoe cleaning", "shoe protection"],
       suitableMaterials: ["Mesh", "Canvas", "Synthetic leather"],
       pieceCount: 4,
@@ -273,7 +248,6 @@ const DEMO_PRODUCTS = [
   },
   {
     id: "21000000-0000-4000-8000-000000000013",
-    merchantId: DEMO_MERCHANT_ID,
     name: "TempoLite Racing Shoes",
     slug: "tempolite-racing-shoes",
     description:
@@ -284,7 +258,6 @@ const DEMO_PRODUCTS = [
     stock: 5,
     active: false,
     attributes: {
-      brand: "StrideFlow",
       audience: "Unisex",
       useCases: ["road racing"],
       surface: "Road",
@@ -297,18 +270,24 @@ export async function seedDemoCatalog(): Promise<void> {
 
   await db.transaction(async (transaction) => {
     await transaction
-      .insert(merchants)
+      .insert(brands)
       .values({
-        id: DEMO_MERCHANT_ID,
-        name: "Agentic Commerce Demo",
-        slug: "agentic-commerce-demo",
+        id: DEMO_BRAND_ID,
+        name: "Arc",
+        slug: "arc",
+        description:
+          "Everyday footwear and accessories, discovered with the Arc Commerce Agent.",
+        logoUrl: null,
         currency: "INR",
       })
       .onConflictDoUpdate({
-        target: merchants.id,
+        target: brands.singletonKey,
         set: {
-          name: "Agentic Commerce Demo",
-          slug: "agentic-commerce-demo",
+          name: "Arc",
+          slug: "arc",
+          description:
+            "Everyday footwear and accessories, discovered with the Arc Commerce Agent.",
+          logoUrl: null,
           currency: "INR",
           updatedAt: now,
         },
@@ -332,15 +311,14 @@ export async function seedDemoCatalog(): Promise<void> {
 
     await transaction
       .update(products)
-      .set({ active: false, updatedAt: now })
-      .where(eq(products.merchantId, DEMO_MERCHANT_ID));
+      .set({ active: false, updatedAt: now });
 
     for (const product of DEMO_PRODUCTS) {
       await transaction
         .insert(products)
         .values(product)
         .onConflictDoUpdate({
-          target: [products.merchantId, products.slug],
+          target: products.slug,
           set: {
             name: product.name,
             description: product.description,

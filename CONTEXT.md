@@ -1,87 +1,113 @@
 # Agentic Commerce
 
-This context describes an agentic commerce platform where each merchant makes a catalog and payment account available to a conversational commerce agent. The agent helps customers discover products and complete purchases, while authoritative commerce rules control products, totals, authorization, orders, and payments.
+This context describes one Brand's agentic commerce Storefront. The Commerce
+Agent helps Customers discover the Brand's Products and complete purchases,
+while authoritative commerce rules control Products, totals, authorization,
+Orders, and payments.
 
 ## People and ownership
 
 **User**:
-A person with one identity who may shop as a customer or operate a merchant's storefront.
-_Avoid_: Account, Customer, Merchant Admin
+A person with one identity who may shop as a Customer or administer the Brand.
+_Avoid_: Account, Customer account, Merchant
 
-**Merchant**:
-A business that owns a storefront, catalog, policies, orders, payment account, and audit history.
-_Avoid_: Store, seller account
+**Brand**:
+The business that owns the Storefront, Catalog, policies, Orders, Payment
+Accounts, and audit history. Each deployment serves exactly one Brand.
+_Avoid_: Merchant, seller, vendor, tenant
 
 **Storefront**:
-The merchant's customer-facing shop where products are discovered and purchased.
-_Avoid_: Marketplace, platform
+The Brand's customer-facing shop where Products are discovered and purchased.
+_Avoid_: Marketplace, platform, store
 
 **Customer**:
-A user who browses products, owns a cart, authorizes checkout, and places orders.
+A User who browses Products, owns a Cart, authorizes checkout, and places Orders.
 _Avoid_: Buyer, shopper account
 
-**Merchant Admin**:
-A user authorized to operate the merchant's catalog, payment configuration, policies, and operational data.
-_Avoid_: Seller, tenant administrator
+**Brand Admin**:
+A User authorized to operate the Brand's Catalog, payment configuration,
+policies, and operational data.
+_Avoid_: Merchant Admin, seller, tenant administrator
 
 ## Catalog and shopping
 
+**Catalog**:
+The Brand's authoritative collection of Products offered through the
+Storefront.
+_Avoid_: Marketplace inventory, seller listings
+
 **Product**:
-A merchant-owned item offered for sale, with an authoritative base price and inventory state.
+A Brand-owned item offered for sale, with an authoritative base price and
+inventory state.
 _Avoid_: Listing, catalog item
 
 **Product Relation**:
-A merchant-curated relationship between two products used to generate cross-sell, upsell, accessory, bundle, alternative, or compatibility candidates.
+A Brand-curated relationship between two Products used to produce cross-sell,
+upsell, accessory, bundle, alternative, or compatibility candidates.
 _Avoid_: Recommendation
 
 **Cart**:
-A customer's mutable selection of products for one merchant before an order is created.
+A Customer's mutable selection of the Brand's Products before an Order is
+created.
 _Avoid_: Basket, draft order
 
 **Recommendation**:
-A product suggestion shown in the context of a customer's intent or cart, whose presentation and acceptance can be measured.
-_Avoid_: Product relation
+A Product suggestion shown in the context of a Customer's intent or Cart,
+whose presentation and acceptance can be measured.
+_Avoid_: Product Relation
 
 **Commerce Agent**:
-The conversational shopping participant that interprets customer needs, searches a merchant's catalog, recommends products, changes the cart, and prepares checkout through trusted commerce rules.
+The conversational shopping participant that interprets Customer needs,
+searches the Catalog, recommends Products, changes the Cart, and prepares
+checkout through trusted commerce rules.
 _Avoid_: Autonomous buyer, payment authority
 
 ## Checkout and authorization
 
 **Conversational Checkout**:
-A checkout experience in which the Commerce Agent helps a customer shape a cart, prepares an exact purchase for explicit approval, and initiates payment after approval.
+A checkout experience in which the Commerce Agent helps a Customer shape a
+Cart, prepares an exact purchase for explicit Approval, and initiates payment
+after Approval.
 _Avoid_: Autonomous purchase, chat payment
 
 **Checkout Proposal**:
-An immutable commercial summary of a cart, including final item prices, totals, stock warnings, and the policy decision at preparation time.
+An immutable commercial summary of a Cart, including final Product prices,
+totals, stock warnings, and the Policy Evaluation at preparation time.
 _Avoid_: Checkout, quote, payment request
 
 **Policy Evaluation**:
-The recorded result of applying a merchant policy to a proposed action: allow, require approval, or block.
+The recorded result of applying Brand policy to a proposed action: allow,
+require Approval, or block.
 _Avoid_: Validation, permission check
 
 **Approval**:
-A customer's explicit, expiring authorization for one exact checkout proposal and amount.
+A Customer's explicit, expiring authorization for one exact Checkout Proposal
+and amount.
 _Avoid_: Confirmation, consent flag
 
 ## Ordering and payment
 
 **Payment Account**:
-The merchant's configured account with a payment provider, through which customer payments are collected for the merchant.
+The Brand's configured account with a payment provider, through which Customer
+payments are collected. Test and live Payment Accounts are isolated.
 _Avoid_: Payment wall, paywall
 
 **Order**:
-The durable, immutable commercial record created from an approved checkout proposal before external payment begins.
+The durable, immutable commercial record created from an approved Checkout
+Proposal before external payment begins.
 _Avoid_: Purchase, Razorpay order
 
 **Payment Attempt**:
-A retry-safe attempt to collect the amount of one order through a payment provider.
+A retry-safe attempt to collect the amount of one Order through a payment
+provider.
 _Avoid_: Payment, transaction
 
 **Provider Order**:
-Razorpay's payment collection record associated with an internal payment attempt.
+Razorpay's payment collection record associated with an internal Payment
+Attempt.
 _Avoid_: Order
 
 **Audit Event**:
-An immutable fact describing a meaningful action, decision, state change, or external notification.
+An immutable fact describing a meaningful action, decision, state change, or
+external notification.
 _Avoid_: Log line, activity

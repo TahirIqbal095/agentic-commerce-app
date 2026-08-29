@@ -73,7 +73,7 @@ const shoppingIntentSchema = jsonSchema<CommerceIntent>(
           size: {
             type: ["string", "null"],
             description:
-              "The requested merchant catalog size such as UK 9, or null.",
+              "The requested Product size such as UK 9, or null.",
           },
           inStockOnly: {
             type: "boolean",

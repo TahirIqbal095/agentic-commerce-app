@@ -5,7 +5,7 @@ import type { JsonObject } from "@/db/schema/types";
 import type { ConversationModule } from "./commerce-agent";
 import type { AgentOutcome, IntentBrief } from "./types";
 
-type ConversationOwner = { userId: string; merchantId: string };
+type ConversationOwner = { userId: string };
 export interface ConversationRepository {
   create(
     owner: ConversationOwner,
@@ -22,46 +22,85 @@ export interface ConversationRepository {
 }
 
 export class ConversationAccessError extends Error {
-  constructor() { super("The conversation was not found."); this.name = "ConversationAccessError"; }
+  constructor() {
+    super("The conversation was not found.");
+    this.name = "ConversationAccessError";
+  }
 }
 
 const postgresConversationRepository: ConversationRepository = {
   async create(owner, userMessage) {
     return db.transaction(async (transaction) => {
-      const [conversation] = await transaction.insert(conversations).values(owner).returning({ id: conversations.id });
-      const [message] = await transaction.insert(messages).values({ conversationId: conversation.id, role: "USER", content: userMessage }).returning({ id: messages.id });
+      const [conversation] = await transaction
+        .insert(conversations)
+        .values(owner)
+        .returning({ id: conversations.id });
+      const [message] = await transaction
+        .insert(messages)
+        .values({
+          conversationId: conversation.id,
+          role: "USER",
+          content: userMessage,
+        })
+        .returning({ id: messages.id });
       return { conversationId: conversation.id, userMessageId: message.id };
     });
   },
   async findOwner(conversationId) {
-    const [owner] = await db.select({ userId: conversations.userId, merchantId: conversations.merchantId }).from(conversations).where(eq(conversations.id, conversationId)).limit(1);
+    const [owner] = await db
+      .select({
+        userId: conversations.userId,
+      })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
     return owner ?? null;
   },
   async updateMetadata(messageId, metadata) {
-    await db.update(messages).set({ metadata }).where(eq(messages.id, messageId));
+    await db
+      .update(messages)
+      .set({ metadata })
+      .where(eq(messages.id, messageId));
   },
   async append(conversationId, role, content, metadata = {}) {
     return db.transaction(async (transaction) => {
-      const [message] = await transaction.insert(messages).values({ conversationId, role, content, metadata }).returning({ id: messages.id });
-      await transaction.update(conversations).set({ updatedAt: new Date() }).where(eq(conversations.id, conversationId));
+      const [message] = await transaction
+        .insert(messages)
+        .values({ conversationId, role, content, metadata })
+        .returning({ id: messages.id });
+      await transaction
+        .update(conversations)
+        .set({ updatedAt: new Date() })
+        .where(eq(conversations.id, conversationId));
       return message.id;
     });
   },
 };
 
-export function createConversationModule(userId: string, merchantId: string, repository: ConversationRepository = postgresConversationRepository): ConversationModule {
-  const owner = { userId, merchantId };
+export function createConversationModule(
+  userId: string,
+  repository: ConversationRepository = postgresConversationRepository,
+): ConversationModule {
+  const owner = { userId };
   return {
     async startTurn(input) {
       let conversationId: string;
       let userMessageId: string;
       if (input.conversationId) {
         const persistedOwner = await repository.findOwner(input.conversationId);
-        if (!persistedOwner || persistedOwner.userId !== userId || persistedOwner.merchantId !== merchantId) throw new ConversationAccessError();
+        if (!persistedOwner || persistedOwner.userId !== userId)
+          throw new ConversationAccessError();
         conversationId = input.conversationId;
-        userMessageId = await repository.append(conversationId, "USER", input.message);
+        userMessageId = await repository.append(
+          conversationId,
+          "USER",
+          input.message,
+        );
       } else {
-        ({ conversationId, userMessageId } = await repository.create(owner, input.message));
+        ({ conversationId, userMessageId } = await repository.create(
+          owner,
+          input.message,
+        ));
       }
       return {
         conversationId,
@@ -77,7 +116,9 @@ export function createConversationModule(userId: string, merchantId: string, rep
           await repository.append(
             conversationId,
             "ASSISTANT",
-            outcome ? canonicalPersistedMessage(outcome) : redactSensitiveText(message),
+            outcome
+              ? canonicalPersistedMessage(outcome)
+              : redactSensitiveText(message),
             outcome ? outcomeMetadata(outcome) : {},
           );
         },
@@ -159,7 +200,10 @@ function sanitizeValue(value: unknown): unknown {
 
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([key]) => !privateTraceKeys.has(key.replaceAll(/[_-]/g, "").toLowerCase()))
+      .filter(
+        ([key]) =>
+          !privateTraceKeys.has(key.replaceAll(/[_-]/g, "").toLowerCase()),
+      )
       .map(([key, item]) => [key, sanitizeValue(item)]),
   );
 }

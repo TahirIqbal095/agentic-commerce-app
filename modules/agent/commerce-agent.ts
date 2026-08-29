@@ -85,145 +85,146 @@ export function createCommerceAgent(
   options: CommerceAgentOptions,
 ): CommerceAgent {
   return {
-      async respond(input): Promise<AgentOutcome> {
-        let turn: AgentTurn;
-        try {
-          turn = await conversation.startTurn(input);
-        } catch (error) {
-          if (error instanceof ConversationAccessError) throw error;
-          return {
-            status: "TEMPORARILY_UNAVAILABLE",
-            ...(input.conversationId
-              ? { conversationId: input.conversationId }
-              : {}),
-            message:
-              "I couldn't start that conversation right now. Please try again.",
-            retryable: true,
-            products: [],
-          };
-        }
-        let intentBrief: IntentBrief;
-        try {
-          intentBrief = await analyzer.analyze(input.message);
-        } catch {
-          const outcome: AgentOutcome = {
-            status: "TEMPORARILY_UNAVAILABLE",
-            conversationId: turn.conversationId,
-            message: "I couldn't understand that request right now. Please try again.",
-            retryable: true,
-            products: [],
-          };
-          return completeTurn(turn, outcome);
-        }
-
-        try {
-          await turn.recordIntentBrief(intentBrief);
-        } catch {
-          return completeTurn(turn, {
-            status: "TEMPORARILY_UNAVAILABLE",
-            conversationId: turn.conversationId,
-            message: "I couldn't save that request right now. Please try again.",
-            retryable: true,
-            intentBrief,
-            products: [],
-          });
-        }
-        let loopResult: CommerceAgentLoopResult;
-        const observedProducts = new Map<string, CatalogProduct>();
-        const limits = boundedAgentLimits(options.limits);
-        const controller = new AbortController();
-        const capabilities = resolveCapabilities({
-          catalog,
-          intentBrief,
-          limits,
-          signal: controller.signal,
-          observedProducts,
-        });
-
-        try {
-          loopResult = await runBoundedAgentLoop(
-            options.agentLoop,
-            {
-              message: input.message,
-              intentBrief,
-              capabilities,
-              limits,
-              signal: controller.signal,
-            },
-            controller,
-          );
-        } catch {
-          if (controller.signal.aborted) {
-            return completeTurn(
-              turn,
-              limitOutcome(
-                turn.conversationId,
-                intentBrief,
-                observedProducts,
-                limits.maxToolProducts,
-              ),
-            );
-          }
-          return completeTurn(turn, {
-            status: "TEMPORARILY_UNAVAILABLE",
-            conversationId: turn.conversationId,
-            message:
-              "Product discovery is temporarily unavailable. Please try again.",
-            retryable: true,
-            intentBrief,
-            products: [],
-          });
-        }
-
-        if (loopResult.status === "LIMIT_REACHED") {
-          return completeTurn(
-            turn,
-            limitOutcome(
-              turn.conversationId,
-              intentBrief,
-              observedProducts,
-              limits.maxToolProducts,
-            ),
-          );
-        }
-
-        if (loopResult.status === "NEEDS_INPUT") {
-          return completeTurn(turn, {
-            ...loopResult,
-            conversationId: turn.conversationId,
-            intentBrief,
-            products: [],
-          });
-        }
-
-        if (
-          loopResult.productIds.some(
-            (productId) => !observedProducts.has(productId),
-          )
-        ) {
-          return completeTurn(
-            turn,
-            limitOutcome(
-              turn.conversationId,
-              intentBrief,
-              observedProducts,
-              limits.maxToolProducts,
-            ),
-          );
-        }
-
-        const products = loopResult.productIds.flatMap((productId) => {
-          const product = observedProducts.get(productId);
-          return product ? [product] : [];
-        });
-        return completeTurn(turn, {
-          status: "COMPLETED",
+    async respond(input): Promise<AgentOutcome> {
+      let turn: AgentTurn;
+      try {
+        turn = await conversation.startTurn(input);
+      } catch (error) {
+        if (error instanceof ConversationAccessError) throw error;
+        return {
+          status: "TEMPORARILY_UNAVAILABLE",
+          ...(input.conversationId
+            ? { conversationId: input.conversationId }
+            : {}),
+          message:
+            "I couldn't start that conversation right now. Please try again.",
+          retryable: true,
+          products: [],
+        };
+      }
+      let intentBrief: IntentBrief;
+      try {
+        intentBrief = await analyzer.analyze(input.message);
+      } catch {
+        const outcome: AgentOutcome = {
+          status: "TEMPORARILY_UNAVAILABLE",
           conversationId: turn.conversationId,
-          message: loopResult.message,
+          message:
+            "I couldn't understand that request right now. Please try again.",
+          retryable: true,
+          products: [],
+        };
+        return completeTurn(turn, outcome);
+      }
+
+      try {
+        await turn.recordIntentBrief(intentBrief);
+      } catch {
+        return completeTurn(turn, {
+          status: "TEMPORARILY_UNAVAILABLE",
+          conversationId: turn.conversationId,
+          message: "I couldn't save that request right now. Please try again.",
+          retryable: true,
           intentBrief,
-          products,
+          products: [],
         });
-      },
+      }
+      let loopResult: CommerceAgentLoopResult;
+      const observedProducts = new Map<string, CatalogProduct>();
+      const limits = boundedAgentLimits(options.limits);
+      const controller = new AbortController();
+      const capabilities = resolveCapabilities({
+        catalog,
+        intentBrief,
+        limits,
+        signal: controller.signal,
+        observedProducts,
+      });
+
+      try {
+        loopResult = await runBoundedAgentLoop(
+          options.agentLoop,
+          {
+            message: input.message,
+            intentBrief,
+            capabilities,
+            limits,
+            signal: controller.signal,
+          },
+          controller,
+        );
+      } catch {
+        if (controller.signal.aborted) {
+          return completeTurn(
+            turn,
+            limitOutcome(
+              turn.conversationId,
+              intentBrief,
+              observedProducts,
+              limits.maxToolProducts,
+            ),
+          );
+        }
+        return completeTurn(turn, {
+          status: "TEMPORARILY_UNAVAILABLE",
+          conversationId: turn.conversationId,
+          message:
+            "Product discovery is temporarily unavailable. Please try again.",
+          retryable: true,
+          intentBrief,
+          products: [],
+        });
+      }
+
+      if (loopResult.status === "LIMIT_REACHED") {
+        return completeTurn(
+          turn,
+          limitOutcome(
+            turn.conversationId,
+            intentBrief,
+            observedProducts,
+            limits.maxToolProducts,
+          ),
+        );
+      }
+
+      if (loopResult.status === "NEEDS_INPUT") {
+        return completeTurn(turn, {
+          ...loopResult,
+          conversationId: turn.conversationId,
+          intentBrief,
+          products: [],
+        });
+      }
+
+      if (
+        loopResult.productIds.some(
+          (productId) => !observedProducts.has(productId),
+        )
+      ) {
+        return completeTurn(
+          turn,
+          limitOutcome(
+            turn.conversationId,
+            intentBrief,
+            observedProducts,
+            limits.maxToolProducts,
+          ),
+        );
+      }
+
+      const products = loopResult.productIds.flatMap((productId) => {
+        const product = observedProducts.get(productId);
+        return product ? [product] : [];
+      });
+      return completeTurn(turn, {
+        status: "COMPLETED",
+        conversationId: turn.conversationId,
+        message: loopResult.message,
+        intentBrief,
+        products,
+      });
+    },
   };
 }
 
@@ -300,7 +301,10 @@ function boundedAgentLimits(
   if (!requested) return COMMERCE_AGENT_LIMITS;
 
   return {
-    maxSteps: positiveCeiling(requested.maxSteps, COMMERCE_AGENT_LIMITS.maxSteps),
+    maxSteps: positiveCeiling(
+      requested.maxSteps,
+      COMMERCE_AGENT_LIMITS.maxSteps,
+    ),
     timeoutMs: positiveCeiling(
       requested.timeoutMs,
       COMMERCE_AGENT_LIMITS.timeoutMs,

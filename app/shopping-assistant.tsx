@@ -13,7 +13,7 @@ import type { CatalogProduct } from "@/modules/catalog/catalog";
 
 type AgentApiResponse = { data: AgentResult } | { error: { message: string } };
 
-export function ShoppingAssistant() {
+export function ShoppingAssistant({ brandName }: { brandName: string }) {
   const [prompt, setPrompt] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [result, setResult] = useState<AgentResult | null>(null);
@@ -82,7 +82,7 @@ export function ShoppingAssistant() {
       </div>
 
       <div className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 pb-52 pt-5 sm:px-8 sm:pb-56 sm:pt-7">
-        <Header cartQuantity={cartQuantity} />
+        <Header brandName={brandName} cartQuantity={cartQuantity} />
 
         <div
           className={cn(
@@ -93,7 +93,7 @@ export function ShoppingAssistant() {
           )}
         >
           {!result && !isLoading && !error ? (
-            <Hero onSuggestion={setPrompt} />
+            <Hero brandName={brandName} onSuggestion={setPrompt} />
           ) : (
             <ResultArea
               error={error}
@@ -114,6 +114,7 @@ export function ShoppingAssistant() {
       ) : null}
 
       <Composer
+        brandName={brandName}
         prompt={prompt}
         setPrompt={setPrompt}
         isLoading={isLoading}

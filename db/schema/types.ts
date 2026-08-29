@@ -10,18 +10,18 @@ import type {
   policies,
   policyEvaluations,
 } from "./checkout";
-import type { merchantAdmins, merchants, users } from "./identity";
+import type { brandAdmins, brands, users } from "./identity";
 import type { orderItems, orders } from "./ordering";
 import type { paymentAttempts, webhookEvents } from "./payments";
 
 export type JsonObject = Record<string, unknown>;
 
-export type Merchant = typeof merchants.$inferSelect;
-export type NewMerchant = typeof merchants.$inferInsert;
+export type Brand = typeof brands.$inferSelect;
+export type NewBrand = typeof brands.$inferInsert;
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
-export type MerchantAdmin = typeof merchantAdmins.$inferSelect;
-export type NewMerchantAdmin = typeof merchantAdmins.$inferInsert;
+export type BrandAdmin = typeof brandAdmins.$inferSelect;
+export type NewBrandAdmin = typeof brandAdmins.$inferInsert;
 
 export type Product = typeof products.$inferSelect;
 export type NewProduct = typeof products.$inferInsert;

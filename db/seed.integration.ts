@@ -6,12 +6,12 @@ import { eq } from "drizzle-orm";
 import { GET } from "@/app/api/products/route";
 import { db } from "@/db";
 import { carts } from "@/db/schema/cart";
+import { brands } from "@/db/schema/identity";
 import { createCatalogModule } from "@/modules/catalog/catalog";
 import { createCartModule } from "@/modules/cart/cart";
 import { DEMO_CUSTOMER_ID } from "@/db/seed";
 
 const execFileAsync = promisify(execFile);
-const DEMO_MERCHANT_ID = "11111111-1111-4111-8111-111111111111";
 const EXPECTED_ACTIVE_PRODUCTS = [
   { slug: "strideflow-daily-running-shoes", inStock: true },
   { slug: "trailcrest-grip-running-shoes", inStock: true },
@@ -26,14 +26,7 @@ const EXPECTED_ACTIVE_PRODUCTS = [
   { slug: "reflective-running-laces", inStock: true },
   { slug: "complete-shoe-care-kit", inStock: true },
 ];
-const originalMerchantId = process.env.MERCHANT_ID;
-
 after(async () => {
-  if (originalMerchantId === undefined) {
-    delete process.env.MERCHANT_ID;
-  } else {
-    process.env.MERCHANT_ID = originalMerchantId;
-  }
   await db.$client.end();
 });
 
@@ -45,7 +38,6 @@ async function runSeedCommand(): Promise<void> {
 }
 
 async function getProducts(): Promise<Response> {
-  process.env.MERCHANT_ID = DEMO_MERCHANT_ID;
   return GET(new Request("http://localhost/api/products?limit=50"));
 }
 
@@ -76,7 +68,6 @@ test("demo catalog seed is repeatable and exposes only active products", async (
       product.slug === "strideflow-daily-running-shoes",
   );
   assert.deepEqual(roadRunningShoe?.attributes, {
-    brand: "StrideFlow",
     audience: "Unisex",
     colors: ["Midnight Blue", "Cloud White"],
     sizes: ["UK 6", "UK 7", "UK 8", "UK 9", "UK 10", "UK 11"],
@@ -87,9 +78,40 @@ test("demo catalog seed is repeatable and exposes only active products", async (
   });
 });
 
+test("storefront fails when its required Brand is not configured", async () => {
+  await runSeedCommand();
+  await db.delete(brands);
+
+  const response = await getProducts();
+
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), {
+    error: {
+      code: "INTERNAL_ERROR",
+      message: "An unexpected error occurred.",
+      details: {},
+    },
+  });
+
+  await runSeedCommand();
+});
+
+test("database rejects a second Brand in one deployment", async () => {
+  await runSeedCommand();
+
+  await assert.rejects(
+    db.insert(brands).values({
+      name: "Another Brand",
+      slug: "another-brand",
+      description: "A Brand that must use a separate deployment.",
+      currency: "INR",
+    }),
+  );
+});
+
 test("catalog search matches related footwear product types", async () => {
   await runSeedCommand();
-  const catalog = createCatalogModule(DEMO_MERCHANT_ID);
+  const catalog = createCatalogModule();
 
   const result = await catalog.search({
     queries: ["running shoes", "trainers", "sneakers"],
@@ -110,7 +132,7 @@ test("catalog search matches related footwear product types", async () => {
 
 test("catalog retrieval combines intent, commerce, and availability criteria", async () => {
   await runSeedCommand();
-  const catalog = createCatalogModule(DEMO_MERCHANT_ID);
+  const catalog = createCatalogModule();
 
   const result = await catalog.search({
     productTypes: ["running shoes"],
@@ -135,7 +157,7 @@ test("customer can add a product to an authoritative active cart", async () => {
   await runSeedCommand();
   await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
 
-  const catalog = createCatalogModule(DEMO_MERCHANT_ID);
+  const catalog = createCatalogModule();
   const result = await catalog.search({
     query: "StrideFlow Daily Running Shoes",
     limit: 1,
@@ -143,7 +165,7 @@ test("customer can add a product to an authoritative active cart", async () => {
   const product = result.products[0];
   assert.ok(product);
 
-  const cart = createCartModule(DEMO_CUSTOMER_ID, DEMO_MERCHANT_ID);
+  const cart = createCartModule(DEMO_CUSTOMER_ID);
   const summary = await cart.addItem(product, 2);
 
   assert.equal(summary.totalQuantity, 2);

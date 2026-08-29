@@ -1,4 +1,4 @@
-CREATE TYPE "actor_type" AS ENUM('USER', 'AGENT', 'SYSTEM', 'MERCHANT', 'RAZORPAY');--> statement-breakpoint
+CREATE TYPE "actor_type" AS ENUM('USER', 'AGENT', 'SYSTEM', 'BRAND_ADMIN', 'RAZORPAY');--> statement-breakpoint
 CREATE TYPE "agent_action_status" AS ENUM('PROPOSED', 'EXECUTED', 'FAILED', 'BLOCKED');--> statement-breakpoint
 CREATE TYPE "approval_status" AS ENUM('PENDING', 'APPROVED', 'REJECTED', 'EXPIRED', 'CONSUMED');--> statement-breakpoint
 CREATE TYPE "cart_status" AS ENUM('ACTIVE', 'CHECKOUT_PENDING', 'CONVERTED', 'ABANDONED');--> statement-breakpoint
@@ -9,12 +9,10 @@ CREATE TYPE "payment_provider" AS ENUM('RAZORPAY');--> statement-breakpoint
 CREATE TYPE "payment_status" AS ENUM('CREATED', 'PENDING', 'AUTHORIZED', 'CAPTURED', 'FAILED', 'REFUNDED');--> statement-breakpoint
 CREATE TYPE "policy_decision" AS ENUM('ALLOW', 'REQUIRES_APPROVAL', 'BLOCK');--> statement-breakpoint
 CREATE TYPE "product_relation_type" AS ENUM('CROSS_SELL', 'UPSELL', 'BUNDLE', 'ACCESSORY', 'ALTERNATIVE');--> statement-breakpoint
-CREATE TYPE "user_role" AS ENUM('CUSTOMER', 'MERCHANT_ADMIN');--> statement-breakpoint
 CREATE TABLE "agent_actions" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"conversation_id" uuid NOT NULL,
 	"user_id" uuid NOT NULL,
-	"merchant_id" uuid NOT NULL,
 	"action_type" varchar(120) NOT NULL,
 	"tool_name" varchar(120) NOT NULL,
 	"input" jsonb NOT NULL,
@@ -30,7 +28,6 @@ CREATE TABLE "agent_actions" (
 CREATE TABLE "conversations" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"user_id" uuid NOT NULL,
-	"merchant_id" uuid NOT NULL,
 	"active_cart_id" uuid,
 	"constraints" jsonb DEFAULT '{}' NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -66,7 +63,6 @@ CREATE TABLE "recommendation_events" (
 --> statement-breakpoint
 CREATE TABLE "audit_events" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-	"merchant_id" uuid NOT NULL,
 	"user_id" uuid,
 	"session_id" varchar(200),
 	"entity_type" varchar(120) NOT NULL,
@@ -82,7 +78,6 @@ CREATE TABLE "cart_items" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"cart_id" uuid NOT NULL,
 	"product_id" uuid NOT NULL,
-	"variant_id" uuid,
 	"quantity" integer NOT NULL,
 	"unit_price_snapshot_minor" bigint NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -94,7 +89,6 @@ CREATE TABLE "cart_items" (
 CREATE TABLE "carts" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"user_id" uuid NOT NULL,
-	"merchant_id" uuid NOT NULL,
 	"status" "cart_status" DEFAULT 'ACTIVE'::"cart_status" NOT NULL,
 	"currency" varchar(3) NOT NULL,
 	"version" integer DEFAULT 1 NOT NULL,
@@ -115,24 +109,8 @@ CREATE TABLE "product_relations" (
 	CONSTRAINT "product_relations_score_range" CHECK ("score" between 0 and 100)
 );
 --> statement-breakpoint
-CREATE TABLE "product_variants" (
-	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-	"product_id" uuid NOT NULL,
-	"sku" varchar(100) NOT NULL,
-	"name" varchar(160) NOT NULL,
-	"price_override_minor" bigint,
-	"stock" integer DEFAULT 0 NOT NULL,
-	"attributes" jsonb DEFAULT '{}' NOT NULL,
-	"active" boolean DEFAULT true NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "product_variants_price_nonnegative" CHECK ("price_override_minor" is null or "price_override_minor" >= 0),
-	CONSTRAINT "product_variants_stock_nonnegative" CHECK ("stock" >= 0)
-);
---> statement-breakpoint
 CREATE TABLE "products" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-	"merchant_id" uuid NOT NULL,
 	"name" varchar(200) NOT NULL,
 	"slug" varchar(200) NOT NULL,
 	"description" text NOT NULL,
@@ -167,7 +145,6 @@ CREATE TABLE "checkout_proposal_items" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"proposal_id" uuid NOT NULL,
 	"product_id" uuid NOT NULL,
-	"variant_id" uuid,
 	"name_snapshot" varchar(240) NOT NULL,
 	"quantity" integer NOT NULL,
 	"unit_price_minor" bigint NOT NULL,
@@ -181,8 +158,6 @@ CREATE TABLE "checkout_proposals" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"cart_id" uuid NOT NULL,
 	"user_id" uuid NOT NULL,
-	"merchant_id" uuid NOT NULL,
-	"version" integer DEFAULT 1 NOT NULL,
 	"cart_version" integer NOT NULL,
 	"status" "checkout_proposal_status" DEFAULT 'PREPARED'::"checkout_proposal_status" NOT NULL,
 	"policy_decision" "policy_decision" NOT NULL,
@@ -193,19 +168,16 @@ CREATE TABLE "checkout_proposals" (
 	"tax_minor" bigint NOT NULL,
 	"total_minor" bigint NOT NULL,
 	"currency" varchar(3) NOT NULL,
-	"price_changes" jsonb DEFAULT '[]' NOT NULL,
 	"stock_warnings" jsonb DEFAULT '[]' NOT NULL,
 	"expires_at" timestamp with time zone NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "checkout_proposals_version_positive" CHECK ("version" > 0),
 	CONSTRAINT "checkout_proposals_cart_version_positive" CHECK ("cart_version" > 0),
 	CONSTRAINT "checkout_proposals_amounts_nonnegative" CHECK ("subtotal_minor" >= 0 and "discount_minor" >= 0 and "shipping_minor" >= 0 and "tax_minor" >= 0 and "total_minor" >= 0)
 );
 --> statement-breakpoint
 CREATE TABLE "policies" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-	"merchant_id" uuid NOT NULL,
 	"key" varchar(120) NOT NULL,
 	"value" jsonb NOT NULL,
 	"active" boolean DEFAULT true NOT NULL,
@@ -223,26 +195,28 @@ CREATE TABLE "policy_evaluations" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "merchant_admins" (
-	"merchant_id" uuid NOT NULL,
+CREATE TABLE "brand_admins" (
 	"user_id" uuid NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "merchants" (
+CREATE TABLE "brands" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"singleton_key" varchar(16) DEFAULT 'BRAND' NOT NULL,
 	"name" varchar(160) NOT NULL,
 	"slug" varchar(160) NOT NULL,
+	"description" text NOT NULL,
+	"logo_url" varchar(500),
 	"currency" varchar(3) NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "brands_singleton_key" CHECK ("singleton_key" = 'BRAND')
 );
 --> statement-breakpoint
 CREATE TABLE "users" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"email" varchar(320) NOT NULL,
 	"name" varchar(160) NOT NULL,
-	"role" "user_role" DEFAULT 'CUSTOMER'::"user_role" NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -251,7 +225,6 @@ CREATE TABLE "order_items" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"order_id" uuid NOT NULL,
 	"product_id" uuid NOT NULL,
-	"variant_id" uuid,
 	"name_snapshot" varchar(240) NOT NULL,
 	"quantity" integer NOT NULL,
 	"unit_price_minor" bigint NOT NULL,
@@ -264,7 +237,6 @@ CREATE TABLE "order_items" (
 CREATE TABLE "orders" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"user_id" uuid NOT NULL,
-	"merchant_id" uuid NOT NULL,
 	"cart_id" uuid NOT NULL,
 	"proposal_id" uuid NOT NULL,
 	"approval_id" uuid NOT NULL,
@@ -308,36 +280,33 @@ CREATE TABLE "webhook_events" (
 );
 --> statement-breakpoint
 CREATE INDEX "agent_actions_conversation_idx" ON "agent_actions" ("conversation_id","created_at");--> statement-breakpoint
-CREATE INDEX "conversations_customer_idx" ON "conversations" ("user_id","merchant_id");--> statement-breakpoint
+CREATE INDEX "conversations_customer_idx" ON "conversations" ("user_id");--> statement-breakpoint
 CREATE INDEX "messages_conversation_created_idx" ON "messages" ("conversation_id","created_at");--> statement-breakpoint
 CREATE INDEX "recommendation_events_cart_idx" ON "recommendation_events" ("cart_id","shown_at");--> statement-breakpoint
-CREATE INDEX "audit_events_merchant_created_idx" ON "audit_events" ("merchant_id","created_at");--> statement-breakpoint
+CREATE INDEX "audit_events_created_idx" ON "audit_events" ("created_at");--> statement-breakpoint
 CREATE INDEX "audit_events_entity_idx" ON "audit_events" ("entity_type","entity_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "cart_items_unvarianted_selection_unique" ON "cart_items" ("cart_id","product_id") WHERE "variant_id" is null;--> statement-breakpoint
-CREATE UNIQUE INDEX "cart_items_variant_selection_unique" ON "cart_items" ("cart_id","variant_id") WHERE "variant_id" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX "cart_items_product_selection_unique" ON "cart_items" ("cart_id","product_id");--> statement-breakpoint
 CREATE INDEX "cart_items_cart_idx" ON "cart_items" ("cart_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "carts_one_active_per_customer_merchant" ON "carts" ("user_id","merchant_id") WHERE "status" = 'ACTIVE';--> statement-breakpoint
-CREATE INDEX "carts_user_merchant_idx" ON "carts" ("user_id","merchant_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "carts_one_active_per_customer" ON "carts" ("user_id") WHERE "status" = 'ACTIVE';--> statement-breakpoint
+CREATE INDEX "carts_user_idx" ON "carts" ("user_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "product_relations_unique" ON "product_relations" ("product_id","related_product_id","relation_type");--> statement-breakpoint
-CREATE UNIQUE INDEX "product_variants_sku_unique" ON "product_variants" ("sku");--> statement-breakpoint
-CREATE INDEX "product_variants_product_idx" ON "product_variants" ("product_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "products_merchant_slug_unique" ON "products" ("merchant_id","slug");--> statement-breakpoint
-CREATE INDEX "products_merchant_category_idx" ON "products" ("merchant_id","category");--> statement-breakpoint
+CREATE UNIQUE INDEX "products_slug_unique" ON "products" ("slug");--> statement-breakpoint
+CREATE INDEX "products_category_idx" ON "products" ("category");--> statement-breakpoint
 CREATE UNIQUE INDEX "approvals_proposal_unique" ON "approvals" ("proposal_id");--> statement-breakpoint
 CREATE INDEX "approvals_user_status_idx" ON "approvals" ("user_id","status");--> statement-breakpoint
 CREATE INDEX "checkout_proposal_items_proposal_idx" ON "checkout_proposal_items" ("proposal_id");--> statement-breakpoint
-CREATE INDEX "checkout_proposals_customer_idx" ON "checkout_proposals" ("user_id","merchant_id");--> statement-breakpoint
+CREATE INDEX "checkout_proposals_customer_idx" ON "checkout_proposals" ("user_id");--> statement-breakpoint
 CREATE INDEX "checkout_proposals_cart_idx" ON "checkout_proposals" ("cart_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "policies_merchant_key_unique" ON "policies" ("merchant_id","key");--> statement-breakpoint
+CREATE UNIQUE INDEX "policies_key_unique" ON "policies" ("key");--> statement-breakpoint
 CREATE INDEX "policy_evaluations_proposal_idx" ON "policy_evaluations" ("proposal_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "merchant_admins_membership_unique" ON "merchant_admins" ("merchant_id","user_id");--> statement-breakpoint
-CREATE INDEX "merchant_admins_user_idx" ON "merchant_admins" ("user_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "merchants_slug_unique" ON "merchants" ("slug");--> statement-breakpoint
+CREATE UNIQUE INDEX "brand_admins_user_unique" ON "brand_admins" ("user_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "brands_singleton_unique" ON "brands" ("singleton_key");--> statement-breakpoint
+CREATE UNIQUE INDEX "brands_slug_unique" ON "brands" ("slug");--> statement-breakpoint
 CREATE UNIQUE INDEX "users_email_unique" ON "users" ("email");--> statement-breakpoint
 CREATE INDEX "order_items_order_idx" ON "order_items" ("order_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "orders_proposal_unique" ON "orders" ("proposal_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "orders_approval_unique" ON "orders" ("approval_id");--> statement-breakpoint
-CREATE INDEX "orders_customer_idx" ON "orders" ("user_id","merchant_id");--> statement-breakpoint
+CREATE INDEX "orders_customer_idx" ON "orders" ("user_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "payment_attempts_idempotency_unique" ON "payment_attempts" ("idempotency_key");--> statement-breakpoint
 CREATE UNIQUE INDEX "payment_attempts_provider_order_unique" ON "payment_attempts" ("provider","provider_order_id") WHERE "provider_order_id" is not null;--> statement-breakpoint
 CREATE UNIQUE INDEX "payment_attempts_provider_payment_unique" ON "payment_attempts" ("provider","provider_payment_id") WHERE "provider_payment_id" is not null;--> statement-breakpoint
@@ -345,44 +314,31 @@ CREATE INDEX "payment_attempts_order_idx" ON "payment_attempts" ("order_id");-->
 CREATE UNIQUE INDEX "webhook_events_provider_event_unique" ON "webhook_events" ("provider","provider_event_id");--> statement-breakpoint
 ALTER TABLE "agent_actions" ADD CONSTRAINT "agent_actions_conversation_id_conversations_id_fkey" FOREIGN KEY ("conversation_id") REFERENCES "conversations"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "agent_actions" ADD CONSTRAINT "agent_actions_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT;--> statement-breakpoint
-ALTER TABLE "agent_actions" ADD CONSTRAINT "agent_actions_merchant_id_merchants_id_fkey" FOREIGN KEY ("merchant_id") REFERENCES "merchants"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "conversations" ADD CONSTRAINT "conversations_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT;--> statement-breakpoint
-ALTER TABLE "conversations" ADD CONSTRAINT "conversations_merchant_id_merchants_id_fkey" FOREIGN KEY ("merchant_id") REFERENCES "merchants"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "conversations" ADD CONSTRAINT "conversations_active_cart_id_carts_id_fkey" FOREIGN KEY ("active_cart_id") REFERENCES "carts"("id") ON DELETE SET NULL;--> statement-breakpoint
 ALTER TABLE "messages" ADD CONSTRAINT "messages_conversation_id_conversations_id_fkey" FOREIGN KEY ("conversation_id") REFERENCES "conversations"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "recommendation_events" ADD CONSTRAINT "recommendation_events_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "recommendation_events" ADD CONSTRAINT "recommendation_events_cart_id_carts_id_fkey" FOREIGN KEY ("cart_id") REFERENCES "carts"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "recommendation_events" ADD CONSTRAINT "recommendation_events_source_product_id_products_id_fkey" FOREIGN KEY ("source_product_id") REFERENCES "products"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "recommendation_events" ADD CONSTRAINT "recommendation_events_recommended_product_id_products_id_fkey" FOREIGN KEY ("recommended_product_id") REFERENCES "products"("id") ON DELETE RESTRICT;--> statement-breakpoint
-ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_merchant_id_merchants_id_fkey" FOREIGN KEY ("merchant_id") REFERENCES "merchants"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "cart_items" ADD CONSTRAINT "cart_items_cart_id_carts_id_fkey" FOREIGN KEY ("cart_id") REFERENCES "carts"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "cart_items" ADD CONSTRAINT "cart_items_product_id_products_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("id") ON DELETE RESTRICT;--> statement-breakpoint
-ALTER TABLE "cart_items" ADD CONSTRAINT "cart_items_variant_id_product_variants_id_fkey" FOREIGN KEY ("variant_id") REFERENCES "product_variants"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "carts" ADD CONSTRAINT "carts_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT;--> statement-breakpoint
-ALTER TABLE "carts" ADD CONSTRAINT "carts_merchant_id_merchants_id_fkey" FOREIGN KEY ("merchant_id") REFERENCES "merchants"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "product_relations" ADD CONSTRAINT "product_relations_product_id_products_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "product_relations" ADD CONSTRAINT "product_relations_related_product_id_products_id_fkey" FOREIGN KEY ("related_product_id") REFERENCES "products"("id") ON DELETE CASCADE;--> statement-breakpoint
-ALTER TABLE "product_variants" ADD CONSTRAINT "product_variants_product_id_products_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("id") ON DELETE CASCADE;--> statement-breakpoint
-ALTER TABLE "products" ADD CONSTRAINT "products_merchant_id_merchants_id_fkey" FOREIGN KEY ("merchant_id") REFERENCES "merchants"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "approvals" ADD CONSTRAINT "approvals_proposal_id_checkout_proposals_id_fkey" FOREIGN KEY ("proposal_id") REFERENCES "checkout_proposals"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "approvals" ADD CONSTRAINT "approvals_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "checkout_proposal_items" ADD CONSTRAINT "checkout_proposal_items_proposal_id_checkout_proposals_id_fkey" FOREIGN KEY ("proposal_id") REFERENCES "checkout_proposals"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "checkout_proposal_items" ADD CONSTRAINT "checkout_proposal_items_product_id_products_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("id") ON DELETE RESTRICT;--> statement-breakpoint
-ALTER TABLE "checkout_proposal_items" ADD CONSTRAINT "checkout_proposal_items_variant_id_product_variants_id_fkey" FOREIGN KEY ("variant_id") REFERENCES "product_variants"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "checkout_proposals" ADD CONSTRAINT "checkout_proposals_cart_id_carts_id_fkey" FOREIGN KEY ("cart_id") REFERENCES "carts"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "checkout_proposals" ADD CONSTRAINT "checkout_proposals_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT;--> statement-breakpoint
-ALTER TABLE "checkout_proposals" ADD CONSTRAINT "checkout_proposals_merchant_id_merchants_id_fkey" FOREIGN KEY ("merchant_id") REFERENCES "merchants"("id") ON DELETE RESTRICT;--> statement-breakpoint
-ALTER TABLE "policies" ADD CONSTRAINT "policies_merchant_id_merchants_id_fkey" FOREIGN KEY ("merchant_id") REFERENCES "merchants"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "policy_evaluations" ADD CONSTRAINT "policy_evaluations_proposal_id_checkout_proposals_id_fkey" FOREIGN KEY ("proposal_id") REFERENCES "checkout_proposals"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "policy_evaluations" ADD CONSTRAINT "policy_evaluations_policy_id_policies_id_fkey" FOREIGN KEY ("policy_id") REFERENCES "policies"("id") ON DELETE SET NULL;--> statement-breakpoint
-ALTER TABLE "merchant_admins" ADD CONSTRAINT "merchant_admins_merchant_id_merchants_id_fkey" FOREIGN KEY ("merchant_id") REFERENCES "merchants"("id") ON DELETE CASCADE;--> statement-breakpoint
-ALTER TABLE "merchant_admins" ADD CONSTRAINT "merchant_admins_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "brand_admins" ADD CONSTRAINT "brand_admins_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "order_items" ADD CONSTRAINT "order_items_order_id_orders_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "order_items" ADD CONSTRAINT "order_items_product_id_products_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("id") ON DELETE RESTRICT;--> statement-breakpoint
-ALTER TABLE "order_items" ADD CONSTRAINT "order_items_variant_id_product_variants_id_fkey" FOREIGN KEY ("variant_id") REFERENCES "product_variants"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "orders" ADD CONSTRAINT "orders_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT;--> statement-breakpoint
-ALTER TABLE "orders" ADD CONSTRAINT "orders_merchant_id_merchants_id_fkey" FOREIGN KEY ("merchant_id") REFERENCES "merchants"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "orders" ADD CONSTRAINT "orders_cart_id_carts_id_fkey" FOREIGN KEY ("cart_id") REFERENCES "carts"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "orders" ADD CONSTRAINT "orders_proposal_id_checkout_proposals_id_fkey" FOREIGN KEY ("proposal_id") REFERENCES "checkout_proposals"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "orders" ADD CONSTRAINT "orders_approval_id_approvals_id_fkey" FOREIGN KEY ("approval_id") REFERENCES "approvals"("id") ON DELETE RESTRICT;--> statement-breakpoint

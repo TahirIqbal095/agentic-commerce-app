@@ -62,7 +62,7 @@ export const actorTypeEnum = pgEnum("actor_type", [
   "USER",
   "AGENT",
   "SYSTEM",
-  "MERCHANT",
+  "BRAND_ADMIN",
   "RAZORPAY",
 ]);
 

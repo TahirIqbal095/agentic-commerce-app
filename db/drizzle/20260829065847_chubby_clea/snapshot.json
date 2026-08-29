@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "53f59b60-1fdd-48e1-a2f7-ea8a1fe8aa66",
+  "id": "ca8e8818-bae0-421c-9b6c-8cf1fd392647",
   "prevIds": [
     "00000000-0000-0000-0000-000000000000"
   ],
@@ -11,7 +11,7 @@
         "USER",
         "AGENT",
         "SYSTEM",
-        "MERCHANT",
+        "BRAND_ADMIN",
         "RAZORPAY"
       ],
       "name": "actor_type",
@@ -133,15 +133,6 @@
       "schema": "public"
     },
     {
-      "values": [
-        "CUSTOMER",
-        "MERCHANT_ADMIN"
-      ],
-      "name": "user_role",
-      "entityType": "enums",
-      "schema": "public"
-    },
-    {
       "isRlsEnabled": false,
       "name": "agent_actions",
       "entityType": "tables",
@@ -191,12 +182,6 @@
     },
     {
       "isRlsEnabled": false,
-      "name": "product_variants",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
       "name": "products",
       "entityType": "tables",
       "schema": "public"
@@ -233,13 +218,13 @@
     },
     {
       "isRlsEnabled": false,
-      "name": "merchant_admins",
+      "name": "brand_admins",
       "entityType": "tables",
       "schema": "public"
     },
     {
       "isRlsEnabled": false,
-      "name": "merchants",
+      "name": "brands",
       "entityType": "tables",
       "schema": "public"
     },
@@ -308,19 +293,6 @@
       "generated": null,
       "identity": null,
       "name": "user_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "agent_actions"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "merchant_id",
       "entityType": "columns",
       "schema": "public",
       "table": "agent_actions"
@@ -464,19 +436,6 @@
       "generated": null,
       "identity": null,
       "name": "user_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "conversations"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "merchant_id",
       "entityType": "columns",
       "schema": "public",
       "table": "conversations"
@@ -796,19 +755,6 @@
     {
       "type": "uuid",
       "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "merchant_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "audit_events"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
       "default": null,
@@ -963,19 +909,6 @@
       "table": "cart_items"
     },
     {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "variant_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "cart_items"
-    },
-    {
       "type": "integer",
       "typeSchema": null,
       "notNull": true,
@@ -1049,19 +982,6 @@
       "generated": null,
       "identity": null,
       "name": "user_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "carts"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "merchant_id",
       "entityType": "columns",
       "schema": "public",
       "table": "carts"
@@ -1231,149 +1151,6 @@
       "generated": null,
       "identity": null,
       "name": "id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "product_variants"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "product_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "product_variants"
-    },
-    {
-      "type": "varchar(100)",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "sku",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "product_variants"
-    },
-    {
-      "type": "varchar(160)",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "name",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "product_variants"
-    },
-    {
-      "type": "bigint",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "price_override_minor",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "product_variants"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "0",
-      "generated": null,
-      "identity": null,
-      "name": "stock",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "product_variants"
-    },
-    {
-      "type": "jsonb",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "'{}'",
-      "generated": null,
-      "identity": null,
-      "name": "attributes",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "product_variants"
-    },
-    {
-      "type": "boolean",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "true",
-      "generated": null,
-      "identity": null,
-      "name": "active",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "product_variants"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "product_variants"
-    },
-    {
-      "type": "timestamp with time zone",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "product_variants"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "products"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "merchant_id",
       "entityType": "columns",
       "schema": "public",
       "table": "products"
@@ -1704,19 +1481,6 @@
       "table": "checkout_proposal_items"
     },
     {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "variant_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "checkout_proposal_items"
-    },
-    {
       "type": "varchar(240)",
       "typeSchema": null,
       "notNull": true,
@@ -1816,32 +1580,6 @@
       "generated": null,
       "identity": null,
       "name": "user_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "checkout_proposals"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "merchant_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "checkout_proposals"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "1",
-      "generated": null,
-      "identity": null,
-      "name": "version",
       "entityType": "columns",
       "schema": "public",
       "table": "checkout_proposals"
@@ -1984,19 +1722,6 @@
       "default": "'[]'",
       "generated": null,
       "identity": null,
-      "name": "price_changes",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "checkout_proposals"
-    },
-    {
-      "type": "jsonb",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "'[]'",
-      "generated": null,
-      "identity": null,
       "name": "stock_warnings",
       "entityType": "columns",
       "schema": "public",
@@ -2050,19 +1775,6 @@
       "generated": null,
       "identity": null,
       "name": "id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "policies"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "merchant_id",
       "entityType": "columns",
       "schema": "public",
       "table": "policies"
@@ -2231,23 +1943,10 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "merchant_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "merchant_admins"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
       "name": "user_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "merchant_admins"
+      "table": "brand_admins"
     },
     {
       "type": "timestamp with time zone",
@@ -2260,7 +1959,7 @@
       "name": "created_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "merchant_admins"
+      "table": "brand_admins"
     },
     {
       "type": "uuid",
@@ -2273,7 +1972,20 @@
       "name": "id",
       "entityType": "columns",
       "schema": "public",
-      "table": "merchants"
+      "table": "brands"
+    },
+    {
+      "type": "varchar(16)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "'BRAND'",
+      "generated": null,
+      "identity": null,
+      "name": "singleton_key",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "brands"
     },
     {
       "type": "varchar(160)",
@@ -2286,7 +1998,7 @@
       "name": "name",
       "entityType": "columns",
       "schema": "public",
-      "table": "merchants"
+      "table": "brands"
     },
     {
       "type": "varchar(160)",
@@ -2299,7 +2011,33 @@
       "name": "slug",
       "entityType": "columns",
       "schema": "public",
-      "table": "merchants"
+      "table": "brands"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "description",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "brands"
+    },
+    {
+      "type": "varchar(500)",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "logo_url",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "brands"
     },
     {
       "type": "varchar(3)",
@@ -2312,7 +2050,7 @@
       "name": "currency",
       "entityType": "columns",
       "schema": "public",
-      "table": "merchants"
+      "table": "brands"
     },
     {
       "type": "timestamp with time zone",
@@ -2325,7 +2063,7 @@
       "name": "created_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "merchants"
+      "table": "brands"
     },
     {
       "type": "timestamp with time zone",
@@ -2338,7 +2076,7 @@
       "name": "updated_at",
       "entityType": "columns",
       "schema": "public",
-      "table": "merchants"
+      "table": "brands"
     },
     {
       "type": "uuid",
@@ -2375,19 +2113,6 @@
       "generated": null,
       "identity": null,
       "name": "name",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "users"
-    },
-    {
-      "type": "user_role",
-      "typeSchema": "public",
-      "notNull": true,
-      "dimensions": 0,
-      "default": "'CUSTOMER'",
-      "generated": null,
-      "identity": null,
-      "name": "role",
       "entityType": "columns",
       "schema": "public",
       "table": "users"
@@ -2453,19 +2178,6 @@
       "generated": null,
       "identity": null,
       "name": "product_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "order_items"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "variant_id",
       "entityType": "columns",
       "schema": "public",
       "table": "order_items"
@@ -2557,19 +2269,6 @@
       "generated": null,
       "identity": null,
       "name": "user_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "orders"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "merchant_id",
       "entityType": "columns",
       "schema": "public",
       "table": "orders"
@@ -3027,13 +2726,6 @@
           "asc": true,
           "nullsFirst": false,
           "opclass": null
-        },
-        {
-          "value": "merchant_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
         }
       ],
       "isUnique": false,
@@ -3106,13 +2798,6 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "merchant_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
           "value": "created_at",
           "isExpression": false,
           "asc": true,
@@ -3125,7 +2810,7 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "audit_events_merchant_created_idx",
+      "name": "audit_events_created_idx",
       "entityType": "indexes",
       "schema": "public",
       "table": "audit_events"
@@ -3177,39 +2862,11 @@
         }
       ],
       "isUnique": true,
-      "where": "\"variant_id\" is null",
+      "where": null,
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "cart_items_unvarianted_selection_unique",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "cart_items"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "cart_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "variant_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"variant_id\" is not null",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "cart_items_variant_selection_unique",
+      "name": "cart_items_product_selection_unique",
       "entityType": "indexes",
       "schema": "public",
       "table": "cart_items"
@@ -3244,13 +2901,6 @@
           "asc": true,
           "nullsFirst": false,
           "opclass": null
-        },
-        {
-          "value": "merchant_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
         }
       ],
       "isUnique": true,
@@ -3258,7 +2908,7 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "carts_one_active_per_customer_merchant",
+      "name": "carts_one_active_per_customer",
       "entityType": "indexes",
       "schema": "public",
       "table": "carts"
@@ -3272,13 +2922,6 @@
           "asc": true,
           "nullsFirst": false,
           "opclass": null
-        },
-        {
-          "value": "merchant_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
         }
       ],
       "isUnique": false,
@@ -3286,7 +2929,7 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "carts_user_merchant_idx",
+      "name": "carts_user_idx",
       "entityType": "indexes",
       "schema": "public",
       "table": "carts"
@@ -3330,55 +2973,6 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "sku",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "product_variants_sku_unique",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "product_variants"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "product_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "product_variants_product_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "product_variants"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "merchant_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
           "value": "slug",
           "isExpression": false,
           "asc": true,
@@ -3391,7 +2985,7 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "products_merchant_slug_unique",
+      "name": "products_slug_unique",
       "entityType": "indexes",
       "schema": "public",
       "table": "products"
@@ -3399,13 +2993,6 @@
     {
       "nameExplicit": true,
       "columns": [
-        {
-          "value": "merchant_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
         {
           "value": "category",
           "isExpression": false,
@@ -3419,7 +3006,7 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "products_merchant_category_idx",
+      "name": "products_category_idx",
       "entityType": "indexes",
       "schema": "public",
       "table": "products"
@@ -3503,13 +3090,6 @@
           "asc": true,
           "nullsFirst": false,
           "opclass": null
-        },
-        {
-          "value": "merchant_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
         }
       ],
       "isUnique": false,
@@ -3547,13 +3127,6 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "merchant_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
           "value": "key",
           "isExpression": false,
           "asc": true,
@@ -3566,7 +3139,7 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "policies_merchant_key_unique",
+      "name": "policies_key_unique",
       "entityType": "indexes",
       "schema": "public",
       "table": "policies"
@@ -3596,13 +3169,6 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "merchant_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
           "value": "user_id",
           "isExpression": false,
           "asc": true,
@@ -3615,31 +3181,31 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "merchant_admins_membership_unique",
+      "name": "brand_admins_user_unique",
       "entityType": "indexes",
       "schema": "public",
-      "table": "merchant_admins"
+      "table": "brand_admins"
     },
     {
       "nameExplicit": true,
       "columns": [
         {
-          "value": "user_id",
+          "value": "singleton_key",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
           "opclass": null
         }
       ],
-      "isUnique": false,
+      "isUnique": true,
       "where": null,
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "merchant_admins_user_idx",
+      "name": "brands_singleton_unique",
       "entityType": "indexes",
       "schema": "public",
-      "table": "merchant_admins"
+      "table": "brands"
     },
     {
       "nameExplicit": true,
@@ -3657,10 +3223,10 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "merchants_slug_unique",
+      "name": "brands_slug_unique",
       "entityType": "indexes",
       "schema": "public",
-      "table": "merchants"
+      "table": "brands"
     },
     {
       "nameExplicit": true,
@@ -3751,13 +3317,6 @@
       "columns": [
         {
           "value": "user_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "merchant_id",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -3937,23 +3496,6 @@
     {
       "nameExplicit": false,
       "columns": [
-        "merchant_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "merchants",
-      "columnsTo": [
-        "id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
-      "name": "agent_actions_merchant_id_merchants_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "agent_actions"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
         "user_id"
       ],
       "schemaTo": "public",
@@ -3964,23 +3506,6 @@
       "onUpdate": "NO ACTION",
       "onDelete": "RESTRICT",
       "name": "conversations_user_id_users_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "conversations"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        "merchant_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "merchants",
-      "columnsTo": [
-        "id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
-      "name": "conversations_merchant_id_merchants_id_fkey",
       "entityType": "fks",
       "schema": "public",
       "table": "conversations"
@@ -4090,23 +3615,6 @@
     {
       "nameExplicit": false,
       "columns": [
-        "merchant_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "merchants",
-      "columnsTo": [
-        "id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
-      "name": "audit_events_merchant_id_merchants_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "audit_events"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
         "user_id"
       ],
       "schemaTo": "public",
@@ -4158,23 +3666,6 @@
     {
       "nameExplicit": false,
       "columns": [
-        "variant_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "product_variants",
-      "columnsTo": [
-        "id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
-      "name": "cart_items_variant_id_product_variants_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "cart_items"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
         "user_id"
       ],
       "schemaTo": "public",
@@ -4185,23 +3676,6 @@
       "onUpdate": "NO ACTION",
       "onDelete": "RESTRICT",
       "name": "carts_user_id_users_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "carts"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        "merchant_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "merchants",
-      "columnsTo": [
-        "id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
-      "name": "carts_merchant_id_merchants_id_fkey",
       "entityType": "fks",
       "schema": "public",
       "table": "carts"
@@ -4239,40 +3713,6 @@
       "entityType": "fks",
       "schema": "public",
       "table": "product_relations"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        "product_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "products",
-      "columnsTo": [
-        "id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "product_variants_product_id_products_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "product_variants"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        "merchant_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "merchants",
-      "columnsTo": [
-        "id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "products_merchant_id_merchants_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "products"
     },
     {
       "nameExplicit": false,
@@ -4345,23 +3785,6 @@
     {
       "nameExplicit": false,
       "columns": [
-        "variant_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "product_variants",
-      "columnsTo": [
-        "id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
-      "name": "checkout_proposal_items_variant_id_product_variants_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "checkout_proposal_items"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
         "cart_id"
       ],
       "schemaTo": "public",
@@ -4392,40 +3815,6 @@
       "entityType": "fks",
       "schema": "public",
       "table": "checkout_proposals"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        "merchant_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "merchants",
-      "columnsTo": [
-        "id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
-      "name": "checkout_proposals_merchant_id_merchants_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "checkout_proposals"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        "merchant_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "merchants",
-      "columnsTo": [
-        "id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "policies_merchant_id_merchants_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "policies"
     },
     {
       "nameExplicit": false,
@@ -4464,23 +3853,6 @@
     {
       "nameExplicit": false,
       "columns": [
-        "merchant_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "merchants",
-      "columnsTo": [
-        "id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "merchant_admins_merchant_id_merchants_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "merchant_admins"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
         "user_id"
       ],
       "schemaTo": "public",
@@ -4490,10 +3862,10 @@
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
-      "name": "merchant_admins_user_id_users_id_fkey",
+      "name": "brand_admins_user_id_users_id_fkey",
       "entityType": "fks",
       "schema": "public",
-      "table": "merchant_admins"
+      "table": "brand_admins"
     },
     {
       "nameExplicit": false,
@@ -4532,23 +3904,6 @@
     {
       "nameExplicit": false,
       "columns": [
-        "variant_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "product_variants",
-      "columnsTo": [
-        "id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
-      "name": "order_items_variant_id_product_variants_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "order_items"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
         "user_id"
       ],
       "schemaTo": "public",
@@ -4559,23 +3914,6 @@
       "onUpdate": "NO ACTION",
       "onDelete": "RESTRICT",
       "name": "orders_user_id_users_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "orders"
-    },
-    {
-      "nameExplicit": false,
-      "columns": [
-        "merchant_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "merchants",
-      "columnsTo": [
-        "id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "RESTRICT",
-      "name": "orders_merchant_id_merchants_id_fkey",
       "entityType": "fks",
       "schema": "public",
       "table": "orders"
@@ -4733,16 +4071,6 @@
         "id"
       ],
       "nameExplicit": false,
-      "name": "product_variants_pkey",
-      "schema": "public",
-      "table": "product_variants",
-      "entityType": "pks"
-    },
-    {
-      "columns": [
-        "id"
-      ],
-      "nameExplicit": false,
       "name": "products_pkey",
       "schema": "public",
       "table": "products",
@@ -4803,9 +4131,9 @@
         "id"
       ],
       "nameExplicit": false,
-      "name": "merchants_pkey",
+      "name": "brands_pkey",
       "schema": "public",
-      "table": "merchants",
+      "table": "brands",
       "entityType": "pks"
     },
     {
@@ -4915,20 +4243,6 @@
       "table": "product_relations"
     },
     {
-      "value": "\"price_override_minor\" is null or \"price_override_minor\" >= 0",
-      "name": "product_variants_price_nonnegative",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "product_variants"
-    },
-    {
-      "value": "\"stock\" >= 0",
-      "name": "product_variants_stock_nonnegative",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "product_variants"
-    },
-    {
       "value": "\"price_minor\" >= 0",
       "name": "products_price_nonnegative",
       "entityType": "checks",
@@ -4964,13 +4278,6 @@
       "table": "checkout_proposal_items"
     },
     {
-      "value": "\"version\" > 0",
-      "name": "checkout_proposals_version_positive",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "checkout_proposals"
-    },
-    {
       "value": "\"cart_version\" > 0",
       "name": "checkout_proposals_cart_version_positive",
       "entityType": "checks",
@@ -4983,6 +4290,13 @@
       "entityType": "checks",
       "schema": "public",
       "table": "checkout_proposals"
+    },
+    {
+      "value": "\"singleton_key\" = 'BRAND'",
+      "name": "brands_singleton_key",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "brands"
     },
     {
       "value": "\"quantity\" > 0",

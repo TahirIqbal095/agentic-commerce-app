@@ -6,11 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
 export function Composer({
+  brandName,
   prompt,
   setPrompt,
   isLoading,
   onSubmit,
 }: {
+  brandName: string;
   prompt: string;
   setPrompt: (prompt: string) => void;
   isLoading: boolean;
@@ -37,7 +39,7 @@ export function Composer({
               <Sparkles className="size-3.5" />
             </span>
             <label htmlFor="shopping-prompt" className="sr-only">
-              Message the shopping assistant
+              Message the {brandName} Commerce Agent
             </label>
             <Textarea
               id="shopping-prompt"
@@ -66,7 +68,7 @@ export function Composer({
         <div className="flex items-center justify-between px-3 pb-1.5 pt-1 text-[11px] text-[#8c958f]">
           <span className="flex items-center gap-1.5">
             <span className="size-1 rounded-full bg-[#57a773]" />
-            Searches the live merchant catalog
+            Searches {brandName}&apos;s live Catalog
           </span>
           <span className="hidden sm:inline">
             Be specific or wonderfully vague

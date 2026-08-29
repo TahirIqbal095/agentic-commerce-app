@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Shopping Assistant | Agentic Commerce",
-  description: "Discover products with an AI commerce assistant.",
+  title: "Agentic Commerce Storefront",
+  description: "Discover the Brand's Products with the Commerce Agent.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

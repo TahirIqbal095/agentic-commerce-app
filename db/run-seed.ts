@@ -4,7 +4,7 @@ import { seedDemoCatalog } from "@/db/seed";
 async function main(): Promise<void> {
   try {
     await seedDemoCatalog();
-    console.log("Demo merchant and catalog seeded.");
+    console.log("Arc Brand and Catalog seeded.");
   } catch (error) {
     console.error("Failed to seed demo catalog.", error);
     process.exitCode = 1;

@@ -1,42 +1,65 @@
-## Commerce API configuration
+# Agentic Commerce App
 
-The product API resolves its merchant context on the server. Set `MERCHANT_ID` to
-the UUID of the storefront merchant. For local, single-merchant databases it can
-be omitted; the API will use the only merchant present. If the database contains
-zero or multiple merchants, `MERCHANT_ID` is required.
+A reusable agentic commerce Storefront for exactly one Brand per deployment.
+The Commerce Agent helps Customers discover the Brand's Products, manage a
+Cart, approve exact checkout terms, place an Order, and pay through the Brand's
+connected Payment Account.
+
+This application is not a Marketplace. Supporting multiple Brands, sellers, or
+shared commerce data in one deployment is intentionally out of scope.
+
+## Local setup
+
+Start Postgres, apply the schema, and seed the Arc demo Brand and Catalog:
+
+```bash
+docker compose up -d postgres
+pnpm db:migrate
+pnpm db:seed
+pnpm dev
+```
+
+The database must contain exactly one Brand. Storefront APIs fail with a
+configuration error when the Brand record is missing; clients and models cannot
+select a different Brand.
 
 Conversations resolve the current User on the server. Set `USER_ID` to the User
 UUID. It can be omitted when the database contains exactly one User.
 
-Cart actions also resolve a customer context on the server. Set `CUSTOMER_ID` to
-the customer's user UUID. It can be omitted when the database contains exactly
-one user. Running `pnpm db:seed` creates the local demo customer and catalog.
+Cart actions resolve a Customer from `CUSTOMER_ID`. It can be omitted when the
+database contains exactly one User. The demo seed creates a Customer, Arc, and
+Arc's Product Catalog.
 
-The catalog endpoints are:
+The Catalog endpoints are:
 
 - `GET /api/products`
 - `GET /api/products/:productId`
 
-## AI shopping assistant
+## Commerce Agent
 
-The shopping assistant uses the Vercel AI SDK with Google's Gemini Developer
-API to convert a customer message into a structured catalog intent before
-retrieving products. It calls Google directly and does not use Vercel AI
-Gateway. Add these values to `.env` for local development:
+The Commerce Agent uses the Vercel AI SDK with Google's Gemini Developer API.
+It interprets a Customer request, chooses from bounded Catalog tools, observes
+authoritative results, and returns a grounded outcome. It does not use the
+Vercel AI Gateway.
+
+Add these values to `.env` for local development:
 
 ```dotenv
 GOOGLE_GENERATIVE_AI_API_KEY=your_google_ai_studio_key
 GOOGLE_GENERATIVE_AI_MODEL=
 ```
 
-The assistant endpoint is `POST /api/agent/message` with a JSON body such as:
+Send a Customer message to `POST /api/agent/message`:
 
 ```json
-{ "message": "I want good sound quality earphones under ₹5,000" }
+{ "message": "I want road-running shoes under ₹5,000" }
 ```
 
-The same endpoint accepts explicit cart requests:
+The same endpoint accepts explicit Cart requests:
 
 ```json
 { "message": "add two StrideFlow Daily Running Shoes to my cart" }
 ```
+
+Cart, checkout, Approval, Order, Brand Payment Account, and captured-payment
+capabilities are tracked as planned work under `.scratch/end-to-end-agentic-commerce/`.

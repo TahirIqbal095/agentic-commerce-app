@@ -3,6 +3,40 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import React from "react";
 
+test("customer sees the configured Brand in the Storefront", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+
+  const [{ render, cleanup }, { ShoppingAssistant }] = await Promise.all([
+    import("@testing-library/react"),
+    import("./shopping-assistant"),
+  ]);
+
+  const view = render(
+    React.createElement(ShoppingAssistant, { brandName: "Northstar" }),
+  );
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+
+  assert.equal(view.getByText("Northstar").textContent, "Northstar");
+  assert.equal(
+    view.getByText("Searches Northstar's live Catalog").textContent,
+    "Searches Northstar's live Catalog",
+  );
+});
+
 test("customer can read one Commerce Agent progress update beside their submitted request", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
@@ -30,14 +64,16 @@ test("customer can read one Commerce Agent progress update beside their submitte
       import("./shopping-assistant"),
     ]);
 
-  const view = render(React.createElement(ShoppingAssistant));
+  const view = render(
+    React.createElement(ShoppingAssistant, { brandName: "Arc" }),
+  );
   t.after(() => {
     cleanup();
     dom.window.close();
   });
   const user = userEvent.setup({ document: dom.window.document });
   const composer = view.getByRole("textbox", {
-    name: "Message the shopping assistant",
+    name: "Message the Arc Commerce Agent",
   });
 
   await user.type(composer, "A minimal desk upgrade");
@@ -127,10 +163,12 @@ test("customer can submit a request and read product results above the persisten
       import("./shopping-assistant"),
     ]);
 
-  const view = render(React.createElement(ShoppingAssistant));
+  const view = render(
+    React.createElement(ShoppingAssistant, { brandName: "Arc" }),
+  );
   const user = userEvent.setup({ document: dom.window.document });
   const composer = view.getByRole("textbox", {
-    name: "Message the shopping assistant",
+    name: "Message the Arc Commerce Agent",
   });
 
   assert.equal(composer.tagName, "TEXTAREA");
@@ -235,7 +273,9 @@ test("customer can request and read the details of a product", async (t) => {
       import("./shopping-assistant"),
     ]);
 
-  const view = render(React.createElement(ShoppingAssistant));
+  const view = render(
+    React.createElement(ShoppingAssistant, { brandName: "Arc" }),
+  );
   t.after(() => {
     cleanup();
     dom.window.close();
@@ -243,7 +283,7 @@ test("customer can request and read the details of a product", async (t) => {
   const user = userEvent.setup({ document: dom.window.document });
 
   await user.type(
-    view.getByRole("textbox", { name: "Message the shopping assistant" }),
+    view.getByRole("textbox", { name: "Message the Arc Commerce Agent" }),
     "noise cancelling earphones",
   );
   await user.click(view.getByRole("button", { name: "Send" }));
@@ -330,7 +370,9 @@ test("customer sees the status when product details cannot be loaded", async (t)
       import("./shopping-assistant"),
     ]);
 
-  const view = render(React.createElement(ShoppingAssistant));
+  const view = render(
+    React.createElement(ShoppingAssistant, { brandName: "Arc" }),
+  );
   t.after(() => {
     cleanup();
     dom.window.close();
@@ -338,7 +380,7 @@ test("customer sees the status when product details cannot be loaded", async (t)
   const user = userEvent.setup({ document: dom.window.document });
 
   await user.type(
-    view.getByRole("textbox", { name: "Message the shopping assistant" }),
+    view.getByRole("textbox", { name: "Message the Arc Commerce Agent" }),
     "noise cancelling earphones",
   );
   await user.click(view.getByRole("button", { name: "Send" }));
@@ -417,7 +459,9 @@ test("customer sees the updated cart after the agent adds a product", async (t) 
       import("./shopping-assistant"),
     ]);
 
-  const view = render(React.createElement(ShoppingAssistant));
+  const view = render(
+    React.createElement(ShoppingAssistant, { brandName: "Arc" }),
+  );
   t.after(() => {
     cleanup();
     dom.window.close();
@@ -425,7 +469,7 @@ test("customer sees the updated cart after the agent adds a product", async (t) 
   const user = userEvent.setup({ document: dom.window.document });
 
   await user.type(
-    view.getByRole("textbox", { name: "Message the shopping assistant" }),
+    view.getByRole("textbox", { name: "Message the Arc Commerce Agent" }),
     "add two Quiet Buds to my cart",
   );
   await user.click(view.getByRole("button", { name: "Send" }));
@@ -479,14 +523,16 @@ test("Storefront reuses the server conversation identifier on later turns", asyn
       import("./shopping-assistant"),
     ]);
 
-  const view = render(React.createElement(ShoppingAssistant));
+  const view = render(
+    React.createElement(ShoppingAssistant, { brandName: "Arc" }),
+  );
   t.after(() => {
     cleanup();
     dom.window.close();
   });
   const user = userEvent.setup({ document: dom.window.document });
   const composer = view.getByRole("textbox", {
-    name: "Message the shopping assistant",
+    name: "Message the Arc Commerce Agent",
   });
 
   await user.type(composer, "show me running shoes");

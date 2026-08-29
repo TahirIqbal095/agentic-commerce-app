@@ -12,7 +12,7 @@ import {
 import { carts } from "./cart";
 import { createdAt, id, updatedAt } from "./columns";
 import { agentActionStatusEnum, messageRoleEnum } from "./enums";
-import { merchants, users } from "./identity";
+import { users } from "./identity";
 import type { JsonObject } from "./types";
 
 export const conversations = pgTable(
@@ -22,9 +22,6 @@ export const conversations = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
-    merchantId: uuid("merchant_id")
-      .notNull()
-      .references(() => merchants.id, { onDelete: "restrict" }),
     activeCartId: uuid("active_cart_id").references(() => carts.id, {
       onDelete: "set null",
     }),
@@ -32,9 +29,7 @@ export const conversations = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (table) => [
-    index("conversations_customer_idx").on(table.userId, table.merchantId),
-  ],
+  (table) => [index("conversations_customer_idx").on(table.userId)],
 );
 
 export const messages = pgTable(
@@ -67,9 +62,6 @@ export const agentActions = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
-    merchantId: uuid("merchant_id")
-      .notNull()
-      .references(() => merchants.id, { onDelete: "restrict" }),
     actionType: varchar("action_type", { length: 120 }).notNull(),
     toolName: varchar("tool_name", { length: 120 }).notNull(),
     input: jsonb("input").$type<JsonObject>().notNull(),

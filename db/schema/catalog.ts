@@ -13,16 +13,12 @@ import {
 } from "drizzle-orm/pg-core";
 import { createdAt, currency, id, money, updatedAt } from "./columns";
 import { productRelationTypeEnum } from "./enums";
-import { merchants } from "./identity";
 import type { JsonObject } from "./types";
 
 export const products = pgTable(
   "products",
   {
     id: id(),
-    merchantId: uuid("merchant_id")
-      .notNull()
-      .references(() => merchants.id, { onDelete: "cascade" }),
     name: varchar("name", { length: 200 }).notNull(),
     slug: varchar("slug", { length: 200 }).notNull(),
     description: text("description").notNull(),
@@ -36,14 +32,8 @@ export const products = pgTable(
     updatedAt: updatedAt(),
   },
   (table) => [
-    uniqueIndex("products_merchant_slug_unique").on(
-      table.merchantId,
-      table.slug,
-    ),
-    index("products_merchant_category_idx").on(
-      table.merchantId,
-      table.category,
-    ),
+    uniqueIndex("products_slug_unique").on(table.slug),
+    index("products_category_idx").on(table.category),
     check("products_price_nonnegative", sql`${table.priceMinor} >= 0`),
     check("products_stock_nonnegative", sql`${table.stock} >= 0`),
   ],

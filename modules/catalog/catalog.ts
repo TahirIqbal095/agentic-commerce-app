@@ -55,13 +55,10 @@ export interface CatalogModule {
   getProduct(productId: string): Promise<ProductDetailResult>;
 }
 
-export function createCatalogModule(merchantId: string): CatalogModule {
+export function createCatalogModule(): CatalogModule {
   return {
     async search(input: CatalogSearch): Promise<CatalogSearchResult> {
-      const filters: SQL[] = [
-        eq(products.merchantId, merchantId),
-        eq(products.active, true),
-      ];
+      const filters: SQL[] = [eq(products.active, true)];
 
       if (input.query !== undefined) {
         const pattern = `%${escapeLikePattern(input.query)}%`;
@@ -201,11 +198,7 @@ export function createCatalogModule(merchantId: string): CatalogModule {
         .select(productSelection)
         .from(products)
         .where(
-          and(
-            eq(products.id, productId),
-            eq(products.merchantId, merchantId),
-            eq(products.active, true),
-          ),
+          and(eq(products.id, productId), eq(products.active, true)),
         )
         .limit(1);
 

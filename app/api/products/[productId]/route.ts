@@ -5,7 +5,7 @@ import {
 } from "@/lib/http/responses";
 import { isUuid } from "@/lib/validation";
 import { createCatalogModule } from "@/modules/catalog/catalog";
-import { resolveMerchantContext } from "@/modules/identity/merchant-context";
+import { requireBrand } from "@/modules/identity/brand";
 
 export async function GET(
   _request: Request,
@@ -24,8 +24,8 @@ export async function GET(
   }
 
   try {
-    const { merchantId } = await resolveMerchantContext();
-    const catalog = createCatalogModule(merchantId);
+    await requireBrand();
+    const catalog = createCatalogModule();
     const result = await catalog.getProduct(productId);
 
     if (!result.ok) {

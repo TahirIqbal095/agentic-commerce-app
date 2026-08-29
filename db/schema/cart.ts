@@ -10,7 +10,7 @@ import {
 import { products } from "./catalog";
 import { createdAt, currency, id, money, updatedAt } from "./columns";
 import { cartStatusEnum } from "./enums";
-import { merchants, users } from "./identity";
+import { users } from "./identity";
 
 export const carts = pgTable(
   "carts",
@@ -19,9 +19,6 @@ export const carts = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
-    merchantId: uuid("merchant_id")
-      .notNull()
-      .references(() => merchants.id, { onDelete: "restrict" }),
     status: cartStatusEnum("status").notNull().default("ACTIVE"),
     currency: currency(),
     version: integer("version").notNull().default(1),
@@ -29,10 +26,10 @@ export const carts = pgTable(
     updatedAt: updatedAt(),
   },
   (table) => [
-    uniqueIndex("carts_one_active_per_customer_merchant")
-      .on(table.userId, table.merchantId)
+    uniqueIndex("carts_one_active_per_customer")
+      .on(table.userId)
       .where(sql`${table.status} = 'ACTIVE'`),
-    index("carts_user_merchant_idx").on(table.userId, table.merchantId),
+    index("carts_user_idx").on(table.userId),
     check("carts_version_positive", sql`${table.version} > 0`),
   ],
 );

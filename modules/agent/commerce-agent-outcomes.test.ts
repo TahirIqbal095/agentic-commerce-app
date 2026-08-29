@@ -189,7 +189,7 @@ test("bounds Catalog search inputs and results exposed to the Commerce Agent", a
         limit: 100,
       });
       assert.equal(result.products.length, 8);
-      assert.equal(result.nextCursor, "merchant-cursor");
+      assert.equal(result.nextCursor, "catalog-cursor");
       return {
         status: "COMPLETED",
         message: "I found eight grounded options.",
@@ -201,7 +201,7 @@ test("bounds Catalog search inputs and results exposed to the Commerce Agent", a
     {
       async search(input) {
         catalogSearches.push(input);
-        return { products: catalogProducts, nextCursor: "merchant-cursor" };
+        return { products: catalogProducts, nextCursor: "catalog-cursor" };
       },
       async getProduct() { throw new Error("not used"); },
     },
@@ -978,7 +978,6 @@ test("persists the Intent Brief and Agent Outcome as inspectable turn metadata",
     { async analyze() { return brief; } },
     createConversationModule(
       "11000000-0000-4000-8000-000000000001",
-      "11000000-0000-4000-8000-000000000002",
       repository,
     ),
     { agentLoop: catalogCompletion("A grounded recommendation.") },
@@ -1010,6 +1009,34 @@ test("persists the Intent Brief and Agent Outcome as inspectable turn metadata",
       },
     },
   ]);
+});
+
+test("continues a conversation only for its owning User", async () => {
+  const appendedMessages: string[] = [];
+  const repository: ConversationRepository = {
+    async create() {
+      throw new Error("not used");
+    },
+    async findOwner() {
+      return { userId: "11000000-0000-4000-8000-000000000001" };
+    },
+    async updateMetadata() {},
+    async append(_conversationId, _role, content) {
+      appendedMessages.push(content);
+      return "51000000-0000-4000-8000-000000000002";
+    },
+  };
+  const conversation = createConversationModule(
+    "11000000-0000-4000-8000-000000000001",
+    repository,
+  );
+
+  await conversation.startTurn({
+    conversationId,
+    message: "show me more like those",
+  });
+
+  assert.deepEqual(appendedMessages, ["show me more like those"]);
 });
 
 test("excludes credentials and unnecessary personal data from persisted intent and outcome records", async () => {
@@ -1056,7 +1083,6 @@ test("excludes credentials and unnecessary personal data from persisted intent a
     { async analyze() { return sensitiveBrief; } },
     createConversationModule(
       "11000000-0000-4000-8000-000000000001",
-      "11000000-0000-4000-8000-000000000002",
       repository,
     ),
     {

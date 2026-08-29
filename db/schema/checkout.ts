@@ -20,25 +20,20 @@ import {
   checkoutProposalStatusEnum,
   policyDecisionEnum,
 } from "./enums";
-import { merchants, users } from "./identity";
+import { users } from "./identity";
 import type { JsonObject } from "./types";
 
 export const policies = pgTable(
   "policies",
   {
     id: id(),
-    merchantId: uuid("merchant_id")
-      .notNull()
-      .references(() => merchants.id, { onDelete: "cascade" }),
     key: varchar("key", { length: 120 }).notNull(),
     value: jsonb("value").$type<JsonObject>().notNull(),
     active: boolean("active").notNull().default(true),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (table) => [
-    uniqueIndex("policies_merchant_key_unique").on(table.merchantId, table.key),
-  ],
+  (table) => [uniqueIndex("policies_key_unique").on(table.key)],
 );
 
 export const checkoutProposals = pgTable(
@@ -51,9 +46,6 @@ export const checkoutProposals = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
-    merchantId: uuid("merchant_id")
-      .notNull()
-      .references(() => merchants.id, { onDelete: "restrict" }),
     cartVersion: integer("cart_version").notNull(),
     status: checkoutProposalStatusEnum("status").notNull().default("PREPARED"),
     policyDecision: policyDecisionEnum("policy_decision").notNull(),
@@ -76,7 +68,7 @@ export const checkoutProposals = pgTable(
     updatedAt: updatedAt(),
   },
   (table) => [
-    index("checkout_proposals_customer_idx").on(table.userId, table.merchantId),
+    index("checkout_proposals_customer_idx").on(table.userId),
     index("checkout_proposals_cart_idx").on(table.cartId),
     check(
       "checkout_proposals_cart_version_positive",

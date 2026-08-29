@@ -6,21 +6,18 @@ import { createAiCommerceAgentLoop } from "@/modules/agent/ai-commerce-agent-loo
 import { createAiIntentAnalyzer } from "@/modules/agent/ai-intent-interpreter";
 import { createConversationModule } from "@/modules/agent/conversation";
 import { createCatalogModule } from "@/modules/catalog/catalog";
+import { requireBrand } from "@/modules/identity/brand";
 import { resolveUserContext } from "@/modules/identity/user-context";
-import { resolveMerchantContext } from "@/modules/identity/merchant-context";
 import { createPostHandler } from "./handler";
 
-async function createAgentForCurrentMerchant(): Promise<CommerceAgent> {
-  const [{ merchantId }, { userId }] = await Promise.all([
-    resolveMerchantContext(),
-    resolveUserContext(),
-  ]);
+async function createAgentForStorefront(): Promise<CommerceAgent> {
+  const [, { userId }] = await Promise.all([requireBrand(), resolveUserContext()]);
   return createCommerceAgent(
-    createCatalogModule(merchantId),
+    createCatalogModule(),
     createAiIntentAnalyzer(),
-    createConversationModule(userId, merchantId),
+    createConversationModule(userId),
     { agentLoop: createAiCommerceAgentLoop() },
   );
 }
 
-export const POST = createPostHandler(createAgentForCurrentMerchant);
+export const POST = createPostHandler(createAgentForStorefront);

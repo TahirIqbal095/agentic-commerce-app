@@ -2,9 +2,9 @@
 
 **What to build:** Give each persisted customer turn an inspectable Intent Brief and machine-readable Agent Outcome while preserving the current Product discovery experience.
 
-**Blocked by:** 01 — Persist a server-owned conversation.
+**Blocked by:** 00 — Align the application around one Brand; 01 — Persist a server-owned conversation.
 
-**Status:** ready-for-human
+Status: ready-for-human
 
 - [x] A valid turn records a typed Intent Brief containing the goal, constraints, known entities, missing information, confidence, and requested effects.
 - [x] The Intent Brief is treated as context and does not directly authorize side effects.

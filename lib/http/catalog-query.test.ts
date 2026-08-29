@@ -50,7 +50,7 @@ test("rejects malformed attributes, cursors, and unknown parameters", () => {
   for (const params of [
     new URLSearchParams({ attributes: "[]" }),
     new URLSearchParams({ cursor: "not-a-cursor" }),
-    new URLSearchParams({ merchantId: crypto.randomUUID() }),
+    new URLSearchParams({ brandId: crypto.randomUUID() }),
   ]) {
     assert.equal(parseProductSearchQuery(params).ok, false);
   }

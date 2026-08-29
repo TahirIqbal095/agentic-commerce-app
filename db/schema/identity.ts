@@ -1,17 +1,34 @@
-import { index, pgTable, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import {
+  check,
+  pgTable,
+  text,
+  uniqueIndex,
+  uuid,
+  varchar,
+} from "drizzle-orm/pg-core";
 import { createdAt, currency, id, updatedAt } from "./columns";
 
-export const merchants = pgTable(
-  "merchants",
+export const brands = pgTable(
+  "brands",
   {
     id: id(),
+    singletonKey: varchar("singleton_key", { length: 16 })
+      .notNull()
+      .default("BRAND"),
     name: varchar("name", { length: 160 }).notNull(),
     slug: varchar("slug", { length: 160 }).notNull(),
+    description: text("description").notNull(),
+    logoUrl: varchar("logo_url", { length: 500 }),
     currency: currency(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (table) => [uniqueIndex("merchants_slug_unique").on(table.slug)],
+  (table) => [
+    uniqueIndex("brands_singleton_unique").on(table.singletonKey),
+    uniqueIndex("brands_slug_unique").on(table.slug),
+    check("brands_singleton_key", sql`${table.singletonKey} = 'BRAND'`),
+  ],
 );
 
 export const users = pgTable(
@@ -26,22 +43,13 @@ export const users = pgTable(
   (table) => [uniqueIndex("users_email_unique").on(table.email)],
 );
 
-export const merchantAdmins = pgTable(
-  "merchant_admins",
+export const brandAdmins = pgTable(
+  "brand_admins",
   {
-    merchantId: uuid("merchant_id")
-      .notNull()
-      .references(() => merchants.id, { onDelete: "cascade" }),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     createdAt: createdAt(),
   },
-  (table) => [
-    uniqueIndex("merchant_admins_membership_unique").on(
-      table.merchantId,
-      table.userId,
-    ),
-    index("merchant_admins_user_idx").on(table.userId),
-  ],
+  (table) => [uniqueIndex("brand_admins_user_unique").on(table.userId)],
 );

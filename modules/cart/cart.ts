@@ -22,10 +22,7 @@ export class CartError extends Error {
   }
 }
 
-export function createCartModule(
-  userId: string,
-  merchantId: string,
-): CartModule {
+export function createCartModule(userId: string): CartModule {
   return {
     async addItem(product, quantity) {
       if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
@@ -42,11 +39,7 @@ export function createCartModule(
           })
           .from(products)
           .where(
-            and(
-              eq(products.id, product.id),
-              eq(products.merchantId, merchantId),
-              eq(products.active, true),
-            ),
+            and(eq(products.id, product.id), eq(products.active, true)),
           )
           .limit(1);
 
@@ -58,11 +51,7 @@ export function createCartModule(
           .select({ id: carts.id, currency: carts.currency })
           .from(carts)
           .where(
-            and(
-              eq(carts.userId, userId),
-              eq(carts.merchantId, merchantId),
-              eq(carts.status, "ACTIVE"),
-            ),
+            and(eq(carts.userId, userId), eq(carts.status, "ACTIVE")),
           )
           .limit(1);
 
@@ -71,7 +60,6 @@ export function createCartModule(
             .insert(carts)
             .values({
               userId,
-              merchantId,
               currency: authoritativeProduct.currency,
             })
             .returning({ id: carts.id, currency: carts.currency });

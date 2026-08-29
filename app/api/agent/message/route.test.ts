@@ -4,7 +4,7 @@ import type { CommerceAgent } from "@/modules/agent/commerce-agent";
 import { ConversationAccessError } from "@/modules/agent/conversation";
 import { createPostHandler } from "./handler";
 
-test("accepts a user prompt and returns the structured agent response", async () => {
+test("accepts a user prompt without exposing client Brand selection to the agent", async () => {
   const messages: string[] = [];
   const agent: CommerceAgent = {
     async respond(input) {
@@ -41,7 +41,10 @@ test("accepts a user prompt and returns the structured agent response", async ()
     new Request("http://localhost/api/agent/message", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message: "show me products" }),
+      body: JSON.stringify({
+        brandId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        message: "show me products",
+      }),
     }),
   );
 
@@ -154,7 +157,7 @@ test("passes a conversation identifier to the Commerce Agent", async () => {
   ]);
 });
 
-test("rejects a conversation outside the current User and Merchant scope", async () => {
+test("rejects a conversation outside the current User's ownership", async () => {
   const agent: CommerceAgent = {
     async respond() {
       throw new ConversationAccessError();
