@@ -6,6 +6,8 @@ import {
   jsonb,
   pgTable,
   text,
+  timestamp,
+  uniqueIndex,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
@@ -31,10 +33,16 @@ export const conversations = pgTable(
       .$type<ConversationContext>()
       .notNull()
       .default(createEmptyConversationContext()),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (table) => [index("conversations_customer_idx").on(table.userId)],
+  (table) => [
+    index("conversations_customer_idx").on(table.userId),
+    uniqueIndex("conversations_one_current_per_customer_unique")
+      .on(table.userId)
+      .where(sql`${table.closedAt} is null`),
+  ],
 );
 
 export const messages = pgTable(
@@ -47,12 +55,17 @@ export const messages = pgTable(
     role: messageRoleEnum("role").notNull(),
     content: text("content").notNull(),
     metadata: jsonb("metadata").$type<JsonObject>().notNull().default({}),
+    idempotencyKey: uuid("idempotency_key"),
     createdAt: createdAt(),
   },
   (table) => [
     index("messages_conversation_created_idx").on(
       table.conversationId,
       table.createdAt,
+    ),
+    uniqueIndex("messages_conversation_idempotency_key_unique").on(
+      table.conversationId,
+      table.idempotencyKey,
     ),
   ],
 );

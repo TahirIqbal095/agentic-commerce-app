@@ -16,6 +16,7 @@ import {
   createEmptyConversationContext as emptyConversationContext,
 } from "@/modules/agent/conversation-context";
 import type {
+  AgentOutcome,
   ConversationContext,
   IntentAnalysis,
   ShoppingIntent,
@@ -29,6 +30,7 @@ const userId = "11000000-0000-4000-8000-000000000001";
 function createInMemoryConversationRepository(): ConversationRepository {
   let persistedContext: ConversationContext | undefined;
   return {
+    async findDuplicate() { return null; },
     async create() {
       persistedContext = emptyConversationContext();
       return {
@@ -43,24 +45,306 @@ function createInMemoryConversationRepository(): ConversationRepository {
     async saveContextAndMetadata(_conversationId, context) {
       persistedContext = context;
     },
+    async saveRecommendationSet(_conversationId, expectedRevision, recommendations) {
+      if (!persistedContext || persistedContext.revision !== expectedRevision) {
+        return false;
+      }
+      persistedContext = {
+        ...persistedContext,
+        latestRecommendationSet: recommendations,
+      };
+      return true;
+    },
     async append() {
       return "51000000-0000-4000-8000-000000000002";
     },
   };
 }
 
+test("supplies only the latest ordered Recommendation Set to the next turn", async () => {
+  const contexts: ConversationContext[] = [];
+  const repository = createInMemoryConversationRepository();
+  const products = [
+    {
+      id: "71000000-0000-4000-8000-000000000001",
+      slug: "trail-one",
+      name: "Trail One",
+      description: "A grippy trail shoe",
+      category: "Footwear",
+      priceMinor: 350000,
+      currency: "INR",
+      inStock: true,
+      attributes: {},
+    },
+    {
+      id: "71000000-0000-4000-8000-000000000002",
+      slug: "road-two",
+      name: "Road Two",
+      description: "A light road shoe",
+      category: "Footwear",
+      priceMinor: 390000,
+      currency: "INR",
+      inStock: false,
+      attributes: {},
+    },
+  ];
+  let turn = 0;
+  const revalidatedProductIds: string[] = [];
+  const POST = createConversationPost({
+    repository,
+    analyzer: {
+      async analyze({ context }) {
+        contexts.push(context);
+        return {
+          goal: "Discover Products",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.9,
+          requestedEffects: ["DISCOVER_PRODUCTS"],
+          ...(context.latestRecommendationSet.length > 0
+            ? {
+                referencedProductIds: [
+                  context.latestRecommendationSet[1].productId,
+                ],
+              }
+            : {}),
+        };
+      },
+    },
+    catalog: {
+      async search() { return { products }; },
+      async getProduct(productId) {
+        revalidatedProductIds.push(productId);
+        return {
+          ok: true,
+          value: { ...products[1], priceMinor: 410000, inStock: true },
+        };
+      },
+    },
+    agentLoop: {
+      async run({ capabilities, intentBrief }) {
+        turn += 1;
+        if (turn === 1) {
+          assert.ok(capabilities.searchProducts);
+          await capabilities.searchProducts({ limit: 8 });
+          return {
+            status: "COMPLETED",
+            message: "Two options.",
+            productIds: products.map((product) => product.id),
+          };
+        }
+        assert.ok(capabilities.getProduct);
+        const referencedProductId = intentBrief.referencedProductIds?.[0];
+        assert.ok(referencedProductId);
+        await capabilities.getProduct(referencedProductId);
+        return {
+          status: "COMPLETED",
+          message: "The second Product is current.",
+          productIds: [referencedProductId],
+        };
+      },
+    },
+  });
+
+  const first = await postAgentMessage(POST, { message: "show me shoes" });
+  const second = await postAgentMessage(POST, {
+    conversationId: (await first.json()).data.conversationId,
+    message: "tell me about the second one",
+  });
+
+  assert.deepEqual(contexts[1].latestRecommendationSet, [
+    {
+      productId: products[0].id,
+      name: "Trail One",
+      description: "A grippy trail shoe",
+      category: "Footwear",
+    },
+    {
+      productId: products[1].id,
+      name: "Road Two",
+      description: "A light road shoe",
+      category: "Footwear",
+    },
+  ]);
+  assert.equal("priceMinor" in contexts[1].latestRecommendationSet[1], false);
+  assert.equal("inStock" in contexts[1].latestRecommendationSet[1], false);
+  assert.deepEqual(revalidatedProductIds, [products[1].id]);
+  assert.deepEqual((await second.json()).data.products[0], {
+    ...products[1],
+    priceMinor: 410000,
+    inStock: true,
+  });
+});
+
 async function postAgentMessage(
   POST: (request: Request) => Promise<Response>,
-  body: { conversationId?: string; message: string },
+  body: { conversationId?: string; idempotencyKey?: string; message: string },
 ) {
   return POST(
     new Request("http://localhost/api/agent/message", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        ...body,
+        idempotencyKey: body.idempotencyKey ?? crypto.randomUUID(),
+      }),
     }),
   );
 }
+
+test("passes a Conversation Turn idempotency key to the Commerce Agent", async () => {
+  const receivedInputs: Array<{
+    idempotencyKey?: string;
+    message: string;
+  }> = [];
+  const agent: CommerceAgent = {
+    async respond(input) {
+      receivedInputs.push(input);
+      return {
+        status: "COMPLETED",
+        conversationId,
+        message: "I found Products.",
+        intentBrief: {
+          goal: "Discover Products",
+          constraints: emptyConversationContext().productConstraints,
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.9,
+          requestedEffects: ["DISCOVER_PRODUCTS"],
+        },
+        products: [],
+      };
+    },
+  };
+  const POST = createPostHandler(async () => agent);
+  const idempotencyKey = "61000000-0000-4000-8000-000000000001";
+
+  const response = await postAgentMessage(POST, {
+    idempotencyKey,
+    message: "I want shoes",
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(receivedInputs, [
+    { idempotencyKey, message: "I want shoes" },
+  ]);
+});
+
+test("returns the original outcome when a Conversation Turn is delivered twice", async () => {
+  const idempotencyKey = "61000000-0000-4000-8000-000000000002";
+  let storedOutcome: AgentOutcome | null = null;
+  let analyses = 0;
+  let userMessages = 0;
+  const repository: ConversationRepository = {
+    async findDuplicate(_owner, _conversationId, key) {
+      return key === idempotencyKey ? storedOutcome : null;
+    },
+    async create() {
+      userMessages += 1;
+      return {
+        conversationId,
+        userMessageId: "51000000-0000-4000-8000-000000000001",
+        context: emptyConversationContext(),
+      };
+    },
+    async findOwnedContext() {
+      return { userId, context: emptyConversationContext() };
+    },
+    async saveContextAndMetadata() {},
+    async append() {
+      userMessages += 1;
+      return "51000000-0000-4000-8000-000000000002";
+    },
+    async finalizeTurn(_conversationId, _messageId, _message, outcome) {
+      storedOutcome = outcome;
+    },
+  };
+  const POST = createConversationPost({
+    repository,
+    analyzer: {
+      async analyze() {
+        analyses += 1;
+        return {
+          goal: "Find shoes",
+          constraintDelta: { set: { productTypes: ["shoes"] }, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.9,
+          requestedEffects: ["DISCOVER_PRODUCTS"],
+        };
+      },
+    },
+    agentLoop: {
+      async run() {
+        return {
+          status: "COMPLETED",
+          message: "I found Products.",
+          productIds: [],
+        };
+      },
+    },
+  });
+  const request = { idempotencyKey, message: "I want shoes" };
+
+  const first = await postAgentMessage(POST, request);
+  const second = await postAgentMessage(POST, request);
+
+  assert.deepEqual(await second.json(), await first.json());
+  assert.equal(analyses, 1);
+  assert.equal(userMessages, 1);
+});
+
+test("returns the winning outcome when simultaneous duplicate turns race to insert", async () => {
+  const idempotencyKey = "61000000-0000-4000-8000-000000000003";
+  const originalOutcome: AgentOutcome = {
+    status: "COMPLETED",
+    conversationId,
+    message: "Original outcome",
+    intentBrief: {
+      goal: "Discover Products",
+      constraints: emptyConversationContext().productConstraints,
+      knownEntities: [],
+      missingInformation: [],
+      confidence: 0.9,
+      requestedEffects: ["DISCOVER_PRODUCTS"],
+    },
+    products: [],
+  };
+  let duplicateLookups = 0;
+  let analyses = 0;
+  const repository: ConversationRepository = {
+    async findDuplicate() {
+      duplicateLookups += 1;
+      return duplicateLookups === 1 ? null : originalOutcome;
+    },
+    async create() {
+      throw new Error("duplicate key value violates unique constraint");
+    },
+    async findOwnedContext() { return null; },
+    async saveContextAndMetadata() {},
+    async append() { throw new Error("not used"); },
+  };
+  const POST = createConversationPost({
+    repository,
+    analyzer: {
+      async analyze() {
+        analyses += 1;
+        throw new Error("must not reinterpret the duplicate");
+      },
+    },
+    agentLoop: { async run() { throw new Error("must not run"); } },
+  });
+
+  const response = await postAgentMessage(POST, {
+    idempotencyKey,
+    message: "I want shoes",
+  });
+
+  assert.deepEqual(await response.json(), { data: originalOutcome });
+  assert.equal(duplicateLookups, 2);
+  assert.equal(analyses, 0);
+});
 
 function catalogSearchFor(constraints: ShoppingIntent): CatalogSearch {
   return {
@@ -388,6 +672,77 @@ test("applies a typed clear operation without losing other Product constraints",
   });
 });
 
+test("replaces a Product type while preserving budget and removing stale Product details", async () => {
+  const catalogSearches: CatalogSearch[] = [];
+  const repository = createInMemoryConversationRepository();
+  const POST = createConversationPost({
+    repository,
+    analyzer: {
+      async analyze({ message }) {
+        return {
+          goal: "Discover Products",
+          constraintDelta:
+            message === "shoes in UK 9 under 4000"
+              ? {
+                  set: {
+                    productTypes: ["shoes"],
+                    maxPriceMinor: 400000,
+                    size: "UK 9",
+                    features: ["waterproof", "lace-up"],
+                    attributes: {
+                      closureType: "lace-up",
+                      impedance: 32,
+                      sole: "rubber",
+                    },
+                  },
+                  clear: [],
+                }
+              : {
+                  set: { productTypes: ["shirts"] },
+                  clear: [],
+                },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.9,
+          requestedEffects: ["DISCOVER_PRODUCTS"],
+        };
+      },
+    },
+    catalog: {
+      async search(input) {
+        catalogSearches.push(input);
+        return { products: [] };
+      },
+      async getProduct() { throw new Error("not used"); },
+    },
+    agentLoop: {
+      async run({ intentBrief, capabilities }) {
+        assert.ok(capabilities.searchProducts);
+        await capabilities.searchProducts(catalogSearchFor(intentBrief.constraints));
+        return { status: "COMPLETED", message: "Done", productIds: [] };
+      },
+    },
+  });
+
+  const first = await postAgentMessage(POST, {
+    message: "shoes in UK 9 under 4000",
+  });
+  await postAgentMessage(POST, {
+    conversationId: (await first.json()).data.conversationId,
+    message: "actually, show me shirts",
+  });
+
+  assert.deepEqual(catalogSearches.at(-1), {
+    productTypes: ["shirts"],
+    useCases: [],
+    features: ["waterproof"],
+    inStockOnly: true,
+    attributes: {},
+    maxPriceMinor: 400000,
+    limit: 8,
+  });
+});
+
 test("reinterprets once when a concurrent turn changes Conversation Context", async () => {
   const initialContext = emptyConversationContext();
   const concurrentContext: ConversationContext = {
@@ -403,6 +758,7 @@ test("reinterprets once when a concurrent turn changes Conversation Context", as
   const contextsSeenByAnalyzer: ConversationContext[] = [];
   const catalogSearches: CatalogSearch[] = [];
   const repository: ConversationRepository = {
+    async findDuplicate() { return null; },
     async create() {
       return {
         conversationId,
@@ -484,6 +840,7 @@ test("returns a retryable response after a second Conversation Context conflict"
   let saves = 0;
   let discoveryStarted = false;
   const repository: ConversationRepository = {
+    async findDuplicate() { return null; },
     async create() {
       return {
         conversationId,
@@ -594,6 +951,7 @@ test("accepts a user prompt without exposing client Brand selection to the agent
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         brandId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        idempotencyKey: "61000000-0000-4000-8000-000000000010",
         message: "show me products",
       }),
     }),
@@ -655,8 +1013,38 @@ test("rejects an empty user prompt before creating an agent", async () => {
   });
 });
 
+test("requires a client-generated Conversation Turn idempotency key", async () => {
+  let agentCreated = false;
+  const POST = createPostHandler(async () => {
+    agentCreated = true;
+    throw new Error("The agent should not be created");
+  });
+
+  const response = await POST(
+    new Request("http://localhost/api/agent/message", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "show me shoes" }),
+    }),
+  );
+
+  assert.equal(response.status, 400);
+  assert.equal(agentCreated, false);
+  assert.deepEqual(await response.json(), {
+    error: {
+      code: "INVALID_IDEMPOTENCY_KEY",
+      message: "idempotencyKey must be a UUID.",
+      details: { field: "idempotencyKey" },
+    },
+  });
+});
+
 test("passes a conversation identifier to the Commerce Agent", async () => {
-  const receivedInputs: Array<{ conversationId?: string; message: string }> = [];
+  const receivedInputs: Array<{
+    conversationId?: string;
+    idempotencyKey: string;
+    message: string;
+  }> = [];
   const agent: CommerceAgent = {
     async respond(input) {
       receivedInputs.push(input);
@@ -694,6 +1082,7 @@ test("passes a conversation identifier to the Commerce Agent", async () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         conversationId: "41000000-0000-4000-8000-000000000001",
+        idempotencyKey: "61000000-0000-4000-8000-000000000011",
         message: "only the waterproof ones",
       }),
     }),
@@ -703,6 +1092,7 @@ test("passes a conversation identifier to the Commerce Agent", async () => {
   assert.deepEqual(receivedInputs, [
     {
       conversationId: "41000000-0000-4000-8000-000000000001",
+      idempotencyKey: "61000000-0000-4000-8000-000000000011",
       message: "only the waterproof ones",
     },
   ]);
@@ -722,6 +1112,7 @@ test("rejects a conversation outside the current User's ownership", async () => 
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         conversationId: "41000000-0000-4000-8000-000000000099",
+        idempotencyKey: "61000000-0000-4000-8000-000000000012",
         message: "show me more like those",
       }),
     }),

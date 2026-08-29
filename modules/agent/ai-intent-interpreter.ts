@@ -211,6 +211,14 @@ const intentAnalysisSchema = jsonSchema<IntentAnalysis>(
           enum: ["DISCOVER_PRODUCTS", "ADD_TO_CART"],
         },
       },
+      referencedProductIds: {
+        type: "array",
+        uniqueItems: true,
+        maxItems: 8,
+        items: { type: "string", minLength: 1, maxLength: 160 },
+        description:
+          "Product IDs resolved from references to the latest ordered Recommendation Set. Use current ordering for phrases such as 'the second one'.",
+      },
     },
   },
   {
@@ -256,14 +264,18 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
   const requestedEffects = new Set(["DISCOVER_PRODUCTS", "ADD_TO_CART"]);
 
   return (
-    hasExactlyKeys(brief, [
-      "goal",
-      "constraintDelta",
-      "knownEntities",
-      "missingInformation",
-      "confidence",
-      "requestedEffects",
-    ]) &&
+    hasRequiredAndAllowedKeys(
+      brief,
+      [
+        "goal",
+        "constraintDelta",
+        "knownEntities",
+        "missingInformation",
+        "confidence",
+        "requestedEffects",
+      ],
+      ["referencedProductIds"],
+    ) &&
     typeof brief.goal === "string" &&
     brief.goal.trim().length > 0 &&
     brief.goal.length <= 240 &&
@@ -288,7 +300,13 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
     Array.isArray(brief.requestedEffects) &&
     brief.requestedEffects.length <= 2 &&
     new Set(brief.requestedEffects).size === brief.requestedEffects.length &&
-    brief.requestedEffects.every((effect) => requestedEffects.has(String(effect)))
+    brief.requestedEffects.every((effect) =>
+      requestedEffects.has(String(effect)),
+    ) &&
+    (brief.referencedProductIds === undefined ||
+      (isStringArray(brief.referencedProductIds) &&
+        new Set(brief.referencedProductIds).size ===
+          brief.referencedProductIds.length))
   );
 }
 
@@ -315,6 +333,18 @@ function hasExactlyKeys(
   return (
     actualKeys.length === expectedKeys.length &&
     expectedKeys.every((key) => Object.hasOwn(value, key))
+  );
+}
+
+function hasRequiredAndAllowedKeys(
+  value: Record<string, unknown>,
+  requiredKeys: string[],
+  optionalKeys: string[],
+): boolean {
+  const allowed = new Set([...requiredKeys, ...optionalKeys]);
+  return (
+    requiredKeys.every((key) => Object.hasOwn(value, key)) &&
+    Object.keys(value).every((key) => allowed.has(key))
   );
 }
 

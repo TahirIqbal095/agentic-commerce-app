@@ -72,6 +72,11 @@ export const MAX_COMMERCE_AGENT_TOOL_PRODUCTS = 8;
 
 type AgentTurn = {
   conversationId: string;
+  duplicateOutcome?: AgentOutcome;
+  recordRecommendationSet?(
+    products: CatalogProduct[],
+    context: ConversationContext,
+  ): Promise<void>;
   context?: ConversationContext;
   recordIntentBrief(
     intentBrief: IntentBrief,
@@ -121,7 +126,9 @@ export function createCommerceAgent(
           products: [],
         };
       }
+      if (turn.duplicateOutcome) return turn.duplicateOutcome;
       let intentBrief!: IntentBrief;
+      let resolvedContext!: ConversationContext;
       let currentContext = turn.context ?? createEmptyConversationContext();
       for (let attempt = 0; attempt < 2; attempt += 1) {
         let nextContext: ConversationContext;
@@ -135,6 +142,7 @@ export function createCommerceAgent(
             analysis.constraintDelta,
           );
           intentBrief = resolveIntentBrief(analysis, nextContext);
+          resolvedContext = nextContext;
         } catch {
           const outcome: AgentOutcome = {
             status: "TEMPORARILY_UNAVAILABLE",
@@ -254,6 +262,19 @@ export function createCommerceAgent(
         const product = observedProducts.get(productId);
         return product ? [product] : [];
       });
+      try {
+        await turn.recordRecommendationSet?.(products, resolvedContext);
+      } catch {
+        return completeTurn(turn, {
+          status: "TEMPORARILY_UNAVAILABLE",
+          conversationId: turn.conversationId,
+          message:
+            "I couldn't save those Recommendations right now. Please try again.",
+          retryable: true,
+          intentBrief,
+          products: [],
+        });
+      }
       return completeTurn(turn, {
         status: "COMPLETED",
         conversationId: turn.conversationId,
@@ -288,7 +309,9 @@ function resolveCapabilities({
   signal: AbortSignal;
   observedProducts: Map<string, CatalogProduct>;
 }): CommerceCapabilities {
-  if (!intentBrief.requestedEffects.includes("DISCOVER_PRODUCTS")) return {};
+  const canDiscover = intentBrief.requestedEffects.includes("DISCOVER_PRODUCTS");
+  const referencedProductIds = new Set(intentBrief.referencedProductIds ?? []);
+  if (!canDiscover && referencedProductIds.size === 0) return {};
 
   const assertLoopActive = () => {
     if (signal.aborted) {
@@ -297,30 +320,43 @@ function resolveCapabilities({
   };
 
   return {
-    async searchProducts(search) {
-      assertLoopActive();
-      const result = await catalog.search({
-        ...search,
-        ...activeProductConstraints(intentBrief.constraints),
-        ...(Object.keys(intentBrief.constraints.attributes).length > 0
-          ? {
-              attributes: {
-                ...search.attributes,
-                ...intentBrief.constraints.attributes,
-              },
+    ...(canDiscover
+      ? {
+          async searchProducts(search: CatalogSearch) {
+            assertLoopActive();
+            const result = await catalog.search({
+              ...search,
+              ...activeProductConstraints(intentBrief.constraints),
+              ...(Object.keys(intentBrief.constraints.attributes).length > 0
+                ? {
+                    attributes: {
+                      ...search.attributes,
+                      ...intentBrief.constraints.attributes,
+                    },
+                  }
+                : {}),
+              limit: Math.max(
+                1,
+                Math.min(search.limit, limits.maxToolProducts),
+              ),
+            });
+            assertLoopActive();
+            const boundedProducts = result.products.slice(
+              0,
+              limits.maxToolProducts,
+            );
+            for (const product of boundedProducts) {
+              observedProducts.set(product.id, product);
             }
-          : {}),
-        limit: Math.max(1, Math.min(search.limit, limits.maxToolProducts)),
-      });
-      assertLoopActive();
-      const boundedProducts = result.products.slice(0, limits.maxToolProducts);
-      for (const product of boundedProducts) {
-        observedProducts.set(product.id, product);
-      }
-      return { ...result, products: boundedProducts };
-    },
+            return { ...result, products: boundedProducts };
+          },
+        }
+      : {}),
     async getProduct(productId) {
       assertLoopActive();
+      if (!canDiscover && !referencedProductIds.has(productId)) {
+        throw new Error("Only referenced Products can be inspected.");
+      }
       const result = await catalog.getProduct(productId);
       assertLoopActive();
       if (result.ok) observedProducts.set(result.value.id, result.value);

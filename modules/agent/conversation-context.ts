@@ -4,6 +4,7 @@ import type {
   IntentBrief,
   ProductConstraintDelta,
   ProductConstraintKey,
+  RecommendationReference,
   ShoppingIntent,
 } from "./types";
 import { PRODUCT_CONSTRAINT_KEYS } from "./types";
@@ -22,9 +23,10 @@ const CLEAR_VALUES: { [Key in ProductConstraintKey]: ShoppingIntent[Key] } = {
 
 export function createEmptyConversationContext(): ConversationContext {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     productConstraints: structuredClone(CLEAR_VALUES),
+    latestRecommendationSet: [],
   };
 }
 
@@ -38,11 +40,13 @@ export function parseConversationContext(value: unknown): ConversationContext {
       "schemaVersion",
       "revision",
       "productConstraints",
+      "latestRecommendationSet",
     ]) ||
-    context.schemaVersion !== 1 ||
+    context.schemaVersion !== 2 ||
     !Number.isSafeInteger(context.revision) ||
     Number(context.revision) < 0 ||
-    !isShoppingIntent(context.productConstraints)
+    !isShoppingIntent(context.productConstraints) ||
+    !isRecommendationSet(context.latestRecommendationSet)
   ) {
     throw new Error("Conversation Context is invalid or unsupported.");
   }
@@ -55,6 +59,45 @@ export function applyProductConstraintDelta(
 ): ConversationContext {
   assertProductConstraintDelta(delta);
   const productConstraints = structuredClone(context.productConstraints);
+
+  if (
+    delta.set.productTypes &&
+    context.productConstraints.productTypes.length > 0 &&
+    productTypeFamily(delta.set.productTypes) !==
+      productTypeFamily(context.productConstraints.productTypes) &&
+    !sameStrings(
+      delta.set.productTypes,
+      context.productConstraints.productTypes,
+    )
+  ) {
+    const nextFamily = productTypeFamily(delta.set.productTypes);
+    for (const key of ["category", "size", "attributes"] as const) {
+      if (!Object.hasOwn(delta.set, key)) {
+        if (key === "attributes") {
+          productConstraints.attributes = Object.fromEntries(
+            Object.entries(productConstraints.attributes).filter(
+              ([attribute, value]) =>
+                isCompatibleConstraint(
+                  `${attribute} ${String(value)}`,
+                  nextFamily,
+                ),
+            ),
+          );
+        } else {
+          assignConstraint(
+            productConstraints,
+            key,
+            structuredClone(CLEAR_VALUES[key]),
+          );
+        }
+      }
+    }
+    if (!Object.hasOwn(delta.set, "features")) {
+      productConstraints.features = productConstraints.features.filter(
+        (feature) => isCompatibleConstraint(feature, nextFamily),
+      );
+    }
+  }
 
   for (const key of delta.clear) {
     assignConstraint(productConstraints, key, structuredClone(CLEAR_VALUES[key]));
@@ -69,20 +112,155 @@ export function applyProductConstraintDelta(
     }
   }
   if (!isShoppingIntent(productConstraints)) {
-    throw new Error("The Product constraint delta produces invalid constraints.");
+    throw new Error(
+      "The Product constraint delta produces invalid constraints.",
+    );
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: context.revision + 1,
     productConstraints,
+    latestRecommendationSet: context.latestRecommendationSet,
   };
+}
+
+const PRODUCT_TYPE_FAMILIES = new Map<string, string>([
+  ["boot", "footwear"],
+  ["boots", "footwear"],
+  ["sandal", "footwear"],
+  ["sandals", "footwear"],
+  ["shoe", "footwear"],
+  ["shoes", "footwear"],
+  ["sneaker", "footwear"],
+  ["sneakers", "footwear"],
+  ["blouse", "apparel"],
+  ["blouses", "apparel"],
+  ["shirt", "apparel"],
+  ["shirts", "apparel"],
+  ["top", "apparel"],
+  ["tops", "apparel"],
+  ["earbud", "electronics"],
+  ["earbuds", "electronics"],
+  ["headphone", "electronics"],
+  ["headphones", "electronics"],
+  ["speaker", "electronics"],
+  ["speakers", "electronics"],
+]);
+
+const FAMILY_SPECIFIC_CONSTRAINTS = new Map<string, string>([
+  ["arch", "footwear"],
+  ["cushioning", "footwear"],
+  ["heel", "footwear"],
+  ["lace", "footwear"],
+  ["laces", "footwear"],
+  ["lace-up", "footwear"],
+  ["sole", "footwear"],
+  ["support", "footwear"],
+  ["sleeve", "apparel"],
+  ["sleeves", "apparel"],
+  ["neckline", "apparel"],
+  ["bluetooth", "electronics"],
+  ["impedance", "electronics"],
+  ["noise-cancelling", "electronics"],
+  ["wireless", "electronics"],
+]);
+
+const CROSS_PRODUCT_CONSTRAINTS = new Set([
+  "breathable",
+  "color",
+  "comfortable",
+  "comfort",
+  "durable",
+  "eco-friendly",
+  "lightweight",
+  "material",
+  "recycled",
+  "sustainable",
+  "water-resistant",
+  "waterproof",
+]);
+
+function isCompatibleConstraint(
+  constraint: string,
+  nextFamily: string,
+): boolean {
+  const words = constraint.trim().toLowerCase().split(/[^a-z0-9-]+/);
+  if (words.some((word) => CROSS_PRODUCT_CONSTRAINTS.has(word))) return true;
+  return constraintFamily(constraint) === nextFamily;
+}
+
+function constraintFamily(constraint: string): string | null {
+  const normalized = constraint.trim().toLowerCase();
+  return (
+    FAMILY_SPECIFIC_CONSTRAINTS.get(normalized) ??
+    normalized
+      .split(/[^a-z0-9-]+/)
+      .map((word) => FAMILY_SPECIFIC_CONSTRAINTS.get(word))
+      .find(Boolean) ??
+    null
+  );
+}
+
+function productTypeFamily(productTypes: string[]): string {
+  const normalized = productTypes
+    .map((productType) => productType.trim().toLowerCase())
+    .sort();
+  const recognizedFamilies = new Set(
+    normalized.flatMap((productType) => {
+      const words = productType.split(/\s+/);
+      const family = words
+        .map((word) => PRODUCT_TYPE_FAMILIES.get(word))
+        .find(Boolean);
+      return family ? [family] : [];
+    }),
+  );
+  return recognizedFamilies.size === 1
+    ? [...recognizedFamilies][0]
+    : normalized.join("|");
+}
+
+function isRecommendationSet(
+  value: unknown,
+): value is RecommendationReference[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 8 &&
+    value.every(
+      (item) =>
+        typeof item === "object" &&
+        item !== null &&
+        hasExactlyKeys(item as Record<string, unknown>, [
+          "productId",
+          "name",
+          "description",
+          "category",
+        ]) &&
+        isBoundedString((item as RecommendationReference).productId) &&
+        isBoundedString((item as RecommendationReference).name) &&
+        isBoundedString((item as RecommendationReference).description) &&
+        isBoundedString((item as RecommendationReference).category),
+    )
+  );
+}
+
+function sameStrings(left: string[], right: string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
 
 export function resolveIntentBrief(
   analysis: IntentAnalysis,
   context: ConversationContext,
 ): IntentBrief {
+  const currentRecommendationIds = new Set(
+    context.latestRecommendationSet.map((item) => item.productId),
+  );
+  const referencedProductIds = analysis.referencedProductIds?.filter((id) =>
+    currentRecommendationIds.has(id),
+  );
   return {
     goal: analysis.goal,
     constraints: context.productConstraints,
@@ -90,6 +268,7 @@ export function resolveIntentBrief(
     missingInformation: analysis.missingInformation,
     confidence: analysis.confidence,
     requestedEffects: analysis.requestedEffects,
+    ...(referencedProductIds?.length ? { referencedProductIds } : {}),
   };
 }
 
@@ -161,7 +340,11 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 function isBoundedString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0 && value.length <= 160;
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    value.length <= 160
+  );
 }
 
 function isOptionalPrice(value: unknown): value is number | null {

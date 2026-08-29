@@ -21,6 +21,7 @@ Summarize the customer's shopping goal without copying credentials, contact deta
 Return Product constraint changes only as explicit constraintDelta operations. Put newly stated or replaced constraints in set. Put constraints the Customer explicitly removes in clear. Do not repeat unchanged constraints from Conversation Context in set, and never both set and clear the same constraint.
 Supported Product constraints are product types, use cases, features, category, price bounds in minor INR units, size, availability, and useful attributes. A bare amount such as 4000 means ₹4,000 INR and therefore 400000 paise.
 Record known Product, Product type, and category entities. List only missing information that materially prevents a useful response.
+Resolve unqualified references such as "those" and "the second one" only against the latest ordered Recommendation Set, and return the selected Product IDs in referencedProductIds. Do not copy stored price or availability into decisions; current commerce facts must be revalidated through Catalog tools.
 Set confidence from 0 to 1. Record DISCOVER_PRODUCTS or ADD_TO_CART as requested effects, but treat these as context only; they never authorize an action.
 Never include private reasoning, chain-of-thought, passwords, passcodes, OTPs, tokens, API keys, payment credentials, email addresses, phone numbers, or unnecessary personal data.`,
 };

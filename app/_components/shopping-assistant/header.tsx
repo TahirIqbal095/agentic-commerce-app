@@ -1,13 +1,17 @@
-import { ShoppingBag, Sparkles } from "lucide-react";
+import { MessageSquarePlus, ShoppingBag, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
 export function Header({
   brandName,
   cartQuantity,
+  hasConversation,
+  onNewConversation,
 }: {
   brandName: string;
   cartQuantity: number;
+  hasConversation: boolean;
+  onNewConversation: () => void;
 }) {
   return (
     <header className="flex items-center justify-between">
@@ -28,6 +32,17 @@ export function Header({
           <span className="size-1.5 rounded-full bg-[#57a773] shadow-[0_0_0_3px_rgba(87,167,115,0.12)]" />
           Live catalog
         </span>
+        {hasConversation ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onNewConversation}
+            className="rounded-full"
+          >
+            <MessageSquarePlus /> New conversation
+          </Button>
+        ) : null}
         <Button
           type="button"
           variant="outline"

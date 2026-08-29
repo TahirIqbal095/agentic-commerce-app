@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import React from "react";
+import { createEmptyConversationContext } from "@/modules/agent/conversation-context";
 
 test("customer sees the configured Brand in the Storefront", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
@@ -180,7 +181,10 @@ test("customer can submit a request and read product results above the persisten
 
   assert.equal(fetchCalls.length, 1);
   assert.equal(fetchCalls[0]?.[0], "/api/agent/message");
-  assert.deepEqual(JSON.parse(String(fetchCalls[0]?.[1]?.body)), {
+  const submittedBody = JSON.parse(String(fetchCalls[0]?.[1]?.body));
+  assert.match(submittedBody.idempotencyKey, /^[0-9a-f-]{36}$/);
+  assert.deepEqual({ ...submittedBody, idempotencyKey: undefined }, {
+    idempotencyKey: undefined,
     message: "noise cancelling earphones under 5000",
   });
   assert.ok(form);
@@ -542,13 +546,20 @@ test("Storefront reuses the server conversation identifier on later turns", asyn
   await user.click(view.getByRole("button", { name: "Send" }));
   await view.findByText("Here are waterproof options.");
 
-  assert.deepEqual(requestBodies, [
-    { message: "show me running shoes" },
-    {
-      conversationId: "41000000-0000-4000-8000-000000000001",
-      message: "only waterproof ones",
-    },
-  ]);
+  assert.deepEqual(
+    requestBodies.map((body) => {
+      const { idempotencyKey, ...rest } = body as Record<string, unknown>;
+      assert.match(String(idempotencyKey), /^[0-9a-f-]{36}$/);
+      return rest;
+    }),
+    [
+      { message: "show me running shoes" },
+      {
+        conversationId: "41000000-0000-4000-8000-000000000001",
+        message: "only waterproof ones",
+      },
+    ],
+  );
 });
 
 test("Customer can read earlier Conversation Turns after a later response", async (t) => {
@@ -629,4 +640,117 @@ test("Customer can read earlier Conversation Turns after a later response", asyn
     view.getByText("Here are waterproof options.").textContent,
     "Here are waterproof options.",
   );
+});
+
+test("Customer can resume and reset the current Conversation without changing the Cart", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+  const requests: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push(`${init?.method ?? "GET"} ${String(input)}`);
+    if (init?.method === "POST") {
+      return new Response(
+        JSON.stringify({
+          data: {
+            status: "COMPLETED",
+            conversationId: "41000000-0000-4000-8000-000000000001",
+            message: "Budget removed.",
+            intentBrief: {
+              goal: "Discover Products",
+              constraints: { ...context, productTypes: ["shoes"] },
+              knownEntities: [],
+              missingInformation: [],
+              confidence: 0.9,
+              requestedEffects: ["DISCOVER_PRODUCTS"],
+            },
+            products: [],
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(JSON.stringify({ data: { reset: true } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const context = createEmptyConversationContext().productConstraints;
+  const [{ render, cleanup }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(
+    React.createElement(ShoppingAssistant, {
+      brandName: "Arc",
+      initialConversation: {
+        conversationId: "41000000-0000-4000-8000-000000000001",
+        transcript: [
+          {
+            id: "51000000-0000-4000-8000-000000000001",
+            customerMessage: "I want shoes",
+            result: {
+              status: "COMPLETED",
+              conversationId: "41000000-0000-4000-8000-000000000001",
+              message: "Here are shoes.",
+              intentBrief: {
+                goal: "Discover Products",
+                constraints: {
+                  ...context,
+                  productTypes: ["shoes"],
+                  maxPriceMinor: 400000,
+                },
+                knownEntities: [],
+                missingInformation: [],
+                confidence: 0.9,
+                requestedEffects: ["DISCOVER_PRODUCTS"],
+              },
+              products: [],
+            },
+            error: null,
+          },
+        ],
+        contextSummary: {
+          ...context,
+          productTypes: ["shoes"],
+          maxPriceMinor: 400000,
+        },
+        revision: 1,
+      },
+    }),
+  );
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  assert.equal(view.getByText("I want shoes").textContent, "I want shoes");
+  assert.equal(view.getByText("Here are shoes.").textContent, "Here are shoes.");
+  await user.click(
+    view.getByRole("button", { name: "Remove maximum price constraint" }),
+  );
+  await view.findByText("Budget removed.");
+  await user.click(view.getByRole("button", { name: "New conversation" }));
+
+  assert.deepEqual(requests, [
+    "POST /api/agent/message",
+    "DELETE /api/agent/conversation",
+  ]);
+  assert.equal(view.queryByText("I want shoes"), null);
+  assert.equal(view.getByRole("button", { name: "Cart · 0" }).textContent, " Cart · 0");
 });

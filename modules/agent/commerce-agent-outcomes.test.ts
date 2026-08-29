@@ -5,18 +5,41 @@ import type { CatalogModule } from "@/modules/catalog/catalog";
 import { createAiCommerceAgentLoop } from "./ai-commerce-agent-loop";
 import { createEmptyConversationContext } from "./conversation-context";
 import {
-  createCommerceAgent,
+  createCommerceAgent as createProductionCommerceAgent,
   type CommerceAgentLoop,
   type ConversationModule,
   type IntentAnalyzer,
 } from "./commerce-agent";
-import type { AgentOutcome, IntentAnalysis, IntentBrief } from "./types";
+import type {
+  AgentMessage,
+  AgentOutcome,
+  IntentAnalysis,
+  IntentBrief,
+} from "./types";
 import {
   createConversationModule,
   type ConversationRepository,
 } from "./conversation";
 
 const conversationId = "41000000-0000-4000-8000-000000000001";
+function createCommerceAgent(
+  ...args: Parameters<typeof createProductionCommerceAgent>
+) {
+  const agent = createProductionCommerceAgent(...args);
+  return {
+    ...agent,
+    respond(
+      input: Omit<AgentMessage, "idempotencyKey"> & {
+        idempotencyKey?: string;
+      },
+    ) {
+      return agent.respond({
+        ...input,
+        idempotencyKey: input.idempotencyKey ?? crypto.randomUUID(),
+      });
+    },
+  };
+}
 const product = {
   id: "21000000-0000-4000-8000-000000000001",
   slug: "strideflow-daily-running-shoes",
@@ -192,6 +215,69 @@ test("denies Catalog capabilities when Product discovery is not permitted", asyn
   const outcome = await agent.respond({ message: "add it to my cart" });
 
   assert.equal(outcome.status, "NEEDS_INPUT");
+});
+
+test("revalidates a referenced Product before a non-discovery follow-up action", async () => {
+  const currentProduct = { ...product, priceMinor: 429900, inStock: false };
+  const referencedBrief: IntentBrief = {
+    ...brief,
+    requestedEffects: ["ADD_TO_CART"],
+    referencedProductIds: [product.id],
+  };
+  const lookedUpProductIds: string[] = [];
+  const agent = createCommerceAgent(
+    {
+      async search() { throw new Error("Catalog search must not be exposed"); },
+      async getProduct(productId) {
+        lookedUpProductIds.push(productId);
+        return { ok: true, value: currentProduct };
+      },
+    },
+    { async analyze() { return intentAnalysisFor(referencedBrief); } },
+    {
+      async startTurn() {
+        return {
+          conversationId,
+          context: {
+            ...createEmptyConversationContext(),
+            latestRecommendationSet: [
+              {
+                productId: product.id,
+                name: product.name,
+                description: product.description,
+                category: product.category,
+              },
+            ],
+          },
+          async recordIntentBrief() {},
+          async complete() {},
+        };
+      },
+    },
+    {
+      agentLoop: {
+        async run({ capabilities, intentBrief }) {
+          assert.deepEqual(Object.keys(capabilities), ["getProduct"]);
+          assert.ok(capabilities.getProduct);
+          const referencedProductId = intentBrief.referencedProductIds?.[0];
+          assert.ok(referencedProductId);
+          const result = await capabilities.getProduct(referencedProductId);
+          assert.equal(result.ok && result.value.priceMinor, 429900);
+          assert.equal(result.ok && result.value.inStock, false);
+          return {
+            status: "COMPLETED",
+            message: "I checked the current Product before the action.",
+            productIds: [referencedProductId],
+          };
+        },
+      },
+    },
+  );
+
+  const outcome = await agent.respond({ message: "add the first one" });
+
+  assert.deepEqual(lookedUpProductIds, [product.id]);
+  assert.deepEqual(outcome.products, [currentProduct]);
 });
 
 test("bounds Catalog search inputs and results exposed to the Commerce Agent", async () => {
@@ -998,6 +1084,7 @@ test("persists the Intent Brief and Agent Outcome as inspectable turn metadata",
   const metadataUpdates: Array<{ messageId: string; metadata: unknown }> = [];
   const appended: Array<{ role: string; content: string; metadata: unknown }> = [];
   const repository: ConversationRepository = {
+    async findDuplicate() { return null; },
     async create() {
       return {
         conversationId,
@@ -1063,6 +1150,7 @@ test("persists the Intent Brief and Agent Outcome as inspectable turn metadata",
 test("continues a conversation only for its owning User", async () => {
   const appendedMessages: string[] = [];
   const repository: ConversationRepository = {
+    async findDuplicate() { return null; },
     async create() {
       throw new Error("not used");
     },
@@ -1085,10 +1173,59 @@ test("continues a conversation only for its owning User", async () => {
 
   await conversation.startTurn({
     conversationId,
+    idempotencyKey: crypto.randomUUID(),
     message: "show me more like those",
   });
 
   assert.deepEqual(appendedMessages, ["show me more like those"]);
+});
+
+test("redacts sensitive Customer text before durable Transcript persistence", async () => {
+  const persistedMessages: string[] = [];
+  const repository: ConversationRepository = {
+    async findDuplicate() { return null; },
+    async create(_owner, message) {
+      persistedMessages.push(message);
+      return {
+        conversationId,
+        userMessageId: "51000000-0000-4000-8000-000000000001",
+        context: createEmptyConversationContext(),
+      };
+    },
+    async findOwnedContext() {
+      return {
+        userId: "11000000-0000-4000-8000-000000000001",
+        context: createEmptyConversationContext(),
+      };
+    },
+    async saveContextAndMetadata() {},
+    async append(_conversationId, role, content) {
+      if (role === "USER") persistedMessages.push(content);
+      return "51000000-0000-4000-8000-000000000002";
+    },
+  };
+  const conversation = createConversationModule(
+    "11000000-0000-4000-8000-000000000001",
+    repository,
+  );
+
+  await conversation.startTurn({
+    idempotencyKey: crypto.randomUUID(),
+    message:
+      "shoes for jane.private@example.com, contact me at +91 98765 43210, OTP 654321",
+  });
+  await conversation.startTurn({
+    conversationId,
+    idempotencyKey: crypto.randomUUID(),
+    message:
+      "deliver to Flat 4B, 12 Main Street, PIN 560001; card 4111 1111 1111 1111, CVV 123, exp 12/29, UPI private@bank with token sk-private-secret",
+  });
+
+  assert.doesNotMatch(
+    persistedMessages.join(" "),
+    /jane\.private@example\.com|98765|654321|12 Main Street|560001|4111|CVV 123|12\/29|private@bank|sk-private-secret/,
+  );
+  assert.match(persistedMessages.join(" "), /REDACTED/);
 });
 
 test("excludes credentials and unnecessary personal data from persisted intent and outcome records", async () => {
@@ -1114,6 +1251,7 @@ test("excludes credentials and unnecessary personal data from persisted intent a
     ],
   };
   const repository: ConversationRepository = {
+    async findDuplicate() { return null; },
     async create() {
       return {
         conversationId,

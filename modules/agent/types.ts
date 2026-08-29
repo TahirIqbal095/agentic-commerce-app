@@ -2,6 +2,7 @@ import type { CatalogProduct } from "../catalog/types";
 
 export type AgentMessage = {
   conversationId?: string;
+  idempotencyKey: string;
   message: string;
 };
 
@@ -39,9 +40,17 @@ export type ProductConstraintDelta = {
 };
 
 export type ConversationContext = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   revision: number;
   productConstraints: ShoppingIntent;
+  latestRecommendationSet: RecommendationReference[];
+};
+
+export type RecommendationReference = {
+  productId: string;
+  name: string;
+  description: string;
+  category: string;
 };
 
 export type IntentAnalysis = {
@@ -54,6 +63,7 @@ export type IntentAnalysis = {
   missingInformation: string[];
   confidence: number;
   requestedEffects: Array<"DISCOVER_PRODUCTS" | "ADD_TO_CART">;
+  referencedProductIds?: string[];
 };
 
 export type AddToCartIntent = {
@@ -74,6 +84,7 @@ export type IntentBrief = {
   missingInformation: string[];
   confidence: number;
   requestedEffects: Array<"DISCOVER_PRODUCTS" | "ADD_TO_CART">;
+  referencedProductIds?: string[];
 };
 
 export type CompletedAgentOutcome = {
@@ -127,4 +138,18 @@ export type AgentResponse = {
   };
   status?: never;
   intentBrief?: never;
+};
+
+export type ConversationTranscriptTurn = {
+  id: string;
+  customerMessage: string;
+  result: AgentOutcome | null;
+  error: string | null;
+};
+
+export type CurrentConversation = {
+  conversationId: string;
+  transcript: ConversationTranscriptTurn[];
+  contextSummary: ShoppingIntent;
+  revision: number;
 };

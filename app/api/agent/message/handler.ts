@@ -58,11 +58,27 @@ export function createPostHandler(createAgent: AgentFactory) {
       );
     }
 
+    const idempotencyKey =
+      "idempotencyKey" in body ? body.idempotencyKey : undefined;
+    if (
+      (typeof idempotencyKey !== "string" || !isUuid(idempotencyKey))
+    ) {
+      return errorResponse(
+        {
+          code: "INVALID_IDEMPOTENCY_KEY",
+          message: "idempotencyKey must be a UUID.",
+          details: { field: "idempotencyKey" },
+        },
+        400,
+      );
+    }
+
     try {
       const agent = await createAgent();
       return dataResponse(
         await agent.respond({
           ...(conversationId ? { conversationId } : {}),
+          idempotencyKey,
           message: body.message.trim(),
         }),
       );
