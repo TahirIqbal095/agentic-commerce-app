@@ -3,13 +3,14 @@ import test from "node:test";
 import { MockLanguageModelV4 } from "ai/test";
 import type { CatalogModule } from "@/modules/catalog/catalog";
 import { createAiCommerceAgentLoop } from "./ai-commerce-agent-loop";
+import { createEmptyConversationContext } from "./conversation-context";
 import {
   createCommerceAgent,
   type CommerceAgentLoop,
   type ConversationModule,
   type IntentAnalyzer,
 } from "./commerce-agent";
-import type { AgentOutcome, IntentBrief } from "./types";
+import type { AgentOutcome, IntentAnalysis, IntentBrief } from "./types";
 import {
   createConversationModule,
   type ConversationRepository,
@@ -45,6 +46,14 @@ const brief: IntentBrief = {
   confidence: 0.94,
   requestedEffects: ["DISCOVER_PRODUCTS"],
 };
+
+function intentAnalysisFor(intentBrief: IntentBrief): IntentAnalysis {
+  const { constraints, ...analysis } = intentBrief;
+  return {
+    ...analysis,
+    constraintDelta: { set: constraints, clear: [] },
+  };
+}
 
 const unusedAgentLoop: CommerceAgentLoop = {
   async run() {
@@ -102,7 +111,7 @@ test("lets the Commerce Agent choose from only the permitted Catalog capabilitie
         throw new Error("not used");
       },
     },
-    { async analyze() { return brief; } },
+    { async analyze() { return intentAnalysisFor(brief); } },
     {
       async startTurn() {
         return {
@@ -156,7 +165,7 @@ test("denies Catalog capabilities when Product discovery is not permitted", asyn
       async search() { throw new Error("Catalog search must not be exposed"); },
       async getProduct() { throw new Error("Product lookup must not be exposed"); },
     },
-    { async analyze() { return nonDiscoveryBrief; } },
+    { async analyze() { return intentAnalysisFor(nonDiscoveryBrief); } },
     {
       async startTurn() {
         return {
@@ -205,7 +214,7 @@ test("bounds Catalog search inputs and results exposed to the Commerce Agent", a
       },
       async getProduct() { throw new Error("not used"); },
     },
-    { async analyze() { return brief; } },
+    { async analyze() { return intentAnalysisFor(brief); } },
     {
       async startTurn() {
         return {
@@ -255,7 +264,7 @@ test("runs the Commerce Agent with fixed step, timeout, token, and tool-result l
       async search() { throw new Error("not used"); },
       async getProduct() { throw new Error("not used"); },
     },
-    { async analyze() { return brief; } },
+    { async analyze() { return intentAnalysisFor(brief); } },
     {
       async startTurn() {
         return {
@@ -299,7 +308,7 @@ test("stops an uncooperative agent loop and returns the best grounded Product ou
       async search() { return { products: [product] }; },
       async getProduct() { throw new Error("not used"); },
     },
-    { async analyze() { return brief; } },
+    { async analyze() { return intentAnalysisFor(brief); } },
     {
       async startTurn() {
         return {
@@ -353,7 +362,7 @@ test("denies Catalog calls attempted after the agent loop timeout", async () => 
       },
       async getProduct() { throw new Error("not used"); },
     },
-    { async analyze() { return brief; } },
+    { async analyze() { return intentAnalysisFor(brief); } },
     {
       async startTurn() {
         return {
@@ -392,7 +401,7 @@ test("returns NEEDS_INPUT when a step or token limit is reached without grounded
       async search() { throw new Error("not used"); },
       async getProduct() { throw new Error("not used"); },
     },
-    { async analyze() { return brief; } },
+    { async analyze() { return intentAnalysisFor(brief); } },
     {
       async startTurn() {
         return {
@@ -433,7 +442,7 @@ test("rejects a model completion that references an unobserved Product", async (
       async search() { throw new Error("not used"); },
       async getProduct() { throw new Error("not used"); },
     },
-    { async analyze() { return brief; } },
+    { async analyze() { return intentAnalysisFor(brief); } },
     {
       async startTurn() {
         return {
@@ -510,7 +519,7 @@ test("executes an AI-selected Catalog search through the bounded tool loop", asy
       },
       async getProduct() { throw new Error("not used"); },
     },
-    { async analyze() { return brief; } },
+    { async analyze() { return intentAnalysisFor(brief); } },
     {
       async startTurn() {
         return {
@@ -525,6 +534,21 @@ test("executes an AI-selected Catalog search through the bounded tool loop", asy
 
   const outcome = await agent.respond({ message: "show me running shoes" });
 
+  assert.deepEqual(model.doGenerateCalls[0].prompt.slice(1), [
+    {
+      role: "user",
+      providerOptions: undefined,
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            customerMessage: "show me running shoes",
+            intentBrief: brief,
+          }),
+        },
+      ],
+    },
+  ]);
   assert.deepEqual(catalogSearches, [
     { query: "breathable road running shoes", limit: 5 },
   ]);
@@ -585,7 +609,7 @@ test("uses a grounded fallback when the AI SDK returns output at the five-step l
       },
       async getProduct() { throw new Error("not used"); },
     },
-    { async analyze() { return brief; } },
+    { async analyze() { return intentAnalysisFor(brief); } },
     {
       async startTurn() {
         return {
@@ -636,7 +660,7 @@ test("stops the AI SDK tool loop at its cumulative output-token budget", async (
       async search() { return { products: [product] }; },
       async getProduct() { throw new Error("not used"); },
     },
-    { async analyze() { return brief; } },
+    { async analyze() { return intentAnalysisFor(brief); } },
     {
       async startTurn() {
         return {
@@ -663,7 +687,9 @@ test("returns a COMPLETED outcome with trusted Products and agent-composed langu
     intentBrief?: IntentBrief;
     outcome?: AgentOutcome;
   } = {};
-  const analyzer: IntentAnalyzer = { async analyze() { return brief; } };
+  const analyzer: IntentAnalyzer = {
+    async analyze() { return intentAnalysisFor(brief); },
+  };
   const catalog: CatalogModule = {
     async search() { return { products: [product] }; },
     async getProduct() { throw new Error("not used"); },
@@ -721,7 +747,7 @@ test("returns NEEDS_INPUT with one focused question for a genuinely ambiguous re
       async search() { searched = true; return { products: [] }; },
       async getProduct() { throw new Error("not used"); },
     },
-    { async analyze() { return ambiguousBrief; } },
+    { async analyze() { return intentAnalysisFor(ambiguousBrief); } },
     {
       async startTurn() {
         return {
@@ -822,7 +848,7 @@ test("returns a retryable typed outcome when discovery infrastructure fails", as
       async search() { throw new Error("catalog unavailable"); },
       async getProduct() { throw new Error("not used"); },
     },
-    { async analyze() { return brief; } },
+    { async analyze() { return intentAnalysisFor(brief); } },
     {
       async startTurn() {
         return {
@@ -861,7 +887,7 @@ test("returns a retryable typed outcome when the agent loop fails", async () => 
       async search() { throw new Error("not used"); },
       async getProduct() { throw new Error("not used"); },
     },
-    { async analyze() { return ambiguousBrief; } },
+    { async analyze() { return intentAnalysisFor(ambiguousBrief); } },
     {
       async startTurn() {
         return {
@@ -894,7 +920,7 @@ test("returns a retryable typed outcome when Intent Brief persistence fails", as
       async search() { throw new Error("not used"); },
       async getProduct() { throw new Error("not used"); },
     },
-    { async analyze() { return brief; } },
+    { async analyze() { return intentAnalysisFor(brief); } },
     {
       async startTurn() {
         return {
@@ -926,7 +952,7 @@ test("returns a retryable typed outcome when Agent Outcome persistence fails", a
       async search() { return { products: [product] }; },
       async getProduct() { throw new Error("not used"); },
     },
-    { async analyze() { return brief; } },
+    { async analyze() { return intentAnalysisFor(brief); } },
     {
       async startTurn() {
         return {
@@ -959,10 +985,16 @@ test("persists the Intent Brief and Agent Outcome as inspectable turn metadata",
       return {
         conversationId,
         userMessageId: "51000000-0000-4000-8000-000000000001",
+        context: createEmptyConversationContext(),
       };
     },
-    async findOwner() { return null; },
-    async updateMetadata(messageId, metadata) {
+    async findOwnedContext() { return null; },
+    async saveContextAndMetadata(
+      _conversationId,
+      _context,
+      messageId,
+      metadata,
+    ) {
       metadataUpdates.push({ messageId, metadata });
     },
     async append(_conversationId, role, content, metadata) {
@@ -975,7 +1007,7 @@ test("persists the Intent Brief and Agent Outcome as inspectable turn metadata",
       async search() { return { products: [product] }; },
       async getProduct() { throw new Error("not used"); },
     },
-    { async analyze() { return brief; } },
+    { async analyze() { return intentAnalysisFor(brief); } },
     createConversationModule(
       "11000000-0000-4000-8000-000000000001",
       repository,
@@ -1017,10 +1049,13 @@ test("continues a conversation only for its owning User", async () => {
     async create() {
       throw new Error("not used");
     },
-    async findOwner() {
-      return { userId: "11000000-0000-4000-8000-000000000001" };
+    async findOwnedContext() {
+      return {
+        userId: "11000000-0000-4000-8000-000000000001",
+        context: createEmptyConversationContext(),
+      };
     },
-    async updateMetadata() {},
+    async saveContextAndMetadata() {},
     async append(_conversationId, _role, content) {
       appendedMessages.push(content);
       return "51000000-0000-4000-8000-000000000002";
@@ -1066,10 +1101,18 @@ test("excludes credentials and unnecessary personal data from persisted intent a
       return {
         conversationId,
         userMessageId: "51000000-0000-4000-8000-000000000001",
+        context: createEmptyConversationContext(),
       };
     },
-    async findOwner() { return null; },
-    async updateMetadata(_messageId, metadata) { metadataRecords.push(metadata); },
+    async findOwnedContext() { return null; },
+    async saveContextAndMetadata(
+      _conversationId,
+      _context,
+      _messageId,
+      metadata,
+    ) {
+      metadataRecords.push(metadata);
+    },
     async append(_conversationId, _role, content, metadata) {
       metadataRecords.push({ content, metadata });
       return "51000000-0000-4000-8000-000000000002";
@@ -1080,7 +1123,7 @@ test("excludes credentials and unnecessary personal data from persisted intent a
       async search() { return { products: [product] }; },
       async getProduct() { throw new Error("not used"); },
     },
-    { async analyze() { return sensitiveBrief; } },
+    { async analyze() { return intentAnalysisFor(sensitiveBrief); } },
     createConversationModule(
       "11000000-0000-4000-8000-000000000001",
       repository,

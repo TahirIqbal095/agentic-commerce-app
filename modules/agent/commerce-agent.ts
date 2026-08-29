@@ -6,14 +6,28 @@ import type {
   ProductDetailResult,
 } from "@/modules/catalog/types";
 import { ConversationAccessError } from "./conversation";
-import type { AgentMessage, AgentOutcome, IntentBrief } from "./types";
+import {
+  applyProductConstraintDelta,
+  createEmptyConversationContext,
+  resolveIntentBrief,
+} from "./conversation-context";
+import type {
+  AgentMessage,
+  AgentOutcome,
+  ConversationContext,
+  IntentAnalysis,
+  IntentBrief,
+} from "./types";
 
 export interface CommerceAgent {
   respond(input: AgentMessage): Promise<AgentOutcome>;
 }
 
 export interface IntentAnalyzer {
-  analyze(message: string): Promise<IntentBrief>;
+  analyze(input: {
+    context: ConversationContext;
+    message: string;
+  }): Promise<IntentAnalysis>;
 }
 
 export type CommerceCapabilities = {
@@ -58,7 +72,11 @@ export const MAX_COMMERCE_AGENT_TOOL_PRODUCTS = 8;
 
 type AgentTurn = {
   conversationId: string;
-  recordIntentBrief(intentBrief: IntentBrief): Promise<void>;
+  context?: ConversationContext;
+  recordIntentBrief(
+    intentBrief: IntentBrief,
+    context: ConversationContext,
+  ): Promise<void>;
   complete(assistantMessage: string, outcome: AgentOutcome): Promise<void>;
 };
 
@@ -103,8 +121,18 @@ export function createCommerceAgent(
         };
       }
       let intentBrief: IntentBrief;
+      let nextContext: ConversationContext;
       try {
-        intentBrief = await analyzer.analyze(input.message);
+        const currentContext = turn.context ?? createEmptyConversationContext();
+        const analysis = await analyzer.analyze({
+          context: currentContext,
+          message: input.message,
+        });
+        nextContext = applyProductConstraintDelta(
+          currentContext,
+          analysis.constraintDelta,
+        );
+        intentBrief = resolveIntentBrief(analysis, nextContext);
       } catch {
         const outcome: AgentOutcome = {
           status: "TEMPORARILY_UNAVAILABLE",
@@ -118,7 +146,7 @@ export function createCommerceAgent(
       }
 
       try {
-        await turn.recordIntentBrief(intentBrief);
+        await turn.recordIntentBrief(intentBrief, nextContext);
       } catch {
         return completeTurn(turn, {
           status: "TEMPORARILY_UNAVAILABLE",

@@ -3,16 +3,35 @@ import { db } from "@/db";
 import { conversations, messages } from "@/db/schema/agent";
 import type { JsonObject } from "@/db/schema/types";
 import type { ConversationModule } from "./commerce-agent";
-import type { AgentOutcome, IntentBrief } from "./types";
+import {
+  createEmptyConversationContext,
+  parseConversationContext,
+} from "./conversation-context";
+import type {
+  AgentOutcome,
+  ConversationContext,
+  IntentBrief,
+} from "./types";
 
 type ConversationOwner = { userId: string };
 export interface ConversationRepository {
   create(
     owner: ConversationOwner,
     userMessage: string,
-  ): Promise<{ conversationId: string; userMessageId: string }>;
-  findOwner(conversationId: string): Promise<ConversationOwner | null>;
-  updateMetadata(messageId: string, metadata: JsonObject): Promise<void>;
+  ): Promise<{
+    conversationId: string;
+    userMessageId: string;
+    context: ConversationContext;
+  }>;
+  findOwnedContext(
+    conversationId: string,
+  ): Promise<(ConversationOwner & { context: ConversationContext }) | null>;
+  saveContextAndMetadata(
+    conversationId: string,
+    context: ConversationContext,
+    messageId: string,
+    metadata: JsonObject,
+  ): Promise<void>;
   append(
     conversationId: string,
     role: "USER" | "ASSISTANT",
@@ -31,9 +50,10 @@ export class ConversationAccessError extends Error {
 const postgresConversationRepository: ConversationRepository = {
   async create(owner, userMessage) {
     return db.transaction(async (transaction) => {
+      const context = createEmptyConversationContext();
       const [conversation] = await transaction
         .insert(conversations)
-        .values(owner)
+        .values({ ...owner, context })
         .returning({ id: conversations.id });
       const [message] = await transaction
         .insert(messages)
@@ -43,24 +63,37 @@ const postgresConversationRepository: ConversationRepository = {
           content: userMessage,
         })
         .returning({ id: messages.id });
-      return { conversationId: conversation.id, userMessageId: message.id };
+      return {
+        conversationId: conversation.id,
+        userMessageId: message.id,
+        context,
+      };
     });
   },
-  async findOwner(conversationId) {
-    const [owner] = await db
+  async findOwnedContext(conversationId) {
+    const [ownedContext] = await db
       .select({
         userId: conversations.userId,
+        context: conversations.context,
       })
       .from(conversations)
       .where(eq(conversations.id, conversationId))
       .limit(1);
-    return owner ?? null;
+    return ownedContext
+      ? { ...ownedContext, context: parseConversationContext(ownedContext.context) }
+      : null;
   },
-  async updateMetadata(messageId, metadata) {
-    await db
-      .update(messages)
-      .set({ metadata })
-      .where(eq(messages.id, messageId));
+  async saveContextAndMetadata(conversationId, context, messageId, metadata) {
+    await db.transaction(async (transaction) => {
+      await transaction
+        .update(conversations)
+        .set({ context, updatedAt: new Date() })
+        .where(eq(conversations.id, conversationId));
+      await transaction
+        .update(messages)
+        .set({ metadata })
+        .where(eq(messages.id, messageId));
+    });
   },
   async append(conversationId, role, content, metadata = {}) {
     return db.transaction(async (transaction) => {
@@ -86,26 +119,32 @@ export function createConversationModule(
     async startTurn(input) {
       let conversationId: string;
       let userMessageId: string;
+      let context: ConversationContext;
       if (input.conversationId) {
-        const persistedOwner = await repository.findOwner(input.conversationId);
-        if (!persistedOwner || persistedOwner.userId !== userId)
+        const persisted = await repository.findOwnedContext(input.conversationId);
+        if (!persisted || persisted.userId !== userId)
           throw new ConversationAccessError();
         conversationId = input.conversationId;
+        context = parseConversationContext(persisted.context);
         userMessageId = await repository.append(
           conversationId,
           "USER",
           input.message,
         );
       } else {
-        ({ conversationId, userMessageId } = await repository.create(
+        ({ conversationId, userMessageId, context } = await repository.create(
           owner,
           input.message,
         ));
+        context = parseConversationContext(context);
       }
       return {
         conversationId,
-        async recordIntentBrief(intentBrief) {
-          await repository.updateMetadata(
+        context,
+        async recordIntentBrief(intentBrief, nextContext) {
+          await repository.saveContextAndMetadata(
+            conversationId,
+            nextContext,
             userMessageId,
             sanitizeRecord({
               intentBrief: minimizeIntentBrief(intentBrief),

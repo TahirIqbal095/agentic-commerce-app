@@ -14,11 +14,12 @@ Never invent a constraint the customer did not request.`,
 };
 
 export const intentAnalyzerConfig = {
-  name: "intent_brief_v1",
-  description: "A typed, privacy-minimized summary of customer intent",
-  prompt: `Analyze one customer turn for a Commerce Agent and return an Intent Brief.
+  name: "intent_analysis_v1",
+  description: "Typed changes to bounded Product constraints for one Customer turn",
+  prompt: `Analyze the newest Customer message using the supplied schema-versioned Conversation Context.
 Summarize the customer's shopping goal without copying credentials, contact details, payment data, or unrelated personal information.
-Preserve only explicit Product constraints: product types, use cases, features, category, price bounds in minor INR units, size, availability, and useful attributes.
+Return Product constraint changes only as explicit constraintDelta operations. Put newly stated or replaced constraints in set. Put constraints the Customer explicitly removes in clear. Do not repeat unchanged constraints from Conversation Context in set, and never both set and clear the same constraint.
+Supported Product constraints are product types, use cases, features, category, price bounds in minor INR units, size, availability, and useful attributes. A bare amount such as 4000 means ₹4,000 INR and therefore 400000 paise.
 Record known Product, Product type, and category entities. List only missing information that materially prevents a useful response.
 Set confidence from 0 to 1. Record DISCOVER_PRODUCTS or ADD_TO_CART as requested effects, but treat these as context only; they never authorize an action.
 Never include private reasoning, chain-of-thought, passwords, passcodes, OTPs, tokens, API keys, payment credentials, email addresses, phone numbers, or unnecessary personal data.`,

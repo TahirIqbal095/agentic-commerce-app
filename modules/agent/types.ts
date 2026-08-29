@@ -19,6 +19,43 @@ export type ShoppingIntent = {
   attributes: ShoppingAttributes;
 };
 
+export const PRODUCT_CONSTRAINT_KEYS = [
+  "productTypes",
+  "useCases",
+  "features",
+  "category",
+  "minPriceMinor",
+  "maxPriceMinor",
+  "size",
+  "inStockOnly",
+  "attributes",
+] as const;
+
+export type ProductConstraintKey = (typeof PRODUCT_CONSTRAINT_KEYS)[number];
+
+export type ProductConstraintDelta = {
+  set: Partial<ShoppingIntent>;
+  clear: ProductConstraintKey[];
+};
+
+export type ConversationContext = {
+  schemaVersion: 1;
+  revision: number;
+  productConstraints: ShoppingIntent;
+};
+
+export type IntentAnalysis = {
+  goal: string;
+  constraintDelta: ProductConstraintDelta;
+  knownEntities: Array<{
+    type: "PRODUCT" | "PRODUCT_TYPE" | "CATEGORY";
+    value: string;
+  }>;
+  missingInformation: string[];
+  confidence: number;
+  requestedEffects: Array<"DISCOVER_PRODUCTS" | "ADD_TO_CART">;
+};
+
 export type AddToCartIntent = {
   action: "ADD_TO_CART";
   productName: string;

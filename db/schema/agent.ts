@@ -14,6 +14,7 @@ import { createdAt, id, updatedAt } from "./columns";
 import { agentActionStatusEnum, messageRoleEnum } from "./enums";
 import { users } from "./identity";
 import type { JsonObject } from "./types";
+import type { ConversationContext } from "@/modules/agent/types";
 
 export const conversations = pgTable(
   "conversations",
@@ -25,7 +26,24 @@ export const conversations = pgTable(
     activeCartId: uuid("active_cart_id").references(() => carts.id, {
       onDelete: "set null",
     }),
-    constraints: jsonb("constraints").$type<JsonObject>().notNull().default({}),
+    context: jsonb("context")
+      .$type<ConversationContext>()
+      .notNull()
+      .default({
+        schemaVersion: 1,
+        revision: 0,
+        productConstraints: {
+          productTypes: [],
+          useCases: [],
+          features: [],
+          category: null,
+          minPriceMinor: null,
+          maxPriceMinor: null,
+          size: null,
+          inStockOnly: true,
+          attributes: {},
+        },
+      }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

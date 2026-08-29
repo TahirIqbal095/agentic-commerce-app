@@ -5,8 +5,9 @@ import {
   createAiIntentAnalyzer,
   createAiIntentInterpreter,
 } from "./ai-intent-interpreter";
+import { createEmptyConversationContext } from "./conversation-context";
 
-test("returns a typed Intent Brief for Product discovery", async () => {
+test("returns a typed Intent Analysis for Product discovery", async () => {
   const model = new MockLanguageModelV4({
     doGenerate: async () => ({
       content: [
@@ -14,16 +15,17 @@ test("returns a typed Intent Brief for Product discovery", async () => {
           type: "text",
           text: JSON.stringify({
             goal: "Find breathable shoes for road running",
-            constraints: {
-              productTypes: ["running shoes"],
-              useCases: ["road running"],
-              features: ["breathable"],
-              category: "Footwear",
-              minPriceMinor: null,
-              maxPriceMinor: 500000,
-              size: "UK 9",
-              inStockOnly: true,
-              attributes: { support: "Neutral" },
+            constraintDelta: {
+              set: {
+                productTypes: ["running shoes"],
+                useCases: ["road running"],
+                features: ["breathable"],
+                category: "Footwear",
+                maxPriceMinor: 500000,
+                size: "UK 9",
+                attributes: { support: "Neutral" },
+              },
+              clear: [],
             },
             knownEntities: [
               { type: "PRODUCT_TYPE", value: "running shoes" },
@@ -46,21 +48,23 @@ test("returns a typed Intent Brief for Product discovery", async () => {
   const analyzer = createAiIntentAnalyzer(model);
 
   assert.deepEqual(
-    await analyzer.analyze(
-      "I need breathable road-running shoes under ₹5,000 in UK 9",
-    ),
+    await analyzer.analyze({
+      context: createEmptyConversationContext(),
+      message: "I need breathable road-running shoes under ₹5,000 in UK 9",
+    }),
     {
       goal: "Find breathable shoes for road running",
-      constraints: {
-        productTypes: ["running shoes"],
-        useCases: ["road running"],
-        features: ["breathable"],
-        category: "Footwear",
-        minPriceMinor: null,
-        maxPriceMinor: 500000,
-        size: "UK 9",
-        inStockOnly: true,
-        attributes: { support: "Neutral" },
+      constraintDelta: {
+        set: {
+          productTypes: ["running shoes"],
+          useCases: ["road running"],
+          features: ["breathable"],
+          category: "Footwear",
+          maxPriceMinor: 500000,
+          size: "UK 9",
+          attributes: { support: "Neutral" },
+        },
+        clear: [],
       },
       knownEntities: [{ type: "PRODUCT_TYPE", value: "running shoes" }],
       missingInformation: [],
@@ -72,18 +76,11 @@ test("returns a typed Intent Brief for Product discovery", async () => {
 
 test("retries malformed Intent Brief output once", async () => {
   let attempts = 0;
-  const validBrief = {
+  const validAnalysis = {
     goal: "Find desk lamps",
-    constraints: {
-      productTypes: ["desk lamps"],
-      useCases: [],
-      features: [],
-      category: "Lighting",
-      minPriceMinor: null,
-      maxPriceMinor: null,
-      size: null,
-      inStockOnly: true,
-      attributes: {},
+    constraintDelta: {
+      set: { productTypes: ["desk lamps"], category: "Lighting" },
+      clear: [],
     },
     knownEntities: [{ type: "PRODUCT_TYPE", value: "desk lamps" }],
     missingInformation: [],
@@ -97,7 +94,9 @@ test("retries malformed Intent Brief output once", async () => {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(attempts === 1 ? { goal: "incomplete" } : validBrief),
+            text: JSON.stringify(
+              attempts === 1 ? { goal: "incomplete" } : validAnalysis,
+            ),
           },
         ],
         finishReason: { unified: "stop" as const, raw: "stop" },
@@ -112,7 +111,13 @@ test("retries malformed Intent Brief output once", async () => {
 
   const analyzer = createAiIntentAnalyzer(model);
 
-  assert.deepEqual(await analyzer.analyze("show me desk lamps"), validBrief);
+  assert.deepEqual(
+    await analyzer.analyze({
+      context: createEmptyConversationContext(),
+      message: "show me desk lamps",
+    }),
+    validAnalysis,
+  );
   assert.equal(attempts, 2);
 });
 
@@ -127,17 +132,12 @@ test("rejects undeclared private fields in an Intent Brief", async () => {
             type: "text" as const,
             text: JSON.stringify({
               goal: "Find running shoes",
-              constraints: {
-                productTypes: ["running shoes"],
-                useCases: [],
-                features: [],
-                category: "Footwear",
-                minPriceMinor: null,
-                maxPriceMinor: null,
-                size: null,
-                inStockOnly: true,
-                attributes: {},
-                address: "private address",
+              constraintDelta: {
+                set: {
+                  productTypes: ["running shoes"],
+                  address: "private address",
+                },
+                clear: [],
               },
               knownEntities: [
                 {
@@ -165,7 +165,12 @@ test("rejects undeclared private fields in an Intent Brief", async () => {
 
   const analyzer = createAiIntentAnalyzer(model);
 
-  await assert.rejects(analyzer.analyze("show me running shoes"));
+  await assert.rejects(
+    analyzer.analyze({
+      context: createEmptyConversationContext(),
+      message: "show me running shoes",
+    }),
+  );
   assert.equal(attempts, 2);
 });
 

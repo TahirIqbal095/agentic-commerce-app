@@ -1,8 +1,406 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { CommerceAgent } from "@/modules/agent/commerce-agent";
-import { ConversationAccessError } from "@/modules/agent/conversation";
+import {
+  createCommerceAgent,
+  type CommerceAgent,
+  type CommerceAgentLoop,
+  type IntentAnalyzer,
+} from "@/modules/agent/commerce-agent";
+import type { CatalogModule } from "@/modules/catalog/catalog";
+import {
+  createConversationModule,
+  ConversationAccessError,
+  type ConversationRepository,
+} from "@/modules/agent/conversation";
+import type {
+  ConversationContext,
+  IntentAnalysis,
+  ShoppingIntent,
+} from "@/modules/agent/types";
+import type { CatalogSearch } from "@/modules/catalog/types";
 import { createPostHandler } from "./handler";
+
+const conversationId = "41000000-0000-4000-8000-000000000001";
+const userId = "11000000-0000-4000-8000-000000000001";
+
+function emptyConversationContext(): ConversationContext {
+  return {
+    schemaVersion: 1,
+    revision: 0,
+    productConstraints: {
+      productTypes: [],
+      useCases: [],
+      features: [],
+      category: null,
+      minPriceMinor: null,
+      maxPriceMinor: null,
+      size: null,
+      inStockOnly: true,
+      attributes: {},
+    },
+  };
+}
+
+function createInMemoryConversationRepository(): ConversationRepository {
+  let persistedContext: ConversationContext | undefined;
+  return {
+    async create() {
+      persistedContext = emptyConversationContext();
+      return {
+        conversationId,
+        userMessageId: "51000000-0000-4000-8000-000000000001",
+        context: persistedContext,
+      };
+    },
+    async findOwnedContext() {
+      return persistedContext ? { userId, context: persistedContext } : null;
+    },
+    async saveContextAndMetadata(_conversationId, context) {
+      persistedContext = context;
+    },
+    async append() {
+      return "51000000-0000-4000-8000-000000000002";
+    },
+  };
+}
+
+async function postAgentMessage(
+  POST: (request: Request) => Promise<Response>,
+  body: { conversationId?: string; message: string },
+) {
+  return POST(
+    new Request("http://localhost/api/agent/message", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+function catalogSearchFor(constraints: ShoppingIntent): CatalogSearch {
+  return {
+    productTypes: constraints.productTypes,
+    useCases: constraints.useCases,
+    features: constraints.features,
+    inStockOnly: constraints.inStockOnly,
+    attributes: constraints.attributes,
+    ...(constraints.category === null
+      ? {}
+      : { category: constraints.category }),
+    ...(constraints.minPriceMinor === null
+      ? {}
+      : { minPriceMinor: constraints.minPriceMinor }),
+    ...(constraints.maxPriceMinor === null
+      ? {}
+      : { maxPriceMinor: constraints.maxPriceMinor }),
+    ...(constraints.size === null ? {} : { size: constraints.size }),
+    limit: 8,
+  };
+}
+
+function createConversationPost({
+  repository,
+  analyzer,
+  agentLoop,
+  catalog = {
+    async search() { return { products: [] }; },
+    async getProduct() { throw new Error("not used"); },
+  },
+}: {
+  repository: ConversationRepository;
+  analyzer: IntentAnalyzer;
+  agentLoop: CommerceAgentLoop;
+  catalog?: CatalogModule;
+}) {
+  const agent = createCommerceAgent(
+    catalog,
+    analyzer,
+    createConversationModule(userId, repository),
+    { agentLoop },
+  );
+  return createPostHandler(async () => agent);
+}
+
+test("carries Product constraints across Conversation Turns", async () => {
+  const contextsSeenByAnalyzer: ConversationContext[] = [];
+  const catalogSearches: unknown[] = [];
+  const repository = createInMemoryConversationRepository();
+  const analyses: Record<string, IntentAnalysis> = {
+    "I want shoes": {
+      goal: "Find shoes",
+      constraintDelta: {
+        set: { productTypes: ["shoes"] },
+        clear: [],
+      },
+      knownEntities: [{ type: "PRODUCT_TYPE", value: "shoes" }],
+      missingInformation: [],
+      confidence: 0.95,
+      requestedEffects: ["DISCOVER_PRODUCTS"],
+    },
+    "under 4000": {
+      goal: "Refine Product discovery",
+      constraintDelta: {
+        set: { maxPriceMinor: 400000 },
+        clear: [],
+      },
+      knownEntities: [],
+      missingInformation: [],
+      confidence: 0.95,
+      requestedEffects: ["DISCOVER_PRODUCTS"],
+    },
+  };
+  const analyzer: IntentAnalyzer = {
+    async analyze({ context, message }) {
+      contextsSeenByAnalyzer.push(context);
+      return analyses[message];
+    },
+  };
+  const agent = createCommerceAgent(
+    {
+      async search(input) {
+        catalogSearches.push(input);
+        return { products: [] };
+      },
+      async getProduct() {
+        throw new Error("not used");
+      },
+    },
+    analyzer,
+    createConversationModule(userId, repository),
+    {
+      agentLoop: {
+        async run({ intentBrief, capabilities }) {
+          assert.ok(capabilities.searchProducts);
+          await capabilities.searchProducts(
+            catalogSearchFor(intentBrief.constraints),
+          );
+          return {
+            status: "COMPLETED",
+            message: "I searched the Catalog.",
+            productIds: [],
+          };
+        },
+      },
+    },
+  );
+  const POST = createPostHandler(async () => agent);
+
+  const firstResponse = await postAgentMessage(POST, {
+    message: "I want shoes",
+  });
+  const firstOutcome = await firstResponse.json();
+  const secondResponse = await postAgentMessage(POST, {
+    conversationId: firstOutcome.data.conversationId,
+    message: "under 4000",
+  });
+
+  assert.equal(firstResponse.status, 200);
+  assert.equal(secondResponse.status, 200);
+  assert.equal(firstOutcome.data.conversationId, conversationId);
+  assert.equal((await secondResponse.json()).data.conversationId, conversationId);
+  assert.deepEqual(contextsSeenByAnalyzer, [
+    emptyConversationContext(),
+    {
+      ...emptyConversationContext(),
+      revision: 1,
+      productConstraints: {
+        ...emptyConversationContext().productConstraints,
+        productTypes: ["shoes"],
+      },
+    },
+  ]);
+  assert.deepEqual(catalogSearches.at(-1), {
+    productTypes: ["shoes"],
+    useCases: [],
+    features: [],
+    inStockOnly: true,
+    attributes: {},
+    maxPriceMinor: 400000,
+    limit: 8,
+  });
+});
+
+test("does not mutate Conversation Context when intent interpretation fails", async () => {
+  const contextsSeenByAnalyzer: ConversationContext[] = [];
+  const repository = createInMemoryConversationRepository();
+  const analyzer: IntentAnalyzer = {
+    async analyze({ context, message }) {
+      contextsSeenByAnalyzer.push(context);
+      if (message === "try again") throw new Error("model unavailable");
+      return {
+        goal: message === "I want shoes" ? "Find shoes" : "Set a budget",
+        constraintDelta: {
+          set:
+            message === "I want shoes"
+              ? { productTypes: ["shoes"] }
+              : { maxPriceMinor: 400000 },
+          clear: [],
+        },
+        knownEntities: [],
+        missingInformation: [],
+        confidence: 0.9,
+        requestedEffects: ["DISCOVER_PRODUCTS"],
+      };
+    },
+  };
+  const POST = createConversationPost({
+    repository,
+    analyzer,
+    agentLoop: {
+      async run() {
+        return {
+          status: "COMPLETED",
+          message: "I searched the Catalog.",
+          productIds: [],
+        };
+      },
+    },
+  });
+
+  const first = await postAgentMessage(POST, { message: "I want shoes" });
+  const id = (await first.json()).data.conversationId;
+  const failed = await postAgentMessage(POST, {
+    conversationId: id,
+    message: "try again",
+  });
+  await postAgentMessage(POST, {
+    conversationId: id,
+    message: "under 4000",
+  });
+
+  assert.equal((await failed.json()).data.status, "TEMPORARILY_UNAVAILABLE");
+  assert.deepEqual(contextsSeenByAnalyzer[2], contextsSeenByAnalyzer[1]);
+  assert.equal(contextsSeenByAnalyzer[2].revision, 1);
+  assert.deepEqual(contextsSeenByAnalyzer[2].productConstraints.productTypes, [
+    "shoes",
+  ]);
+});
+
+test("keeps an interpreted preference when later Product discovery fails", async () => {
+  const contextsSeenByAnalyzer: ConversationContext[] = [];
+  const repository = createInMemoryConversationRepository();
+  let discoveryAttempts = 0;
+  const POST = createConversationPost({
+    repository,
+    analyzer: {
+      async analyze({ context, message }) {
+        contextsSeenByAnalyzer.push(context);
+        return {
+          goal: "Refine Product discovery",
+          constraintDelta: {
+            set:
+              message === "I want shoes"
+                ? { productTypes: ["shoes"] }
+                : message === "under 4000"
+                  ? { maxPriceMinor: 400000 }
+                  : {},
+            clear: [],
+          },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.9,
+          requestedEffects: ["DISCOVER_PRODUCTS"],
+        };
+      },
+    },
+    agentLoop: {
+      async run() {
+        discoveryAttempts += 1;
+        if (discoveryAttempts === 2) throw new Error("Catalog unavailable");
+        return {
+          status: "COMPLETED",
+          message: "I searched the Catalog.",
+          productIds: [],
+        };
+      },
+    },
+  });
+
+  const first = await postAgentMessage(POST, { message: "I want shoes" });
+  const id = (await first.json()).data.conversationId;
+  const failed = await postAgentMessage(POST, {
+    conversationId: id,
+    message: "under 4000",
+  });
+  await postAgentMessage(POST, {
+    conversationId: id,
+    message: "show them again",
+  });
+
+  assert.equal((await failed.json()).data.status, "TEMPORARILY_UNAVAILABLE");
+  assert.equal(contextsSeenByAnalyzer[2].revision, 2);
+  assert.deepEqual(contextsSeenByAnalyzer[2].productConstraints, {
+    ...emptyConversationContext().productConstraints,
+    productTypes: ["shoes"],
+    maxPriceMinor: 400000,
+  });
+});
+
+test("applies a typed clear operation without losing other Product constraints", async () => {
+  const catalogSearches: CatalogSearch[] = [];
+  const repository = createInMemoryConversationRepository();
+  const POST = createConversationPost({
+    repository,
+    analyzer: {
+      async analyze({ message }) {
+        return {
+          goal: "Refine Product discovery",
+          constraintDelta:
+            message === "shoes under 4000"
+              ? {
+                  set: {
+                    productTypes: ["shoes"],
+                    maxPriceMinor: 400000,
+                  },
+                  clear: [],
+                }
+              : { set: {}, clear: ["maxPriceMinor"] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.9,
+          requestedEffects: ["DISCOVER_PRODUCTS"],
+        };
+      },
+    },
+    catalog: {
+      async search(input) {
+        catalogSearches.push(input);
+        return { products: [] };
+      },
+      async getProduct() { throw new Error("not used"); },
+    },
+    agentLoop: {
+      async run({ intentBrief, capabilities }) {
+        assert.ok(capabilities.searchProducts);
+        await capabilities.searchProducts(
+          catalogSearchFor(intentBrief.constraints),
+        );
+        return {
+          status: "COMPLETED",
+          message: "I searched the Catalog.",
+          productIds: [],
+        };
+      },
+    },
+  });
+
+  const first = await postAgentMessage(POST, {
+    message: "shoes under 4000",
+  });
+  await postAgentMessage(POST, {
+    conversationId: (await first.json()).data.conversationId,
+    message: "remove the budget",
+  });
+
+  assert.deepEqual(catalogSearches.at(-1), {
+    productTypes: ["shoes"],
+    useCases: [],
+    features: [],
+    inStockOnly: true,
+    attributes: {},
+    limit: 8,
+  });
+});
 
 test("accepts a user prompt without exposing client Brand selection to the agent", async () => {
   const messages: string[] = [];

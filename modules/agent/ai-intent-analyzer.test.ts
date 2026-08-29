@@ -1,20 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MockLanguageModelV4 } from "ai/test";
+import { createEmptyConversationContext } from "./conversation-context";
 import { createAiIntentAnalyzer } from "./ai-intent-interpreter";
 
-const validBrief = {
+const validAnalysis = {
   goal: "Find breathable shoes for road running",
-  constraints: {
-    productTypes: ["running shoes"],
-    useCases: ["road running"],
-    features: ["breathable"],
-    category: "Footwear",
-    minPriceMinor: null,
-    maxPriceMinor: 500000,
-    size: "UK 9",
-    inStockOnly: true,
-    attributes: { support: "Neutral" },
+  constraintDelta: {
+    set: {
+      productTypes: ["running shoes"],
+      useCases: ["road running"],
+      features: ["breathable"],
+      category: "Footwear",
+      maxPriceMinor: 500000,
+      size: "UK 9",
+      attributes: { support: "Neutral" },
+    },
+    clear: [],
   },
   knownEntities: [{ type: "PRODUCT_TYPE", value: "running shoes" }],
   missingInformation: [],
@@ -34,19 +36,36 @@ function modelResponse(value: unknown) {
   };
 }
 
-test("returns a typed Intent Brief for Product discovery", async () => {
+test("returns typed Product constraint set and clear operations", async () => {
   const model = new MockLanguageModelV4({
-    doGenerate: async () => modelResponse(validBrief),
+    doGenerate: async () => modelResponse(validAnalysis),
   });
 
   const analyzer = createAiIntentAnalyzer(model);
 
   assert.deepEqual(
-    await analyzer.analyze(
-      "I need breathable road-running shoes under ₹5,000 in UK 9",
-    ),
-    validBrief,
+    await analyzer.analyze({
+      context: createEmptyConversationContext(),
+      message: "I need breathable road-running shoes under ₹5,000 in UK 9",
+    }),
+    validAnalysis,
   );
+  assert.deepEqual(model.doGenerateCalls[0].prompt.slice(1), [
+    {
+      role: "user",
+      providerOptions: undefined,
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            conversationContext: createEmptyConversationContext(),
+            newestCustomerMessage:
+              "I need breathable road-running shoes under ₹5,000 in UK 9",
+          }),
+        },
+      ],
+    },
+  ]);
 });
 
 test("retries malformed Intent Brief output once", async () => {
@@ -54,13 +73,21 @@ test("retries malformed Intent Brief output once", async () => {
   const model = new MockLanguageModelV4({
     doGenerate: async () => {
       attempts += 1;
-      return modelResponse(attempts === 1 ? { goal: "incomplete" } : validBrief);
+      return modelResponse(
+        attempts === 1 ? { goal: "incomplete" } : validAnalysis,
+      );
     },
   });
 
   const analyzer = createAiIntentAnalyzer(model);
 
-  assert.deepEqual(await analyzer.analyze("show me running shoes"), validBrief);
+  assert.deepEqual(
+    await analyzer.analyze({
+      context: createEmptyConversationContext(),
+      message: "show me running shoes",
+    }),
+    validAnalysis,
+  );
   assert.equal(attempts, 2);
 });
 
@@ -70,7 +97,7 @@ test("rejects undeclared private fields after one retry", async () => {
     doGenerate: async () => {
       attempts += 1;
       return modelResponse({
-        ...validBrief,
+        ...validAnalysis,
         privateChainOfThought: "hidden reasoning",
       });
     },
@@ -78,6 +105,11 @@ test("rejects undeclared private fields after one retry", async () => {
 
   const analyzer = createAiIntentAnalyzer(model);
 
-  await assert.rejects(analyzer.analyze("show me running shoes"));
+  await assert.rejects(
+    analyzer.analyze({
+      context: createEmptyConversationContext(),
+      message: "show me running shoes",
+    }),
+  );
   assert.equal(attempts, 2);
 });

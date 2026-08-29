@@ -7,7 +7,17 @@ import {
   type JSONSchema7,
   type LanguageModel,
 } from "ai";
-import type { CommerceIntent, IntentBrief, ShoppingIntent } from "./types";
+import {
+  applyProductConstraintDelta,
+  createEmptyConversationContext,
+} from "./conversation-context";
+import type {
+  CommerceIntent,
+  ConversationContext,
+  IntentAnalysis,
+  ShoppingIntent,
+} from "./types";
+import { PRODUCT_CONSTRAINT_KEYS } from "./types";
 import {
   intentAnalyzerConfig,
   intentInterpreterConfig,
@@ -131,13 +141,17 @@ const shoppingIntentSchema = jsonSchema<CommerceIntent>(
   },
 );
 
-const intentBriefSchema = jsonSchema<IntentBrief>(
+const shoppingConstraintSchema = (
+  shoppingIntentSchema.jsonSchema as JSONSchema7
+).anyOf![0] as JSONSchema7;
+
+const intentAnalysisSchema = jsonSchema<IntentAnalysis>(
   {
     type: "object",
     additionalProperties: false,
     required: [
       "goal",
-      "constraints",
+      "constraintDelta",
       "knownEntities",
       "missingInformation",
       "confidence",
@@ -145,7 +159,27 @@ const intentBriefSchema = jsonSchema<IntentBrief>(
     ],
     properties: {
       goal: { type: "string", minLength: 1, maxLength: 240 },
-      constraints: (shoppingIntentSchema.jsonSchema as JSONSchema7).anyOf![0],
+      constraintDelta: {
+        type: "object",
+        additionalProperties: false,
+        required: ["set", "clear"],
+        properties: {
+          set: {
+            type: "object",
+            additionalProperties: false,
+            properties: shoppingConstraintSchema.properties,
+          },
+          clear: {
+            type: "array",
+            uniqueItems: true,
+            maxItems: PRODUCT_CONSTRAINT_KEYS.length,
+            items: {
+              type: "string",
+              enum: [...PRODUCT_CONSTRAINT_KEYS],
+            },
+          },
+        },
+      },
       knownEntities: {
         type: "array",
         maxItems: 12,
@@ -181,10 +215,10 @@ const intentBriefSchema = jsonSchema<IntentBrief>(
   },
   {
     validate(value) {
-      if (!isIntentBrief(value)) {
+      if (!isIntentAnalysis(value)) {
         return {
           success: false,
-          error: new Error("The model returned an invalid Intent Brief."),
+          error: new Error("The model returned an invalid Intent Analysis."),
         };
       }
       return { success: true, value };
@@ -274,7 +308,7 @@ function isCommerceIntent(value: unknown): value is CommerceIntent {
   );
 }
 
-function isIntentBrief(value: unknown): value is IntentBrief {
+function isIntentAnalysis(value: unknown): value is IntentAnalysis {
   if (typeof value !== "object" || value === null) return false;
   const brief = value as Record<string, unknown>;
   const knownEntityTypes = new Set(["PRODUCT", "PRODUCT_TYPE", "CATEGORY"]);
@@ -283,7 +317,7 @@ function isIntentBrief(value: unknown): value is IntentBrief {
   return (
     hasExactlyKeys(brief, [
       "goal",
-      "constraints",
+      "constraintDelta",
       "knownEntities",
       "missingInformation",
       "confidence",
@@ -292,7 +326,7 @@ function isIntentBrief(value: unknown): value is IntentBrief {
     typeof brief.goal === "string" &&
     brief.goal.trim().length > 0 &&
     brief.goal.length <= 240 &&
-    isShoppingIntent(brief.constraints) &&
+    isConstraintDelta(brief.constraintDelta) &&
     Array.isArray(brief.knownEntities) &&
     brief.knownEntities.length <= 12 &&
     brief.knownEntities.every((entity) => {
@@ -317,6 +351,21 @@ function isIntentBrief(value: unknown): value is IntentBrief {
   );
 }
 
+function isConstraintDelta(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const delta = value as Record<string, unknown>;
+  if (!hasExactlyKeys(delta, ["set", "clear"])) return false;
+  try {
+    applyProductConstraintDelta(
+      createEmptyConversationContext(),
+      delta as IntentAnalysis["constraintDelta"],
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function hasExactlyKeys(
   value: Record<string, unknown>,
   expectedKeys: string[],
@@ -329,7 +378,10 @@ function hasExactlyKeys(
 }
 
 export interface IntentAnalyzer {
-  analyze(message: string): Promise<IntentBrief>;
+  analyze(input: {
+    context: ConversationContext;
+    message: string;
+  }): Promise<IntentAnalysis>;
 }
 
 export function createAiIntentAnalyzer(
@@ -338,17 +390,20 @@ export function createAiIntentAnalyzer(
   ),
 ): IntentAnalyzer {
   return {
-    async analyze(message) {
+    async analyze(input) {
       for (let attempt = 0; ; attempt += 1) {
         try {
           const { output } = await generateText({
             model,
             system: intentAnalyzerConfig.prompt,
-            prompt: message,
+            prompt: JSON.stringify({
+              conversationContext: input.context,
+              newestCustomerMessage: input.message,
+            }),
             output: Output.object({
               name: intentAnalyzerConfig.name,
               description: intentAnalyzerConfig.description,
-              schema: intentBriefSchema,
+              schema: intentAnalysisSchema,
             }),
           });
           return output;
