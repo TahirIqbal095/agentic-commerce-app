@@ -1,13 +1,16 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 
 import { Composer } from "./_components/shopping-assistant/composer";
 import { Header } from "./_components/shopping-assistant/header";
 import { Hero } from "./_components/shopping-assistant/hero";
 import { ProductDetails } from "./_components/shopping-assistant/product-details";
 import { ResultArea } from "./_components/shopping-assistant/result-area";
-import type { AgentResult } from "./_components/shopping-assistant/types";
+import type {
+  AgentResult,
+  ConversationTurn,
+} from "./_components/shopping-assistant/types";
 import { cn } from "@/lib/utils";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
 
@@ -16,23 +19,26 @@ type AgentApiResponse = { data: AgentResult } | { error: { message: string } };
 export function ShoppingAssistant({ brandName }: { brandName: string }) {
   const [prompt, setPrompt] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [result, setResult] = useState<AgentResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [turns, setTurns] = useState<ConversationTurn[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [submittedMessage, setSubmittedMessage] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] =
     useState<CatalogProduct | null>(null);
   const [cartQuantity, setCartQuantity] = useState(0);
+  const nextTurnId = useRef(0);
 
   async function submitPrompt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const message = prompt.trim();
     if (!message || isLoading) return;
 
-    setSubmittedMessage(message);
+    const turnId = nextTurnId.current;
+    nextTurnId.current += 1;
+    setTurns((currentTurns) => [
+      ...currentTurns,
+      { id: turnId, customerMessage: message, result: null, error: null },
+    ]);
     setPrompt("");
     setIsLoading(true);
-    setError(null);
 
     try {
       const response = await fetch("/api/agent/message", {
@@ -53,7 +59,11 @@ export function ShoppingAssistant({ brandName }: { brandName: string }) {
         );
       }
 
-      setResult(payload.data);
+      setTurns((currentTurns) =>
+        currentTurns.map((turn) =>
+          turn.id === turnId ? { ...turn, result: payload.data } : turn,
+        ),
+      );
       if (payload.data.conversationId) {
         setConversationId(payload.data.conversationId);
       }
@@ -61,10 +71,14 @@ export function ShoppingAssistant({ brandName }: { brandName: string }) {
         setCartQuantity(payload.data.cart.totalQuantity);
       }
     } catch (requestError) {
-      setError(
+      const message =
         requestError instanceof Error
           ? requestError.message
-          : "The assistant could not respond.",
+          : "The assistant could not respond.";
+      setTurns((currentTurns) =>
+        currentTurns.map((turn) =>
+          turn.id === turnId ? { ...turn, error: message } : turn,
+        ),
       );
     } finally {
       setIsLoading(false);
@@ -87,20 +101,16 @@ export function ShoppingAssistant({ brandName }: { brandName: string }) {
         <div
           className={cn(
             "mx-auto flex w-full max-w-4xl flex-1 flex-col py-14 sm:py-20",
-            !result && !isLoading && !error
-              ? "justify-center"
-              : "justify-start",
+            turns.length === 0 ? "justify-center" : "justify-start",
           )}
         >
-          {!result && !isLoading && !error ? (
+          {turns.length === 0 ? (
             <Hero brandName={brandName} onSuggestion={setPrompt} />
           ) : (
             <ResultArea
-              error={error}
               isLoading={isLoading}
               onViewProduct={setSelectedProduct}
-              result={result}
-              submittedMessage={submittedMessage}
+              turns={turns}
             />
           )}
         </div>

@@ -550,3 +550,83 @@ test("Storefront reuses the server conversation identifier on later turns", asyn
     },
   ]);
 });
+
+test("Customer can read earlier Conversation Turns after a later response", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+
+  let turn = 0;
+  globalThis.fetch = async () => {
+    turn += 1;
+    return new Response(
+      JSON.stringify({
+        data: {
+          conversationId: "41000000-0000-4000-8000-000000000001",
+          message:
+            turn === 1
+              ? "Here are running shoes."
+              : "Here are waterproof options.",
+          products: [],
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  const [{ render, cleanup }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+
+  const view = render(
+    React.createElement(ShoppingAssistant, { brandName: "Arc" }),
+  );
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+  const composer = view.getByRole("textbox", {
+    name: "Message the Arc Commerce Agent",
+  });
+
+  await user.type(composer, "show me running shoes");
+  await user.click(view.getByRole("button", { name: "Send" }));
+  await view.findByText("Here are running shoes.");
+  await user.type(composer, "only waterproof ones");
+  await user.click(view.getByRole("button", { name: "Send" }));
+  await view.findByText("Here are waterproof options.");
+
+  assert.equal(
+    view.getByText("show me running shoes").textContent,
+    "show me running shoes",
+  );
+  assert.equal(
+    view.getByText("Here are running shoes.").textContent,
+    "Here are running shoes.",
+  );
+  assert.equal(
+    view.getByText("only waterproof ones").textContent,
+    "only waterproof ones",
+  );
+  assert.equal(
+    view.getByText("Here are waterproof options.").textContent,
+    "Here are waterproof options.",
+  );
+});
