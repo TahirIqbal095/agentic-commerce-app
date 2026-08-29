@@ -12,6 +12,9 @@ import {
   ConversationAccessError,
   type ConversationRepository,
 } from "@/modules/agent/conversation";
+import {
+  createEmptyConversationContext as emptyConversationContext,
+} from "@/modules/agent/conversation-context";
 import type {
   ConversationContext,
   IntentAnalysis,
@@ -22,24 +25,6 @@ import { createPostHandler } from "./handler";
 
 const conversationId = "41000000-0000-4000-8000-000000000001";
 const userId = "11000000-0000-4000-8000-000000000001";
-
-function emptyConversationContext(): ConversationContext {
-  return {
-    schemaVersion: 1,
-    revision: 0,
-    productConstraints: {
-      productTypes: [],
-      useCases: [],
-      features: [],
-      category: null,
-      minPriceMinor: null,
-      maxPriceMinor: null,
-      size: null,
-      inStockOnly: true,
-      attributes: {},
-    },
-  };
-}
 
 function createInMemoryConversationRepository(): ConversationRepository {
   let persistedContext: ConversationContext | undefined;
@@ -169,11 +154,14 @@ test("carries Product constraints across Conversation Turns", async () => {
     createConversationModule(userId, repository),
     {
       agentLoop: {
-        async run({ intentBrief, capabilities }) {
+        async run({ capabilities }) {
           assert.ok(capabilities.searchProducts);
-          await capabilities.searchProducts(
-            catalogSearchFor(intentBrief.constraints),
-          );
+          await capabilities.searchProducts({
+            query: "comfortable footwear",
+            productTypes: ["sandals"],
+            maxPriceMinor: 900000,
+            limit: 8,
+          });
           return {
             status: "COMPLETED",
             message: "I searched the Catalog.",
@@ -210,11 +198,9 @@ test("carries Product constraints across Conversation Turns", async () => {
     },
   ]);
   assert.deepEqual(catalogSearches.at(-1), {
+    query: "comfortable footwear",
     productTypes: ["shoes"],
-    useCases: [],
-    features: [],
     inStockOnly: true,
-    attributes: {},
     maxPriceMinor: 400000,
     limit: 8,
   });
@@ -400,6 +386,173 @@ test("applies a typed clear operation without losing other Product constraints",
     attributes: {},
     limit: 8,
   });
+});
+
+test("reinterprets once when a concurrent turn changes Conversation Context", async () => {
+  const initialContext = emptyConversationContext();
+  const concurrentContext: ConversationContext = {
+    ...initialContext,
+    revision: 1,
+    productConstraints: {
+      ...initialContext.productConstraints,
+      size: "UK 9",
+    },
+  };
+  let persistedContext = initialContext;
+  let saves = 0;
+  const contextsSeenByAnalyzer: ConversationContext[] = [];
+  const catalogSearches: CatalogSearch[] = [];
+  const repository: ConversationRepository = {
+    async create() {
+      return {
+        conversationId,
+        userMessageId: "51000000-0000-4000-8000-000000000001",
+        context: initialContext,
+      };
+    },
+    async findOwnedContext() {
+      return { userId, context: persistedContext };
+    },
+    async saveContextAndMetadata(_id, context) {
+      saves += 1;
+      if (saves === 1) {
+        persistedContext = concurrentContext;
+        return false as never;
+      }
+      persistedContext = context;
+      return true as never;
+    },
+    async append() {
+      return "51000000-0000-4000-8000-000000000002";
+    },
+  };
+  const POST = createConversationPost({
+    repository,
+    analyzer: {
+      async analyze({ context }) {
+        contextsSeenByAnalyzer.push(context);
+        return {
+          goal: "Find shoes",
+          constraintDelta: {
+            set: { productTypes: ["shoes"] },
+            clear: [],
+          },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.9,
+          requestedEffects: ["DISCOVER_PRODUCTS"],
+        };
+      },
+    },
+    catalog: {
+      async search(input) {
+        catalogSearches.push(input);
+        return { products: [] };
+      },
+      async getProduct() { throw new Error("not used"); },
+    },
+    agentLoop: {
+      async run({ capabilities }) {
+        assert.ok(capabilities.searchProducts);
+        await capabilities.searchProducts({ limit: 8 });
+        return {
+          status: "COMPLETED",
+          message: "I searched the Catalog.",
+          productIds: [],
+        };
+      },
+    },
+  });
+
+  const response = await postAgentMessage(POST, { message: "I want shoes" });
+
+  assert.equal(response.status, 200);
+  assert.equal(saves, 2);
+  assert.deepEqual(contextsSeenByAnalyzer, [initialContext, concurrentContext]);
+  assert.deepEqual(catalogSearches, [
+    {
+      productTypes: ["shoes"],
+      size: "UK 9",
+      inStockOnly: true,
+      limit: 8,
+    },
+  ]);
+});
+
+test("returns a retryable response after a second Conversation Context conflict", async () => {
+  let persistedContext = emptyConversationContext();
+  let saves = 0;
+  let discoveryStarted = false;
+  const repository: ConversationRepository = {
+    async create() {
+      return {
+        conversationId,
+        userMessageId: "51000000-0000-4000-8000-000000000001",
+        context: persistedContext,
+      };
+    },
+    async findOwnedContext() {
+      return { userId, context: persistedContext };
+    },
+    async saveContextAndMetadata() {
+      saves += 1;
+      persistedContext = {
+        ...persistedContext,
+        revision: persistedContext.revision + 1,
+        productConstraints: {
+          ...persistedContext.productConstraints,
+          size: saves === 1 ? "UK 9" : "UK 10",
+        },
+      };
+      return false;
+    },
+    async append() {
+      return "51000000-0000-4000-8000-000000000002";
+    },
+  };
+  const POST = createConversationPost({
+    repository,
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Find shoes",
+          constraintDelta: {
+            set: { productTypes: ["shoes"] },
+            clear: [],
+          },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.9,
+          requestedEffects: ["DISCOVER_PRODUCTS"],
+        };
+      },
+    },
+    agentLoop: {
+      async run() {
+        discoveryStarted = true;
+        return {
+          status: "COMPLETED",
+          message: "This must not be reached.",
+          productIds: [],
+        };
+      },
+    },
+  });
+
+  const response = await postAgentMessage(POST, { message: "I want shoes" });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    data: {
+      status: "TEMPORARILY_UNAVAILABLE",
+      conversationId,
+      message: "That conversation changed. Please retry your request.",
+      retryable: true,
+      products: [],
+    },
+  });
+  assert.equal(saves, 2);
+  assert.equal(discoveryStarted, false);
 });
 
 test("accepts a user prompt without exposing client Brand selection to the agent", async () => {

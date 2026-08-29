@@ -55,6 +55,17 @@ function intentAnalysisFor(intentBrief: IntentBrief): IntentAnalysis {
   };
 }
 
+const enforcedBriefConstraints = {
+  productTypes: brief.constraints.productTypes,
+  useCases: brief.constraints.useCases,
+  features: brief.constraints.features,
+  category: brief.constraints.category ?? undefined,
+  maxPriceMinor: brief.constraints.maxPriceMinor ?? undefined,
+  size: brief.constraints.size ?? undefined,
+  inStockOnly: brief.constraints.inStockOnly,
+  attributes: brief.constraints.attributes,
+};
+
 const unusedAgentLoop: CommerceAgentLoop = {
   async run() {
     throw new Error("not used");
@@ -131,7 +142,7 @@ test("lets the Commerce Agent choose from only the permitted Catalog capabilitie
   assert.deepEqual(catalogSearches, [
     {
       query: "breathable road running shoes",
-      inStockOnly: true,
+      ...enforcedBriefConstraints,
       limit: 5,
     },
   ]);
@@ -237,7 +248,9 @@ test("bounds Catalog search inputs and results exposed to the Commerce Agent", a
 
   const outcome = await agent.respond({ message: "show me running shoes" });
 
-  assert.deepEqual(catalogSearches, [{ query: "running shoes", limit: 8 }]);
+  assert.deepEqual(catalogSearches, [
+    { query: "running shoes", ...enforcedBriefConstraints, limit: 8 },
+  ]);
   assert.equal(outcome.products.length, 8);
 });
 
@@ -550,7 +563,11 @@ test("executes an AI-selected Catalog search through the bounded tool loop", asy
     },
   ]);
   assert.deepEqual(catalogSearches, [
-    { query: "breathable road running shoes", limit: 5 },
+    {
+      query: "breathable road running shoes",
+      ...enforcedBriefConstraints,
+      limit: 5,
+    },
   ]);
   assert.deepEqual(outcome, {
     status: "COMPLETED",

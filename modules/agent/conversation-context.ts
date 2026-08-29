@@ -132,7 +132,7 @@ function assignConstraint<Key extends ProductConstraintKey>(
   constraints[key] = value;
 }
 
-function isShoppingIntent(value: unknown): value is ShoppingIntent {
+export function isShoppingIntent(value: unknown): value is ShoppingIntent {
   if (typeof value !== "object" || value === null) return false;
   const intent = value as Record<string, unknown>;
   return (
@@ -182,7 +182,7 @@ function isShoppingAttributes(
         key.length > 0 &&
         key.length <= 60 &&
         ((typeof attribute === "string" && attribute.length <= 160) ||
-          typeof attribute === "number" ||
+          (typeof attribute === "number" && Number.isFinite(attribute)) ||
           typeof attribute === "boolean"),
     )
   );

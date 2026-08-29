@@ -1,4 +1,4 @@
-import { CatalogProduct } from "../catalog/types";
+import type { CatalogProduct } from "../catalog/types";
 
 export type AgentMessage = {
   conversationId?: string;

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { conversations, messages } from "@/db/schema/agent";
 import type { JsonObject } from "@/db/schema/types";
@@ -31,7 +31,7 @@ export interface ConversationRepository {
     context: ConversationContext,
     messageId: string,
     metadata: JsonObject,
-  ): Promise<void>;
+  ): Promise<boolean | void>;
   append(
     conversationId: string,
     role: "USER" | "ASSISTANT",
@@ -84,15 +84,23 @@ const postgresConversationRepository: ConversationRepository = {
       : null;
   },
   async saveContextAndMetadata(conversationId, context, messageId, metadata) {
-    await db.transaction(async (transaction) => {
-      await transaction
+    return db.transaction(async (transaction) => {
+      const [updated] = await transaction
         .update(conversations)
         .set({ context, updatedAt: new Date() })
-        .where(eq(conversations.id, conversationId));
+        .where(
+          and(
+            eq(conversations.id, conversationId),
+            sql`${conversations.context}->>'revision' = ${String(context.revision - 1)}`,
+          ),
+        )
+        .returning({ id: conversations.id });
+      if (!updated) return false;
       await transaction
         .update(messages)
         .set({ metadata })
         .where(eq(messages.id, messageId));
+      return true;
     });
   },
   async append(conversationId, role, content, metadata = {}) {
@@ -141,8 +149,15 @@ export function createConversationModule(
       return {
         conversationId,
         context,
+        async reloadContext() {
+          const persisted = await repository.findOwnedContext(conversationId);
+          if (!persisted || persisted.userId !== userId) {
+            throw new ConversationAccessError();
+          }
+          return parseConversationContext(persisted.context);
+        },
         async recordIntentBrief(intentBrief, nextContext) {
-          await repository.saveContextAndMetadata(
+          return repository.saveContextAndMetadata(
             conversationId,
             nextContext,
             userMessageId,

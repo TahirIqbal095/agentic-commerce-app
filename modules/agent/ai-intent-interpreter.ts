@@ -10,12 +10,12 @@ import {
 import {
   applyProductConstraintDelta,
   createEmptyConversationContext,
+  isShoppingIntent,
 } from "./conversation-context";
 import type {
   CommerceIntent,
   ConversationContext,
   IntentAnalysis,
-  ShoppingIntent,
 } from "./types";
 import { PRODUCT_CONSTRAINT_KEYS } from "./types";
 import {
@@ -231,65 +231,6 @@ function isStringArray(value: unknown): value is string[] {
     Array.isArray(value) &&
     value.length <= 8 &&
     value.every((item) => typeof item === "string" && item.trim().length > 0)
-  );
-}
-
-function isOptionalPrice(value: unknown): value is number | null {
-  return value === null || (Number.isSafeInteger(value) && Number(value) >= 0);
-}
-
-function isOptionalText(value: unknown): value is string | null {
-  return (
-    value === null || (typeof value === "string" && value.trim().length > 0)
-  );
-}
-
-function isShoppingAttributes(
-  value: unknown,
-): value is Record<string, string | number | boolean> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.values(value).every(
-      (attribute) =>
-        typeof attribute === "string" ||
-        typeof attribute === "number" ||
-        typeof attribute === "boolean",
-    )
-  );
-}
-
-function isShoppingIntent(value: unknown): value is ShoppingIntent {
-  if (typeof value !== "object" || value === null) return false;
-
-  const intent = value as Record<string, unknown>;
-  return (
-    hasExactlyKeys(intent, [
-      "productTypes",
-      "useCases",
-      "features",
-      "category",
-      "minPriceMinor",
-      "maxPriceMinor",
-      "size",
-      "inStockOnly",
-      "attributes",
-    ]) &&
-    isStringArray(intent.productTypes) &&
-    isStringArray(intent.useCases) &&
-    isStringArray(intent.features) &&
-    (intent.category === null ||
-      (typeof intent.category === "string" &&
-        intent.category.trim().length > 0)) &&
-    isOptionalPrice(intent.minPriceMinor) &&
-    isOptionalPrice(intent.maxPriceMinor) &&
-    isOptionalText(intent.size) &&
-    typeof intent.inStockOnly === "boolean" &&
-    isShoppingAttributes(intent.attributes) &&
-    (intent.minPriceMinor === null ||
-      intent.maxPriceMinor === null ||
-      Number(intent.minPriceMinor) <= Number(intent.maxPriceMinor))
   );
 }
 

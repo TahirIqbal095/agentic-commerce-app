@@ -14,6 +14,7 @@ import { createdAt, id, updatedAt } from "./columns";
 import { agentActionStatusEnum, messageRoleEnum } from "./enums";
 import { users } from "./identity";
 import type { JsonObject } from "./types";
+import { createEmptyConversationContext } from "@/modules/agent/conversation-context";
 import type { ConversationContext } from "@/modules/agent/types";
 
 export const conversations = pgTable(
@@ -29,21 +30,7 @@ export const conversations = pgTable(
     context: jsonb("context")
       .$type<ConversationContext>()
       .notNull()
-      .default({
-        schemaVersion: 1,
-        revision: 0,
-        productConstraints: {
-          productTypes: [],
-          useCases: [],
-          features: [],
-          category: null,
-          minPriceMinor: null,
-          maxPriceMinor: null,
-          size: null,
-          inStockOnly: true,
-          attributes: {},
-        },
-      }),
+      .default(createEmptyConversationContext()),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

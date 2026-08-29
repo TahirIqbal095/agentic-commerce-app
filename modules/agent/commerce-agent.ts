@@ -76,7 +76,8 @@ type AgentTurn = {
   recordIntentBrief(
     intentBrief: IntentBrief,
     context: ConversationContext,
-  ): Promise<void>;
+  ): Promise<boolean | void>;
+  reloadContext?(): Promise<ConversationContext>;
   complete(assistantMessage: string, outcome: AgentOutcome): Promise<void>;
 };
 
@@ -120,42 +121,50 @@ export function createCommerceAgent(
           products: [],
         };
       }
-      let intentBrief: IntentBrief;
-      let nextContext: ConversationContext;
-      try {
-        const currentContext = turn.context ?? createEmptyConversationContext();
-        const analysis = await analyzer.analyze({
-          context: currentContext,
-          message: input.message,
-        });
-        nextContext = applyProductConstraintDelta(
-          currentContext,
-          analysis.constraintDelta,
-        );
-        intentBrief = resolveIntentBrief(analysis, nextContext);
-      } catch {
-        const outcome: AgentOutcome = {
-          status: "TEMPORARILY_UNAVAILABLE",
-          conversationId: turn.conversationId,
-          message:
-            "I couldn't understand that request right now. Please try again.",
-          retryable: true,
-          products: [],
-        };
-        return completeTurn(turn, outcome);
-      }
+      let intentBrief!: IntentBrief;
+      let currentContext = turn.context ?? createEmptyConversationContext();
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        let nextContext: ConversationContext;
+        try {
+          const analysis = await analyzer.analyze({
+            context: currentContext,
+            message: input.message,
+          });
+          nextContext = applyProductConstraintDelta(
+            currentContext,
+            analysis.constraintDelta,
+          );
+          intentBrief = resolveIntentBrief(analysis, nextContext);
+        } catch {
+          const outcome: AgentOutcome = {
+            status: "TEMPORARILY_UNAVAILABLE",
+            conversationId: turn.conversationId,
+            message:
+              "I couldn't understand that request right now. Please try again.",
+            retryable: true,
+            products: [],
+          };
+          return completeTurn(turn, outcome);
+        }
 
-      try {
-        await turn.recordIntentBrief(intentBrief, nextContext);
-      } catch {
-        return completeTurn(turn, {
-          status: "TEMPORARILY_UNAVAILABLE",
-          conversationId: turn.conversationId,
-          message: "I couldn't save that request right now. Please try again.",
-          retryable: true,
-          intentBrief,
-          products: [],
-        });
+        try {
+          const saved = await turn.recordIntentBrief(intentBrief, nextContext);
+          if (saved !== false) break;
+          if (attempt === 1 || !turn.reloadContext) {
+            return completeTurn(turn, contextConflictOutcome(turn.conversationId));
+          }
+          currentContext = await turn.reloadContext();
+        } catch {
+          return completeTurn(turn, {
+            status: "TEMPORARILY_UNAVAILABLE",
+            conversationId: turn.conversationId,
+            message:
+              "I couldn't save that request right now. Please try again.",
+            retryable: true,
+            intentBrief,
+            products: [],
+          });
+        }
       }
       let loopResult: CommerceAgentLoopResult;
       const observedProducts = new Map<string, CatalogProduct>();
@@ -256,6 +265,16 @@ export function createCommerceAgent(
   };
 }
 
+function contextConflictOutcome(conversationId: string): AgentOutcome {
+  return {
+    status: "TEMPORARILY_UNAVAILABLE",
+    conversationId,
+    message: "That conversation changed. Please retry your request.",
+    retryable: true,
+    products: [],
+  };
+}
+
 function resolveCapabilities({
   catalog,
   intentBrief,
@@ -282,6 +301,15 @@ function resolveCapabilities({
       assertLoopActive();
       const result = await catalog.search({
         ...search,
+        ...activeProductConstraints(intentBrief.constraints),
+        ...(Object.keys(intentBrief.constraints.attributes).length > 0
+          ? {
+              attributes: {
+                ...search.attributes,
+                ...intentBrief.constraints.attributes,
+              },
+            }
+          : {}),
         limit: Math.max(1, Math.min(search.limit, limits.maxToolProducts)),
       });
       assertLoopActive();
@@ -298,6 +326,33 @@ function resolveCapabilities({
       if (result.ok) observedProducts.set(result.value.id, result.value);
       return result;
     },
+  };
+}
+
+function activeProductConstraints(
+  constraints: IntentBrief["constraints"],
+): Omit<CatalogSearch, "limit"> {
+  return {
+    ...(constraints.productTypes.length > 0
+      ? { productTypes: constraints.productTypes }
+      : {}),
+    ...(constraints.useCases.length > 0
+      ? { useCases: constraints.useCases }
+      : {}),
+    ...(constraints.features.length > 0
+      ? { features: constraints.features }
+      : {}),
+    ...(constraints.category === null
+      ? {}
+      : { category: constraints.category }),
+    ...(constraints.minPriceMinor === null
+      ? {}
+      : { minPriceMinor: constraints.minPriceMinor }),
+    ...(constraints.maxPriceMinor === null
+      ? {}
+      : { maxPriceMinor: constraints.maxPriceMinor }),
+    ...(constraints.size === null ? {} : { size: constraints.size }),
+    inStockOnly: constraints.inStockOnly,
   };
 }
 
