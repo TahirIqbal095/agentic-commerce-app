@@ -14,15 +14,37 @@ export function ContextSummary({
   disabled: boolean;
   onRemove: (key: ProductConstraintKey) => void;
 }) {
-  const items: Array<{ key: ProductConstraintKey; label: string; value: string }> = [
+  const items: Array<{
+    key: ProductConstraintKey;
+    label: string;
+    value: string;
+  }> = [
     ...(constraints.productTypes.length
-      ? [{ key: "productTypes" as const, label: "Product type", value: constraints.productTypes.join(", ") }]
+      ? [
+          {
+            key: "productTypes" as const,
+            label: "Product type",
+            value: constraints.productTypes.join(", "),
+          },
+        ]
       : []),
     ...(constraints.maxPriceMinor !== null
-      ? [{ key: "maxPriceMinor" as const, label: "Maximum price", value: formatMoney(constraints.maxPriceMinor, "INR") }]
+      ? [
+          {
+            key: "maxPriceMinor" as const,
+            label: "Maximum price",
+            value: formatMoney(constraints.maxPriceMinor, "INR"),
+          },
+        ]
       : []),
     ...(constraints.minPriceMinor !== null
-      ? [{ key: "minPriceMinor" as const, label: "Minimum price", value: formatMoney(constraints.minPriceMinor, "INR") }]
+      ? [
+          {
+            key: "minPriceMinor" as const,
+            label: "Minimum price",
+            value: formatMoney(constraints.minPriceMinor, "INR"),
+          },
+        ]
       : []),
     ...(constraints.category
       ? [{ key: "category" as const, label: "Category", value: constraints.category }]
@@ -31,19 +53,33 @@ export function ContextSummary({
       ? [{ key: "size" as const, label: "Size", value: constraints.size }]
       : []),
     ...(constraints.features.length
-      ? [{ key: "features" as const, label: "Features", value: constraints.features.join(", ") }]
+      ? [
+          {
+            key: "features" as const,
+            label: "Features",
+            value: constraints.features.join(", "),
+          },
+        ]
       : []),
     ...(constraints.useCases.length
-      ? [{ key: "useCases" as const, label: "Use cases", value: constraints.useCases.join(", ") }]
+      ? [
+          {
+            key: "useCases" as const,
+            label: "Use cases",
+            value: constraints.useCases.join(", "),
+          },
+        ]
       : []),
     ...(Object.keys(constraints.attributes).length
-      ? [{
-          key: "attributes" as const,
-          label: "Product details",
-          value: Object.entries(constraints.attributes)
-            .map(([key, value]) => `${key}: ${String(value)}`)
-            .join(", "),
-        }]
+      ? [
+          {
+            key: "attributes" as const,
+            label: "Product details",
+            value: Object.entries(constraints.attributes)
+              .map(([key, value]) => `${key}: ${String(value)}`)
+              .join(", "),
+          },
+        ]
       : []),
     ...(constraints.inStockOnly
       ? [{ key: "inStockOnly" as const, label: "Availability", value: "In stock" }]
@@ -52,9 +88,19 @@ export function ContextSummary({
   if (items.length === 0) return null;
 
   return (
-    <aside aria-label="Context Summary" className="mb-8 rounded-2xl border border-[#1d2a24]/10 bg-white/45 p-4">
-      <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#708176]">Active preferences</p>
-      <div className="flex flex-wrap gap-2">
+    <aside
+      aria-label="Context Summary"
+      className="mb-8 rounded-2xl border border-[#1d2a24]/8 bg-white/55 p-4 shadow-sm shadow-[#1d2a24]/4 sm:p-5"
+    >
+      <div className="mb-3 flex items-center justify-between gap-4">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#708176]">
+          Active preferences
+        </p>
+        <p className="rounded-full bg-[#e5ebe3] px-2.5 py-1 text-[11px] font-medium text-[#526158]">
+          {`${items.length} active ${items.length === 1 ? "preference" : "preferences"}`}
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-2.5">
         {items.map((item) => (
           <button
             key={item.key}
@@ -62,9 +108,12 @@ export function ContextSummary({
             disabled={disabled}
             aria-label={`Remove ${item.label.toLowerCase()} constraint`}
             onClick={() => onRemove(item.key)}
-            className="inline-flex items-center gap-2 rounded-full border border-[#1d2a24]/10 bg-white px-3 py-1.5 text-xs text-[#526158]"
+            className="inline-flex min-h-8 max-w-full items-center gap-2 rounded-full border border-[#1d2a24]/8 bg-white/85 px-3 py-1.5 text-left text-xs leading-5 text-[#526158] shadow-xs transition-colors hover:border-[#1d2a24]/20 hover:bg-white disabled:opacity-50"
           >
-            <span>{item.label}: {item.value}</span><X className="size-3" />
+            <span>
+              {item.label}: {item.value}
+            </span>
+            <X className="size-3 shrink-0" />
           </button>
         ))}
       </div>

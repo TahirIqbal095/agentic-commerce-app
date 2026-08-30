@@ -1,13 +1,12 @@
-import { PackageSearch } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
-import { Card, CardContent } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
 import { AgentMessage } from "./agent-message";
 import { AgentProgress } from "./agent-progress";
 import { CustomerMessage } from "./customer-message";
 import { IntentSummary } from "./intent-summary";
-import { ProductCard } from "./product-card";
+import { RecommendationCarousel } from "./recommendation-carousel";
 import type { ConversationTurn } from "./types";
 
 export function ResultArea({
@@ -32,6 +31,7 @@ export function ResultArea({
           turn.result?.intentBrief?.constraints ?? turn.result?.intent;
         const isPending =
           isLoading && turn.result === null && turn.error === null;
+        const isNeedsInput = turn.result?.status === "NEEDS_INPUT";
 
         return (
           <div key={turn.id} className="space-y-7">
@@ -74,31 +74,27 @@ export function ResultArea({
                 >
                   <AgentMessage>
                     <div className="mb-8 flex flex-col gap-5">
-                      <p className="max-w-3xl text-balance text-2xl font-medium leading-snug tracking-[-0.025em] sm:text-3xl">
+                      <p
+                        className={cn(
+                          "max-w-3xl text-balance font-medium",
+                          isNeedsInput
+                            ? "text-base leading-7 sm:text-lg"
+                            : "text-2xl leading-snug tracking-[-0.025em] sm:text-3xl",
+                        )}
+                      >
                         {turn.result.message}
                       </p>
-                      {intent ? <IntentSummary intent={intent} /> : null}
+                      {intent && !isNeedsInput ? (
+                        <IntentSummary intent={intent} />
+                      ) : null}
                     </div>
 
                     {turn.result.products.length > 0 ? (
-                      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                        {turn.result.products.map((product, index) => (
-                          <ProductCard
-                            key={product.id}
-                            product={product}
-                            index={index}
-                            onView={() => onViewProduct(product)}
-                          />
-                        ))}
-                      </div>
-                    ) : turn.result.cart ? null : (
-                      <Card className="border-[#1d2a24]/10 border-dashed bg-white/35 py-10 text-center shadow-none">
-                        <CardContent className="pb-0">
-                          <PackageSearch className="mx-auto mb-4 size-7 opacity-50" />
-                          <p>No close matches yet. Try broadening the request.</p>
-                        </CardContent>
-                      </Card>
-                    )}
+                      <RecommendationCarousel
+                        products={turn.result.products}
+                        onViewProduct={onViewProduct}
+                      />
+                    ) : null}
                   </AgentMessage>
                 </motion.div>
               ) : null}

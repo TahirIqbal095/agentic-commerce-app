@@ -95,7 +95,7 @@ test("customer can read one Commerce Agent progress update beside their submitte
   assert.equal(view.queryByText("Preparing your shortlist"), null);
 });
 
-test("customer can submit a request and read product results above the persistent composer", async () => {
+test("customer can submit a request and read product results above the persistent composer", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
@@ -150,6 +150,24 @@ test("customer can submit a request and read product results above the persisten
               currency: "INR",
               inStock: true,
             },
+            {
+              id: "product-2",
+              name: "Studio Max",
+              description: "Over-ear headphones for focused listening.",
+              category: "Audio",
+              priceMinor: 449900,
+              currency: "INR",
+              inStock: true,
+            },
+            {
+              id: "product-3",
+              name: "Travel Pods",
+              description: "Lightweight earphones for daily travel.",
+              category: "Audio",
+              priceMinor: 299900,
+              currency: "INR",
+              inStock: false,
+            },
           ],
         },
       }),
@@ -157,7 +175,7 @@ test("customer can submit a request and read product results above the persisten
     );
   };
 
-  const [{ render, cleanup }, userEvent, { ShoppingAssistant }] =
+  const [{ render, cleanup, within }, userEvent, { ShoppingAssistant }] =
     await Promise.all([
       import("@testing-library/react"),
       import("@testing-library/user-event").then((module) => module.default),
@@ -167,6 +185,10 @@ test("customer can submit a request and read product results above the persisten
   const view = render(
     React.createElement(ShoppingAssistant, { brandName: "Arc" }),
   );
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
   const user = userEvent.setup({ document: dom.window.document });
   const composer = view.getByRole("textbox", {
     name: "Message the Arc Commerce Agent",
@@ -177,6 +199,14 @@ test("customer can submit a request and read product results above the persisten
   await user.click(view.getByRole("button", { name: "Send" }));
 
   const product = await view.findByRole("heading", { name: "Quiet Buds" });
+  const recommendationSet = view.queryByRole("region", {
+    name: "Recommendation Set",
+  });
+  assert.ok(
+    recommendationSet,
+    "expected an accessible Recommendation Set region",
+  );
+  const recommendationView = within(recommendationSet);
   const form = composer.closest("form");
 
   assert.equal(fetchCalls.length, 1);
@@ -197,10 +227,316 @@ test("customer can submit a request and read product results above the persisten
     view.getByText("noise cancelling").textContent?.trim(),
     "noise cancelling",
   );
+  assert.equal(recommendationSet.getAttribute("tabindex"), "0");
+  assert.deepEqual(
+    recommendationView
+      .getAllByRole("heading")
+      .map((heading) => heading.textContent),
+    ["Quiet Buds", "Studio Max", "Travel Pods"],
+  );
   assert.equal((composer as HTMLInputElement).value, "");
 
-  cleanup();
-  dom.window.close();
+});
+
+test("Customer sees a clarification question without discovery-only presentation", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+
+  const constraints = {
+    ...createEmptyConversationContext().productConstraints,
+    category: "Audio",
+  };
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        data: {
+          status: "NEEDS_INPUT",
+          conversationId: "41000000-0000-4000-8000-000000000001",
+          message: "What kind of audio Product would suit you best?",
+          question: "What kind of audio Product would suit you best?",
+          missingInformation: ["product type"],
+          intentBrief: {
+            goal: "Find an audio Product",
+            constraints,
+            knownEntities: [{ type: "CATEGORY", value: "Audio" }],
+            missingInformation: ["product type"],
+            confidence: 0.7,
+            requestedEffects: ["DISCOVER_PRODUCTS"],
+          },
+          products: [],
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+
+  const [{ render, cleanup, within }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(
+    React.createElement(ShoppingAssistant, { brandName: "Arc" }),
+  );
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  await user.type(
+    view.getByRole("textbox", { name: "Message the Arc Commerce Agent" }),
+    "I need something for listening",
+  );
+  await user.click(view.getByRole("button", { name: "Send" }));
+
+  assert.equal(
+    (await view.findByText("What kind of audio Product would suit you best?"))
+      .textContent,
+    "What kind of audio Product would suit you best?",
+  );
+  assert.equal(
+    Boolean(
+      view.queryByText("No close matches yet. Try broadening the request."),
+    ),
+    false,
+  );
+  const contextSummary = view.getByRole("complementary", {
+    name: "Context Summary",
+  });
+  assert.equal(
+    within(contextSummary).getByText("Category: Audio").textContent,
+    "Category: Audio",
+  );
+  assert.equal(Boolean(view.queryByText("Audio")), false);
+});
+
+test("Customer sees authoritative Commerce Agent messages for zero-Product responses", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+
+  const constraints = createEmptyConversationContext().productConstraints;
+  const [{ render, cleanup }, { ShoppingAssistant }] = await Promise.all([
+    import("@testing-library/react"),
+    import("./shopping-assistant"),
+  ]);
+  const view = render(
+    React.createElement(ShoppingAssistant, {
+      brandName: "Arc",
+      initialConversation: {
+        conversationId: "41000000-0000-4000-8000-000000000001",
+        transcript: [
+          {
+            id: "51000000-0000-4000-8000-000000000001",
+            customerMessage: "Show me emerald headphones",
+            result: {
+              status: "COMPLETED",
+              conversationId: "41000000-0000-4000-8000-000000000001",
+              message: "There are no emerald headphones in the Catalog today.",
+              intentBrief: {
+                goal: "Find emerald headphones",
+                constraints,
+                knownEntities: [],
+                missingInformation: [],
+                confidence: 0.94,
+                requestedEffects: ["DISCOVER_PRODUCTS"],
+              },
+              products: [],
+            },
+            error: null,
+          },
+          {
+            id: "51000000-0000-4000-8000-000000000002",
+            customerMessage: "Try again",
+            result: {
+              status: "TEMPORARILY_UNAVAILABLE",
+              conversationId: "41000000-0000-4000-8000-000000000001",
+              message: "The Catalog is temporarily unavailable. Please try again.",
+              retryable: true,
+              products: [],
+            },
+            error: null,
+          },
+        ],
+        contextSummary: constraints,
+        revision: 2,
+      },
+    }),
+  );
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+
+  assert.equal(
+    view.getByText("There are no emerald headphones in the Catalog today.")
+      .textContent,
+    "There are no emerald headphones in the Catalog today.",
+  );
+  assert.equal(
+    view.getByText("The Catalog is temporarily unavailable. Please try again.")
+      .textContent,
+    "The Catalog is temporarily unavailable. Please try again.",
+  );
+  assert.equal(
+    Boolean(
+      view.queryByText("No close matches yet. Try broadening the request."),
+    ),
+    false,
+  );
+});
+
+test("Customer can navigate a Recommendation Set one Product at a time", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+
+  const products = ["Quiet Buds", "Studio Max", "Travel Pods"].map(
+    (name, index) => ({
+      id: `product-${index + 1}`,
+      slug: name.toLowerCase().replaceAll(" ", "-"),
+      name,
+      description: `${name} description.`,
+      category: "Audio",
+      priceMinor: 299900 + index * 50000,
+      currency: "INR",
+      inStock: true,
+      attributes: {},
+    }),
+  );
+  const constraints = createEmptyConversationContext().productConstraints;
+  const [{ render, cleanup, act }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(
+    React.createElement(ShoppingAssistant, {
+      brandName: "Arc",
+      initialConversation: {
+        conversationId: "41000000-0000-4000-8000-000000000001",
+        transcript: [
+          {
+            id: "51000000-0000-4000-8000-000000000001",
+            customerMessage: "Show me headphones",
+            result: {
+              status: "COMPLETED",
+              conversationId: "41000000-0000-4000-8000-000000000001",
+              message: "Here are three options.",
+              intentBrief: {
+                goal: "Find headphones",
+                constraints,
+                knownEntities: [],
+                missingInformation: [],
+                confidence: 0.95,
+                requestedEffects: ["DISCOVER_PRODUCTS"],
+              },
+              products,
+            },
+            error: null,
+          },
+        ],
+        contextSummary: constraints,
+        revision: 1,
+      },
+    }),
+  );
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+  const recommendationSet = view.getByRole("region", {
+    name: "Recommendation Set",
+  });
+  let scrollLeft = 0;
+  Object.defineProperties(recommendationSet, {
+    clientWidth: { configurable: true, value: 640 },
+    scrollWidth: { configurable: true, value: 960 },
+    scrollLeft: {
+      configurable: true,
+      get: () => scrollLeft,
+      set: (value: number) => {
+        scrollLeft = value;
+      },
+    },
+  });
+  const firstRecommendation = recommendationSet.firstElementChild;
+  assert.ok(firstRecommendation instanceof dom.window.HTMLElement);
+  Object.defineProperty(firstRecommendation, "offsetWidth", {
+    configurable: true,
+    value: 300,
+  });
+  Object.defineProperty(recommendationSet, "scrollBy", {
+    configurable: true,
+    value: ({ left = 0 }: ScrollToOptions) => {
+      scrollLeft = Math.max(0, Math.min(320, scrollLeft + left));
+      recommendationSet.dispatchEvent(new dom.window.Event("scroll"));
+    },
+  });
+
+  await act(async () => {
+    recommendationSet.dispatchEvent(new dom.window.Event("scroll"));
+  });
+
+  const previous = view.queryByRole("button", {
+    name: "Previous Recommendation",
+  });
+  const next = view.queryByRole("button", { name: "Next Recommendation" });
+  assert.ok(previous, "expected a previous Recommendation control");
+  assert.ok(next, "expected a next Recommendation control");
+  assert.equal(previous.hasAttribute("disabled"), true);
+  assert.equal(next.hasAttribute("disabled"), false);
+
+  await user.click(next);
+  assert.equal(scrollLeft, 300);
+  assert.equal(previous.hasAttribute("disabled"), false);
+
+  scrollLeft = 320;
+  await act(async () => {
+    recommendationSet.dispatchEvent(new dom.window.Event("scroll"));
+  });
+  assert.equal(next.hasAttribute("disabled"), true);
+
+  await user.click(previous);
+  assert.equal(scrollLeft, 20);
+  assert.equal(next.hasAttribute("disabled"), false);
 });
 
 test("customer can request and read the details of a product", async (t) => {
@@ -291,9 +627,11 @@ test("customer can request and read the details of a product", async (t) => {
     "noise cancelling earphones",
   );
   await user.click(view.getByRole("button", { name: "Send" }));
-  await user.click(
-    await view.findByRole("button", { name: "View Quiet Buds" }),
-  );
+  const viewDetails = await view.findByRole("button", {
+    name: "View Quiet Buds details",
+  });
+  assert.equal(viewDetails.textContent?.trim(), "View details");
+  await user.click(viewDetails);
 
   const details = await view.findByRole("dialog", {
     name: "Quiet Buds details",
@@ -389,7 +727,7 @@ test("customer sees the status when product details cannot be loaded", async (t)
   );
   await user.click(view.getByRole("button", { name: "Send" }));
   await user.click(
-    await view.findByRole("button", { name: "View Quiet Buds" }),
+    await view.findByRole("button", { name: "View Quiet Buds details" }),
   );
 
   assert.equal(
@@ -687,8 +1025,11 @@ test("Customer can resume and reset the current Conversation without changing th
       headers: { "content-type": "application/json" },
     });
   };
-  const context = createEmptyConversationContext().productConstraints;
-  const [{ render, cleanup }, userEvent, { ShoppingAssistant }] =
+  const context = {
+    ...createEmptyConversationContext().productConstraints,
+    inStockOnly: false,
+  };
+  const [{ render, cleanup, within }, userEvent, { ShoppingAssistant }] =
     await Promise.all([
       import("@testing-library/react"),
       import("@testing-library/user-event").then((module) => module.default),
@@ -741,6 +1082,21 @@ test("Customer can resume and reset the current Conversation without changing th
 
   assert.equal(view.getByText("I want shoes").textContent, "I want shoes");
   assert.equal(view.getByText("Here are shoes.").textContent, "Here are shoes.");
+  const contextSummary = view.getByRole("complementary", {
+    name: "Context Summary",
+  });
+  assert.ok(
+    within(contextSummary).queryByText("2 active preferences"),
+    "expected the Context Summary to count active preferences",
+  );
+  assert.equal(
+    within(contextSummary).getByText("Product type: shoes").textContent,
+    "Product type: shoes",
+  );
+  assert.equal(
+    within(contextSummary).getByText("Maximum price: ₹4,000").textContent,
+    "Maximum price: ₹4,000",
+  );
   await user.click(
     view.getByRole("button", { name: "Remove maximum price constraint" }),
   );

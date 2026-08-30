@@ -1,4 +1,4 @@
-import { ArrowRight, Headphones, ShoppingBag } from "lucide-react";
+import { ArrowRight, Headphones, Package, ShoppingBag } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 
 import { Badge } from "@/components/ui/badge";
@@ -18,7 +18,14 @@ export function ProductCard({
   onView: () => void;
 }) {
   const reduceMotion = useReducedMotion();
-  const icon = index % 2 === 0 ? <Headphones /> : <ShoppingBag />;
+  const category = product.category.toLowerCase();
+  const artwork = category.includes("audio") ? (
+    <Headphones />
+  ) : category.includes("bag") || category.includes("accessor") ? (
+    <ShoppingBag />
+  ) : (
+    <Package />
+  );
 
   return (
     <motion.article
@@ -27,11 +34,20 @@ export function ProductCard({
       transition={{ duration: 0.35, delay: reduceMotion ? 0 : index * 0.06 }}
       whileHover={reduceMotion ? undefined : { y: -3 }}
     >
-      <Card className="h-full overflow-hidden border-[#1d2a24]/10 bg-white/62 shadow-none transition-shadow hover:shadow-xl hover:shadow-[#1d2a24]/8">
-        <div className="grid aspect-[1.65] place-items-center border-b border-[#1d2a24]/5 bg-[#e5e1d8] text-[#708176] [&_svg]:size-16 [&_svg]:stroke-[0.75]">
-          {icon}
+      <Card
+        className={cn(
+          "h-full overflow-hidden border-[#1d2a24]/10 bg-white/75 shadow-sm shadow-[#1d2a24]/5 transition-shadow hover:shadow-lg hover:shadow-[#1d2a24]/8",
+          !product.inStock && "bg-[#eeeae2]/80",
+        )}
+      >
+        <div className="relative grid h-28 place-items-center overflow-hidden border-b border-[#1d2a24]/5 bg-[#e6ebe4] text-[#52675b] [&_svg]:size-12 [&_svg]:stroke-[0.9]">
+          <div className="absolute inset-x-8 -top-12 h-24 rounded-full bg-white/65 blur-2xl" />
+          <span className="relative">{artwork}</span>
+          <span className="absolute bottom-3 left-4 text-[10px] font-semibold uppercase tracking-[0.18em] text-[#708176]">
+            {product.category}
+          </span>
         </div>
-        <CardHeader>
+        <CardHeader className="pb-3">
           <div className="flex items-center justify-between gap-3">
             <Badge
               variant="outline"
@@ -49,7 +65,7 @@ export function ProductCard({
               {product.inStock ? "In stock" : "Unavailable"}
             </span>
           </div>
-          <h2 className="pt-3 text-xl font-semibold tracking-[-0.025em]">
+          <h2 className="pt-2 text-lg font-semibold tracking-[-0.025em]">
             {product.name}
           </h2>
         </CardHeader>
@@ -57,19 +73,19 @@ export function ProductCard({
           <p className="line-clamp-2 flex-1 text-sm leading-6 text-[#6d766f]">
             {product.description}
           </p>
-          <div className="mt-6 flex items-center justify-between">
+          <div className="mt-5 flex items-center justify-between gap-3">
             <p className="text-lg font-semibold">
               {formatMoney(product.priceMinor, product.currency)}
             </p>
             <Button
               type="button"
-              size="icon"
+              size="sm"
               variant="outline"
-              aria-label={`View ${product.name}`}
+              aria-label={`View ${product.name} details`}
               onClick={onView}
-              className="rounded-full border-[#1d2a24]/10 bg-white/40 text-[#1d2a24] shadow-none hover:bg-[#1d2a24] hover:text-white"
+              className="rounded-full border-[#1d2a24]/10 bg-white/70 px-3 text-[#1d2a24] shadow-none hover:bg-[#1d2a24] hover:text-white"
             >
-              <ArrowRight />
+              View details <ArrowRight />
             </Button>
           </div>
         </CardContent>
