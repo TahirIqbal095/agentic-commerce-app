@@ -3,23 +3,20 @@ import test from "node:test";
 import { MockLanguageModelV4 } from "ai/test";
 import type { CatalogModule } from "@/modules/catalog/catalog";
 import { createAiCommerceAgentLoop } from "./ai-commerce-agent-loop";
-import { createEmptyConversationContext } from "./conversation-context";
 import {
   createCommerceAgent as createProductionCommerceAgent,
   type CommerceAgentLoop,
-  type ConversationModule,
-  type IntentAnalyzer,
 } from "./commerce-agent";
+import type { AgentOutcome } from "./agent-outcome";
+import type { AgentMessage, ConversationModule } from "./conversation";
+import type { ConversationRepository } from "./conversation-repository";
 import type {
-  AgentMessage,
-  AgentOutcome,
   IntentAnalysis,
+  IntentAnalyzer,
   IntentBrief,
-} from "./types";
-import {
-  createConversationModule,
-  type ConversationRepository,
-} from "./conversation";
+} from "./intent";
+import { createEmptyConversationContext } from "./intent";
+import { createConversationModule } from "./conversation";
 
 const conversationId = "41000000-0000-4000-8000-000000000001";
 function createCommerceAgent(

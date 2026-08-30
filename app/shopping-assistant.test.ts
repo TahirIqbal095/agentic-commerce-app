@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import React from "react";
-import { createEmptyConversationContext } from "@/modules/agent/conversation-context";
+import { createEmptyConversationContext } from "@/modules/agent/intent";
 
 test("customer sees the configured Brand in the Storefront", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MockLanguageModelV4 } from "ai/test";
-import { createEmptyConversationContext } from "./conversation-context";
-import { createAiIntentAnalyzer } from "./ai-intent-interpreter";
+import { createAiIntentAnalyzer } from "./ai-intent-analyzer";
+import { createEmptyConversationContext } from "./intent";
 
 const validAnalysis = {
   goal: "Find breathable shoes for road running",

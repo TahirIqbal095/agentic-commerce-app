@@ -1,6 +1,10 @@
-import type { AgentOutcome, AgentResponse } from "@/modules/agent/types";
+import type {
+  AgentOutcome,
+  AgentResponse,
+} from "@/modules/agent/agent-outcome";
 
-export type { CurrentConversation, ShoppingIntent } from "@/modules/agent/types";
+export type { CurrentConversation } from "@/modules/agent/conversation-state";
+export type { ShoppingIntent } from "@/modules/agent/intent";
 
 export type AgentResult = AgentOutcome | AgentResponse;
 

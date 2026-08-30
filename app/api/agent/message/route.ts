@@ -3,7 +3,7 @@ import {
   type CommerceAgent,
 } from "@/modules/agent/commerce-agent";
 import { createAiCommerceAgentLoop } from "@/modules/agent/ai-commerce-agent-loop";
-import { createAiIntentAnalyzer } from "@/modules/agent/ai-intent-interpreter";
+import { createAiIntentAnalyzer } from "@/modules/agent/ai-intent-analyzer";
 import { createConversationModule } from "@/modules/agent/conversation";
 import { createCatalogModule } from "@/modules/catalog/catalog";
 import { requireBrand } from "@/modules/identity/brand";

@@ -4,8 +4,8 @@ import { MockLanguageModelV4 } from "ai/test";
 import {
   createAiIntentAnalyzer,
   createAiIntentInterpreter,
-} from "./ai-intent-interpreter";
-import { createEmptyConversationContext } from "./conversation-context";
+} from "./ai-intent-analyzer";
+import { createEmptyConversationContext } from "./intent";
 
 test("returns a typed Intent Analysis for Product discovery", async () => {
   const model = new MockLanguageModelV4({

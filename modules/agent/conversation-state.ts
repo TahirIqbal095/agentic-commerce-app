@@ -2,12 +2,26 @@ import { and, asc, eq, isNull, or } from "drizzle-orm";
 import { db } from "@/db";
 import { agentActions, conversations, messages } from "@/db/schema/agent";
 import { auditEvents } from "@/db/schema/audit";
-import { isAgentOutcome } from "./agent-outcome";
+import { isAgentOutcome, type AgentOutcome } from "./agent-outcome";
 import {
   createEmptyConversationContext,
   parseConversationContext,
-} from "./conversation-context";
-import type { CurrentConversation } from "./types";
+  type ShoppingIntent,
+} from "./intent";
+
+export type ConversationTranscriptTurn = {
+  id: string;
+  customerMessage: string;
+  result: AgentOutcome | null;
+  error: string | null;
+};
+
+export type CurrentConversation = {
+  conversationId: string;
+  transcript: ConversationTranscriptTurn[];
+  contextSummary: ShoppingIntent;
+  revision: number;
+};
 
 export interface ConversationState {
   loadCurrent(): Promise<CurrentConversation | null>;
@@ -68,7 +82,10 @@ export function createConversationState(userId: string): ConversationState {
           .select({ id: conversations.id })
           .from(conversations)
           .where(
-            and(eq(conversations.userId, userId), isNull(conversations.closedAt)),
+            and(
+              eq(conversations.userId, userId),
+              isNull(conversations.closedAt),
+            ),
           )
           .limit(1);
         if (!current) return;

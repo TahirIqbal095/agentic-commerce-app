@@ -15,7 +15,10 @@ import type {
 } from "./_components/shopping-assistant/types";
 import { cn } from "@/lib/utils";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
-import type { ProductConstraintKey, ShoppingIntent } from "@/modules/agent/types";
+import type {
+  ProductConstraintKey,
+  ShoppingIntent,
+} from "@/modules/agent/intent";
 
 type AgentApiResponse = { data: AgentResult } | { error: { message: string } };
 
@@ -37,8 +40,9 @@ export function ShoppingAssistant({
     initialConversation?.contextSummary ?? null,
   );
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedProduct, setSelectedProduct] =
-    useState<CatalogProduct | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<CatalogProduct | null>(
+    null,
+  );
   const [cartQuantity, setCartQuantity] = useState(0);
 
   async function submitPrompt(event: FormEvent<HTMLFormElement>) {

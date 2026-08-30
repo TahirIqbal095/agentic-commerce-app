@@ -10,22 +10,17 @@ import {
 import {
   applyProductConstraintDelta,
   createEmptyConversationContext,
+  type CommerceIntent,
+  type IntentAnalysis,
+  type IntentAnalyzer,
+  type IntentInterpreter,
   isShoppingIntent,
-} from "./conversation-context";
-import type {
-  CommerceIntent,
-  ConversationContext,
-  IntentAnalysis,
-} from "./types";
-import { PRODUCT_CONSTRAINT_KEYS } from "./types";
+  PRODUCT_CONSTRAINT_KEYS,
+} from "./intent";
 import {
   intentAnalyzerConfig,
   intentInterpreterConfig,
 } from "@/config/agent/promts";
-
-export interface IntentInterpreter {
-  interpret(message: string): Promise<CommerceIntent>;
-}
 
 const shoppingIntentSchema = jsonSchema<CommerceIntent>(
   {
@@ -82,8 +77,7 @@ const shoppingIntentSchema = jsonSchema<CommerceIntent>(
           },
           size: {
             type: ["string", "null"],
-            description:
-              "The requested Product size such as UK 9, or null.",
+            description: "The requested Product size such as UK 9, or null.",
           },
           inStockOnly: {
             type: "boolean",
@@ -348,13 +342,6 @@ function hasRequiredAndAllowedKeys(
   );
 }
 
-export interface IntentAnalyzer {
-  analyze(input: {
-    context: ConversationContext;
-    message: string;
-  }): Promise<IntentAnalysis>;
-}
-
 export function createAiIntentAnalyzer(
   model: LanguageModel = google(
     process.env.GOOGLE_GENERATIVE_AI_MODEL ?? "gemini-3.5-flash-lite",
@@ -379,7 +366,8 @@ export function createAiIntentAnalyzer(
           });
           return output;
         } catch (error) {
-          if (attempt === 0 && NoObjectGeneratedError.isInstance(error)) continue;
+          if (attempt === 0 && NoObjectGeneratedError.isInstance(error))
+            continue;
           throw error;
         }
       }

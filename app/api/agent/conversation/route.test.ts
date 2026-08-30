@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createConversationHandler } from "./handler";
-import { createEmptyConversationContext } from "@/modules/agent/conversation-context";
+import { createEmptyConversationContext } from "@/modules/agent/intent";
 
 test("loads the Customer's current Conversation Transcript and Context Summary", async () => {
   const context = {

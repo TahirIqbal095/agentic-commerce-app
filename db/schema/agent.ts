@@ -16,8 +16,10 @@ import { createdAt, id, updatedAt } from "./columns";
 import { agentActionStatusEnum, messageRoleEnum } from "./enums";
 import { users } from "./identity";
 import type { JsonObject } from "./types";
-import { createEmptyConversationContext } from "@/modules/agent/conversation-context";
-import type { ConversationContext } from "@/modules/agent/types";
+import {
+  createEmptyConversationContext,
+  type ConversationContext,
+} from "@/modules/agent/intent";
 
 export const conversations = pgTable(
   "conversations",

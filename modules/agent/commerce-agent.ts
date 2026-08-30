@@ -5,29 +5,24 @@ import type {
   CatalogSearchResult,
   ProductDetailResult,
 } from "@/modules/catalog/types";
-import { ConversationAccessError } from "./conversation";
+import {
+  ConversationAccessError,
+  type AgentMessage,
+  type AgentTurn,
+  type ConversationModule,
+} from "./conversation";
 import {
   applyProductConstraintDelta,
   createEmptyConversationContext,
   resolveIntentBrief,
-} from "./conversation-context";
-import type {
-  AgentMessage,
-  AgentOutcome,
-  ConversationContext,
-  IntentAnalysis,
-  IntentBrief,
-} from "./types";
+  type ConversationContext,
+  type IntentAnalyzer,
+  type IntentBrief,
+} from "./intent";
+import type { AgentOutcome } from "./agent-outcome";
 
 export interface CommerceAgent {
   respond(input: AgentMessage): Promise<AgentOutcome>;
-}
-
-export interface IntentAnalyzer {
-  analyze(input: {
-    context: ConversationContext;
-    message: string;
-  }): Promise<IntentAnalysis>;
 }
 
 export type CommerceCapabilities = {
@@ -69,26 +64,6 @@ export type CommerceAgentLimits = {
 };
 
 export const MAX_COMMERCE_AGENT_TOOL_PRODUCTS = 8;
-
-type AgentTurn = {
-  conversationId: string;
-  duplicateOutcome?: AgentOutcome;
-  recordRecommendationSet?(
-    products: CatalogProduct[],
-    context: ConversationContext,
-  ): Promise<void>;
-  context?: ConversationContext;
-  recordIntentBrief(
-    intentBrief: IntentBrief,
-    context: ConversationContext,
-  ): Promise<boolean | void>;
-  reloadContext?(): Promise<ConversationContext>;
-  complete(assistantMessage: string, outcome: AgentOutcome): Promise<void>;
-};
-
-export interface ConversationModule {
-  startTurn(input: AgentMessage): Promise<AgentTurn>;
-}
 
 type CommerceAgentOptions = {
   agentLoop: CommerceAgentLoop;
@@ -159,7 +134,10 @@ export function createCommerceAgent(
           const saved = await turn.recordIntentBrief(intentBrief, nextContext);
           if (saved !== false) break;
           if (attempt === 1 || !turn.reloadContext) {
-            return completeTurn(turn, contextConflictOutcome(turn.conversationId));
+            return completeTurn(
+              turn,
+              contextConflictOutcome(turn.conversationId),
+            );
           }
           currentContext = await turn.reloadContext();
         } catch {
@@ -309,7 +287,8 @@ function resolveCapabilities({
   signal: AbortSignal;
   observedProducts: Map<string, CatalogProduct>;
 }): CommerceCapabilities {
-  const canDiscover = intentBrief.requestedEffects.includes("DISCOVER_PRODUCTS");
+  const canDiscover =
+    intentBrief.requestedEffects.includes("DISCOVER_PRODUCTS");
   const referencedProductIds = new Set(intentBrief.referencedProductIds ?? []);
   if (!canDiscover && referencedProductIds.size === 0) return {};
 

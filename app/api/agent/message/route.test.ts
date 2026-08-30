@@ -4,23 +4,21 @@ import {
   createCommerceAgent,
   type CommerceAgent,
   type CommerceAgentLoop,
-  type IntentAnalyzer,
 } from "@/modules/agent/commerce-agent";
 import type { CatalogModule } from "@/modules/catalog/catalog";
 import {
   createConversationModule,
   ConversationAccessError,
-  type ConversationRepository,
 } from "@/modules/agent/conversation";
 import {
   createEmptyConversationContext as emptyConversationContext,
-} from "@/modules/agent/conversation-context";
-import type {
-  AgentOutcome,
-  ConversationContext,
-  IntentAnalysis,
-  ShoppingIntent,
-} from "@/modules/agent/types";
+  type ConversationContext,
+  type IntentAnalysis,
+  type IntentAnalyzer,
+  type ShoppingIntent,
+} from "@/modules/agent/intent";
+import type { AgentOutcome } from "@/modules/agent/agent-outcome";
+import type { ConversationRepository } from "@/modules/agent/conversation-repository";
 import type { CatalogSearch } from "@/modules/catalog/types";
 import { createPostHandler } from "./handler";
 

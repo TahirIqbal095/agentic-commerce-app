@@ -1,6 +1,9 @@
 import { X } from "lucide-react";
 import { formatMoney } from "@/lib/format-money";
-import type { ProductConstraintKey, ShoppingIntent } from "@/modules/agent/types";
+import type {
+  ProductConstraintKey,
+  ShoppingIntent,
+} from "@/modules/agent/intent";
 
 export function ContextSummary({
   constraints,

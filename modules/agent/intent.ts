@@ -1,13 +1,94 @@
-import type {
-  ConversationContext,
-  IntentAnalysis,
-  IntentBrief,
-  ProductConstraintDelta,
-  ProductConstraintKey,
-  RecommendationReference,
-  ShoppingIntent,
-} from "./types";
-import { PRODUCT_CONSTRAINT_KEYS } from "./types";
+export type ShoppingAttributes = Record<string, string | number | boolean>;
+
+export type ShoppingIntent = {
+  productTypes: string[];
+  useCases: string[];
+  features: string[];
+  category: string | null;
+  minPriceMinor: number | null;
+  maxPriceMinor: number | null;
+  size: string | null;
+  inStockOnly: boolean;
+  attributes: ShoppingAttributes;
+};
+
+export const PRODUCT_CONSTRAINT_KEYS = [
+  "productTypes",
+  "useCases",
+  "features",
+  "category",
+  "minPriceMinor",
+  "maxPriceMinor",
+  "size",
+  "inStockOnly",
+  "attributes",
+] as const;
+
+export type ProductConstraintKey = (typeof PRODUCT_CONSTRAINT_KEYS)[number];
+
+export type ProductConstraintDelta = {
+  set: Partial<ShoppingIntent>;
+  clear: ProductConstraintKey[];
+};
+
+export type RecommendationReference = {
+  productId: string;
+  name: string;
+  description: string;
+  category: string;
+};
+
+export type ConversationContext = {
+  schemaVersion: 2;
+  revision: number;
+  productConstraints: ShoppingIntent;
+  latestRecommendationSet: RecommendationReference[];
+};
+
+export type IntentAnalysis = {
+  goal: string;
+  constraintDelta: ProductConstraintDelta;
+  knownEntities: Array<{
+    type: "PRODUCT" | "PRODUCT_TYPE" | "CATEGORY";
+    value: string;
+  }>;
+  missingInformation: string[];
+  confidence: number;
+  requestedEffects: Array<"DISCOVER_PRODUCTS" | "ADD_TO_CART">;
+  referencedProductIds?: string[];
+};
+
+export type AddToCartIntent = {
+  action: "ADD_TO_CART";
+  productName: string;
+  quantity: number;
+};
+
+export type CommerceIntent = ShoppingIntent | AddToCartIntent;
+
+export type IntentBrief = {
+  goal: string;
+  constraints: ShoppingIntent;
+  knownEntities: Array<{
+    type: "PRODUCT" | "PRODUCT_TYPE" | "CATEGORY";
+    value: string;
+  }>;
+  missingInformation: string[];
+  confidence: number;
+  requestedEffects: Array<"DISCOVER_PRODUCTS" | "ADD_TO_CART">;
+  referencedProductIds?: string[];
+};
+
+export interface IntentAnalyzer {
+  analyze(input: {
+    context: ConversationContext;
+    message: string;
+  }): Promise<IntentAnalysis>;
+}
+
+export interface IntentInterpreter {
+  interpret(message: string): Promise<CommerceIntent>;
+}
 
 const CLEAR_VALUES: { [Key in ProductConstraintKey]: ShoppingIntent[Key] } = {
   productTypes: [],
@@ -100,7 +181,11 @@ export function applyProductConstraintDelta(
   }
 
   for (const key of delta.clear) {
-    assignConstraint(productConstraints, key, structuredClone(CLEAR_VALUES[key]));
+    assignConstraint(
+      productConstraints,
+      key,
+      structuredClone(CLEAR_VALUES[key]),
+    );
   }
   for (const key of PRODUCT_CONSTRAINT_KEYS) {
     if (Object.hasOwn(delta.set, key)) {
@@ -185,7 +270,10 @@ function isCompatibleConstraint(
   constraint: string,
   nextFamily: string,
 ): boolean {
-  const words = constraint.trim().toLowerCase().split(/[^a-z0-9-]+/);
+  const words = constraint
+    .trim()
+    .toLowerCase()
+    .split(/[^a-z0-9-]+/);
   if (words.some((word) => CROSS_PRODUCT_CONSTRAINTS.has(word))) return true;
   return constraintFamily(constraint) === nextFamily;
 }
@@ -333,17 +421,13 @@ export function isShoppingIntent(value: unknown): value is ShoppingIntent {
 
 function isStringArray(value: unknown): value is string[] {
   return (
-    Array.isArray(value) &&
-    value.length <= 8 &&
-    value.every(isBoundedString)
+    Array.isArray(value) && value.length <= 8 && value.every(isBoundedString)
   );
 }
 
 function isBoundedString(value: unknown): value is string {
   return (
-    typeof value === "string" &&
-    value.trim().length > 0 &&
-    value.length <= 160
+    typeof value === "string" && value.trim().length > 0 && value.length <= 160
   );
 }
 
