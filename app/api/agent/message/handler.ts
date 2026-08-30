@@ -60,9 +60,7 @@ export function createPostHandler(createAgent: AgentFactory) {
 
     const idempotencyKey =
       "idempotencyKey" in body ? body.idempotencyKey : undefined;
-    if (
-      (typeof idempotencyKey !== "string" || !isUuid(idempotencyKey))
-    ) {
+    if (typeof idempotencyKey !== "string" || !isUuid(idempotencyKey)) {
       return errorResponse(
         {
           code: "INVALID_IDEMPOTENCY_KEY",
@@ -75,13 +73,12 @@ export function createPostHandler(createAgent: AgentFactory) {
 
     try {
       const agent = await createAgent();
-      return dataResponse(
-        await agent.respond({
-          ...(conversationId ? { conversationId } : {}),
-          idempotencyKey,
-          message: body.message.trim(),
-        }),
-      );
+      const response = await agent.respond({
+        ...(conversationId ? { conversationId } : {}),
+        idempotencyKey,
+        message: body.message.trim(),
+      });
+      return dataResponse(response);
     } catch (error) {
       if (error instanceof ConversationAccessError) {
         return errorResponse(

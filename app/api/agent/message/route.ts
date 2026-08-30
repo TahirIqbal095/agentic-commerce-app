@@ -11,11 +11,19 @@ import { resolveUserContext } from "@/modules/identity/user-context";
 import { createPostHandler } from "./handler";
 
 async function createAgentForStorefront(): Promise<CommerceAgent> {
-  const [, { userId }] = await Promise.all([requireBrand(), resolveUserContext()]);
+  const [, { userId }] = await Promise.all([
+    requireBrand(),
+    resolveUserContext(),
+  ]);
+
+  const catalogModule = createCatalogModule();
+  const intentAnalyzer = createAiIntentAnalyzer();
+  const conversationModule = createConversationModule(userId);
+
   return createCommerceAgent(
-    createCatalogModule(),
-    createAiIntentAnalyzer(),
-    createConversationModule(userId),
+    catalogModule,
+    intentAnalyzer,
+    conversationModule,
     { agentLoop: createAiCommerceAgentLoop() },
   );
 }

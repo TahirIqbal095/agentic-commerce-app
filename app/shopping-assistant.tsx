@@ -143,8 +143,8 @@ export function ShoppingAssistant({
         className="pointer-events-none fixed inset-0 overflow-hidden"
         aria-hidden="true"
       >
-        <div className="absolute left-1/2 top-[-28rem] size-[48rem] -translate-x-1/2 rounded-full bg-white/80 blur-3xl" />
-        <div className="absolute bottom-[-20rem] right-[-18rem] size-[38rem] rounded-full bg-[#dce5db]/50 blur-3xl" />
+        <div className="absolute left-1/2 -top-112 size-192 -translate-x-1/2 rounded-full bg-white/80 blur-3xl" />
+        <div className="absolute -bottom-80 -right-72 size-152 rounded-full bg-[#dce5db]/50 blur-3xl" />
       </div>
 
       <div className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 pb-52 pt-5 sm:px-8 sm:pb-56 sm:pt-7">

@@ -15,7 +15,8 @@ Never invent a constraint the customer did not request.`,
 
 export const intentAnalyzerConfig = {
   name: "intent_analysis_v1",
-  description: "Typed changes to bounded Product constraints for one Customer turn",
+  description:
+    "Typed changes to bounded Product constraints for one Customer turn",
   prompt: `Analyze the newest Customer message using the supplied schema-versioned Conversation Context.
 Summarize the customer's shopping goal without copying credentials, contact details, payment data, or unrelated personal information.
 Return Product constraint changes only as explicit constraintDelta operations. Put newly stated or replaced constraints in set. Put constraints the Customer explicitly removes in clear. Do not repeat unchanged constraints from Conversation Context in set, and never both set and clear the same constraint.

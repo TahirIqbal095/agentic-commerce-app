@@ -38,8 +38,10 @@ export type RecommendationReference = {
   category: string;
 };
 
+export const CONVERSATION_CONTEXT_SCHEMA_VERSION = 2 as const;
+
 export type ConversationContext = {
-  schemaVersion: 2;
+  schemaVersion: typeof CONVERSATION_CONTEXT_SCHEMA_VERSION;
   revision: number;
   productConstraints: ShoppingIntent;
   latestRecommendationSet: RecommendationReference[];
@@ -104,7 +106,7 @@ const CLEAR_VALUES: { [Key in ProductConstraintKey]: ShoppingIntent[Key] } = {
 
 export function createEmptyConversationContext(): ConversationContext {
   return {
-    schemaVersion: 2,
+    schemaVersion: CONVERSATION_CONTEXT_SCHEMA_VERSION,
     revision: 0,
     productConstraints: structuredClone(CLEAR_VALUES),
     latestRecommendationSet: [],
@@ -123,7 +125,7 @@ export function parseConversationContext(value: unknown): ConversationContext {
       "productConstraints",
       "latestRecommendationSet",
     ]) ||
-    context.schemaVersion !== 2 ||
+    context.schemaVersion !== CONVERSATION_CONTEXT_SCHEMA_VERSION ||
     !Number.isSafeInteger(context.revision) ||
     Number(context.revision) < 0 ||
     !isShoppingIntent(context.productConstraints) ||
@@ -203,7 +205,7 @@ export function applyProductConstraintDelta(
   }
 
   return {
-    schemaVersion: 2,
+    schemaVersion: CONVERSATION_CONTEXT_SCHEMA_VERSION,
     revision: context.revision + 1,
     productConstraints,
     latestRecommendationSet: context.latestRecommendationSet,
