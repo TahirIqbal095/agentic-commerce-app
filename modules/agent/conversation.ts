@@ -17,11 +17,18 @@ import type {
 
 type ConversationOwner = { userId: string };
 export interface ConversationRepository {
+  /**
+   * Returns the completed outcome for a turn with the same idempotency key, if
+   * one has already been accepted for this Customer.
+   */
   findDuplicate(
     owner: ConversationOwner,
     conversationId: string | undefined,
     idempotencyKey: string,
   ): Promise<AgentOutcome | null>;
+  /**
+   * Creates or reuses an open Conversation and records its first USER message.
+   */
   create(
     owner: ConversationOwner,
     userMessage: string,
@@ -31,15 +38,21 @@ export interface ConversationRepository {
     userMessageId: string;
     context: ConversationContext;
   }>;
+  /** Loads the owner and parsed context for an open Conversation. */
   findOwnedContext(
     conversationId: string,
   ): Promise<(ConversationOwner & { context: ConversationContext }) | null>;
+  /**
+   * Saves the next Context revision and current USER-message metadata
+   * atomically, returning `false` when optimistic concurrency fails.
+   */
   saveContextAndMetadata(
     conversationId: string,
     context: ConversationContext,
     messageId: string,
     metadata: JsonObject,
   ): Promise<boolean | void>;
+  /** Appends a message and returns its generated ID. */
   append(
     conversationId: string,
     role: "USER" | "ASSISTANT",
@@ -47,12 +60,17 @@ export interface ConversationRepository {
     metadata?: JsonObject,
     idempotencyKey?: string,
   ): Promise<string>;
+  /** Atomically stores a completed ASSISTANT turn and its typed outcome. */
   finalizeTurn?(
     conversationId: string,
     userMessageId: string,
     content: string,
     outcome: AgentOutcome,
   ): Promise<void>;
+  /**
+   * Replaces recommendation memory only when Context is still at the expected
+   * revision.
+   */
   saveRecommendationSet?(
     conversationId: string,
     expectedRevision: number,
@@ -61,6 +79,10 @@ export interface ConversationRepository {
 }
 
 export class ConversationAccessError extends Error {
+  /**
+   * Creates the error returned when a Conversation is missing, closed, or
+   * belongs to a different Customer.
+   */
   constructor() {
     super("The conversation was not found.");
     this.name = "ConversationAccessError";
@@ -68,6 +90,21 @@ export class ConversationAccessError extends Error {
 }
 
 const postgresConversationRepository: ConversationRepository = {
+  /**
+   * Finds the completed outcome for a previously accepted turn.
+   *
+   * If the matching message exists but its outcome has not been persisted yet,
+   * this method waits with exponential backoff so concurrent duplicate requests
+   * can return the original result instead of processing the turn twice.
+   *
+   * @param owner - Customer whose Conversations may be searched.
+   * @param conversationId - Conversation to restrict the search to, or
+   * `undefined` when the first turn has not returned a Conversation ID yet.
+   * @param idempotencyKey - Client-generated key that uniquely identifies the
+   * turn.
+   * @returns The original Agent outcome, or `null` when no matching turn exists.
+   * @throws When a matching turn remains incomplete after the retry window.
+   */
   async findDuplicate(owner, conversationId, idempotencyKey) {
     for (let attempt = 0; attempt < 35; attempt += 1) {
       const [duplicate] = await db
@@ -93,6 +130,20 @@ const postgresConversationRepository: ConversationRepository = {
     }
     throw new Error("The original Conversation Turn is still processing.");
   },
+  /**
+   * Creates or reuses the Customer's open Conversation and records its first
+   * USER message atomically.
+   *
+   * A concurrent insert may win the open-Conversation uniqueness race. In that
+   * case, the winning Conversation is loaded and used for the new message.
+   *
+   * @param owner - Customer who owns the Conversation.
+   * @param userMessage - Redacted text of the Customer's first message.
+   * @param idempotencyKey - Client-generated key used to deduplicate the turn.
+   * @returns IDs for the Conversation and USER message, plus parsed persisted
+   * context.
+   * @throws When no open Conversation can be created or recovered.
+   */
   async create(owner, userMessage, idempotencyKey) {
     return db.transaction(async (transaction) => {
       const context = createEmptyConversationContext();
@@ -149,6 +200,13 @@ const postgresConversationRepository: ConversationRepository = {
       };
     });
   },
+  /**
+   * Loads the owner and parsed context of an open Conversation.
+   *
+   * @param conversationId - Conversation to load.
+   * @returns The owning Customer and Conversation Context, or `null` when the
+   * Conversation does not exist or has been closed.
+   */
   async findOwnedContext(conversationId) {
     const [ownedContext] = await db
       .select({
@@ -157,13 +215,34 @@ const postgresConversationRepository: ConversationRepository = {
       })
       .from(conversations)
       .where(
-        and(eq(conversations.id, conversationId), isNull(conversations.closedAt)),
+        and(
+          eq(conversations.id, conversationId),
+          isNull(conversations.closedAt),
+        ),
       )
       .limit(1);
     return ownedContext
-      ? { ...ownedContext, context: parseConversationContext(ownedContext.context) }
+      ? {
+          ...ownedContext,
+          context: parseConversationContext(ownedContext.context),
+        }
       : null;
   },
+  /**
+   * Advances Conversation Context and attaches metadata to the current USER
+   * message in one transaction.
+   *
+   * The context update uses its revision as an optimistic-concurrency check, so
+   * stale turns cannot overwrite a newer context.
+   *
+   * @param conversationId - Open Conversation being updated.
+   * @param context - Next Conversation Context; its revision must be exactly one
+   * greater than the persisted revision.
+   * @param messageId - USER message that initiated the context change.
+   * @param metadata - Sanitized, inspectable metadata to store on that message.
+   * @returns `true` when both records are updated, or `false` after a revision
+   * conflict or when the Conversation is unavailable.
+   */
   async saveContextAndMetadata(conversationId, context, messageId, metadata) {
     return db.transaction(async (transaction) => {
       const [updated] = await transaction
@@ -185,6 +264,17 @@ const postgresConversationRepository: ConversationRepository = {
       return true;
     });
   },
+  /**
+   * Appends a message and refreshes the Conversation's activity timestamp in a
+   * single transaction.
+   *
+   * @param conversationId - Conversation receiving the message.
+   * @param role - Whether the message was written by the USER or ASSISTANT.
+   * @param content - Text to persist. Callers must redact sensitive USER text.
+   * @param metadata - Optional structured data associated with the message.
+   * @param idempotencyKey - Optional client key used to deduplicate USER turns.
+   * @returns The ID of the newly persisted message.
+   */
   async append(conversationId, role, content, metadata = {}, idempotencyKey) {
     return db.transaction(async (transaction) => {
       const [message] = await transaction
@@ -198,6 +288,19 @@ const postgresConversationRepository: ConversationRepository = {
       return message.id;
     });
   },
+  /**
+   * Completes a turn by persisting the ASSISTANT response and making the
+   * sanitized Agent outcome discoverable from the initiating USER message.
+   *
+   * All writes, including the Conversation activity update, are committed in a
+   * single transaction so duplicate requests cannot observe a partial outcome.
+   *
+   * @param conversationId - Conversation containing the completed turn.
+   * @param userMessageId - USER message that initiated the turn.
+   * @param content - ASSISTANT response; sensitive text is redacted before
+   * persistence.
+   * @param outcome - Typed result returned by the Agent for this turn.
+   */
   async finalizeTurn(conversationId, userMessageId, content, outcome) {
     await db.transaction(async (transaction) => {
       const [userMessage] = await transaction
@@ -226,6 +329,20 @@ const postgresConversationRepository: ConversationRepository = {
         .where(eq(conversations.id, conversationId));
     });
   },
+  /**
+   * Stores a bounded summary of the latest Product recommendations in the
+   * Conversation Context.
+   *
+   * The expected revision prevents recommendations produced from stale context
+   * from replacing a newer set.
+   *
+   * @param conversationId - Conversation whose recommendation set is updated.
+   * @param expectedRevision - Context revision used to produce the results.
+   * @param recommendations - Minimized Product references safe to retain for a
+   * later turn.
+   * @returns `true` when the set is saved, or `false` when the Conversation is
+   * unavailable or its context revision has changed.
+   */
   async saveRecommendationSet(
     conversationId,
     expectedRevision,
@@ -246,7 +363,9 @@ const postgresConversationRepository: ConversationRepository = {
     if (context.revision !== expectedRevision) return false;
     const [updated] = await db
       .update(conversations)
-      .set({ context: { ...context, latestRecommendationSet: recommendations } })
+      .set({
+        context: { ...context, latestRecommendationSet: recommendations },
+      })
       .where(
         and(
           eq(conversations.id, conversationId),
@@ -258,16 +377,48 @@ const postgresConversationRepository: ConversationRepository = {
   },
 };
 
+/**
+ * Pauses duplicate polling without blocking the event loop.
+ *
+ * @param delayMs - Number of milliseconds to wait.
+ * @returns A promise that resolves after the delay.
+ */
 function waitForOutcome(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
+/**
+ * Creates the Customer-scoped Conversation service used by the Commerce Agent.
+ *
+ * The returned module owns turn creation, idempotency, access checks, context
+ * persistence, recommendation memory, completion, and privacy-safe storage.
+ *
+ * @param userId - Authenticated Customer who may access the Conversation.
+ * @param repository - Persistence adapter; defaults to the PostgreSQL-backed
+ * repository and may be replaced in tests.
+ * @returns A Conversation module bound to the Customer.
+ */
 export function createConversationModule(
   userId: string,
   repository: ConversationRepository = postgresConversationRepository,
 ): ConversationModule {
   const owner = { userId };
   return {
+    /**
+     * Starts a new Agent turn or restores the result of a duplicate request.
+     *
+     * For a continuing Conversation, ownership is verified before the redacted
+     * USER message is appended. For a first turn, an open Conversation is
+     * created or reused. The returned turn object exposes the persistence steps
+     * used while the Agent processes the request.
+     *
+     * @param input - Customer message, optional Conversation ID, and required
+     * idempotency key for the turn.
+     * @returns A new in-progress turn, or a no-op turn containing the previously
+     * completed outcome when the request is a duplicate.
+     * @throws {ConversationAccessError} When the requested Conversation is
+     * missing, closed, or owned by another Customer.
+     */
     async startTurn(input) {
       const duplicateOutcome = await repository.findDuplicate(
         owner,
@@ -281,7 +432,9 @@ export function createConversationModule(
       let userMessageId: string;
       let context: ConversationContext;
       if (input.conversationId) {
-        const persisted = await repository.findOwnedContext(input.conversationId);
+        const persisted = await repository.findOwnedContext(
+          input.conversationId,
+        );
         if (!persisted || persisted.userId !== userId)
           throw new ConversationAccessError();
         conversationId = input.conversationId;
@@ -324,6 +477,13 @@ export function createConversationModule(
       return {
         conversationId,
         context,
+        /**
+         * Reloads the latest persisted context after a concurrent update.
+         *
+         * @returns The parsed, current Conversation Context.
+         * @throws {ConversationAccessError} When the Conversation is no longer
+         * available to this Customer.
+         */
         async reloadContext() {
           const persisted = await repository.findOwnedContext(conversationId);
           if (!persisted || persisted.userId !== userId) {
@@ -331,6 +491,14 @@ export function createConversationModule(
           }
           return parseConversationContext(persisted.context);
         },
+        /**
+         * Persists the minimized Intent Brief together with the next context.
+         *
+         * @param intentBrief - Agent interpretation of the Customer's request.
+         * @param nextContext - Context produced by applying that interpretation.
+         * @returns The repository result, including `false` when optimistic
+         * concurrency rejects a stale context update.
+         */
         async recordIntentBrief(intentBrief, nextContext) {
           return repository.saveContextAndMetadata(
             conversationId,
@@ -341,6 +509,17 @@ export function createConversationModule(
             }),
           );
         },
+        /**
+         * Remembers up to eight compact Product references for follow-up turns.
+         *
+         * Long display fields are bounded before persistence. If the repository
+         * does not support recommendation memory, this operation is a no-op.
+         *
+         * @param products - Products recommended during the current turn.
+         * @param expectedContext - Context revision used to create the
+         * recommendations.
+         * @returns A promise that resolves after the save attempt.
+         */
         async recordRecommendationSet(products, expectedContext) {
           if (!repository.saveRecommendationSet) return;
           await repository.saveRecommendationSet(
@@ -354,6 +533,17 @@ export function createConversationModule(
             })),
           );
         },
+        /**
+         * Completes the turn and persists a privacy-safe ASSISTANT transcript.
+         *
+         * Repositories with `finalizeTurn` persist the response and outcome
+         * atomically. Simpler adapters fall back to appending a canonical,
+         * minimized message and outcome metadata.
+         *
+         * @param message - Human-readable ASSISTANT response.
+         * @param outcome - Typed result of Agent processing.
+         * @returns A promise that resolves when completion is persisted.
+         */
         async complete(message, outcome) {
           if (repository.finalizeTurn) {
             await repository.finalizeTurn(
@@ -378,15 +568,35 @@ export function createConversationModule(
   };
 }
 
+/**
+ * Creates a completed no-op turn for an idempotent replay.
+ *
+ * Persistence callbacks intentionally do nothing because the original request
+ * already recorded the turn.
+ *
+ * @param duplicateOutcome - Previously persisted outcome to return to the
+ * caller.
+ * @returns A turn-shaped object containing the original outcome.
+ */
 function duplicateAgentTurn(duplicateOutcome: AgentOutcome) {
   return {
     conversationId: duplicateOutcome.conversationId ?? "",
     duplicateOutcome,
+    /** Skips Intent persistence because the original turn already saved it. */
     async recordIntentBrief() {},
+    /** Skips completion because the original turn is already complete. */
     async complete() {},
   };
 }
 
+/**
+ * Reduces an Intent Brief to the bounded, non-sensitive facts needed for
+ * diagnostics and subsequent processing.
+ *
+ * @param intentBrief - Full Intent Brief produced for the current turn.
+ * @returns A copy with a canonical goal, removed free-form attributes, and
+ * generalized missing-information details.
+ */
 function minimizeIntentBrief(intentBrief: IntentBrief): IntentBrief {
   return {
     ...intentBrief,
@@ -404,6 +614,13 @@ function minimizeIntentBrief(intentBrief: IntentBrief): IntentBrief {
   };
 }
 
+/**
+ * Maps an Agent outcome to the canonical message allowed in the durable
+ * transcript.
+ *
+ * @param outcome - Typed outcome whose status determines the message.
+ * @returns A short, non-sensitive summary of the result.
+ */
 function canonicalPersistedMessage(outcome: AgentOutcome): string {
   switch (outcome.status) {
     case "COMPLETED":
@@ -415,6 +632,15 @@ function canonicalPersistedMessage(outcome: AgentOutcome): string {
   }
 }
 
+/**
+ * Builds inspectable, privacy-safe metadata for a completed Agent turn.
+ *
+ * Product results are retained, while response text and Intent details are
+ * canonicalized, minimized, and recursively sanitized.
+ *
+ * @param outcome - Full Agent outcome returned to the Customer.
+ * @returns JSON metadata suitable for durable message persistence.
+ */
 function outcomeMetadata(outcome: AgentOutcome): JsonObject {
   const { products, ...rest } = outcome;
   const minimized = sanitizeRecord({
@@ -449,10 +675,23 @@ const privateTraceKeys = new Set([
   "reasoning",
 ]);
 
+/**
+ * Recursively sanitizes a JSON object while preserving its object type.
+ *
+ * @param record - Metadata object to sanitize.
+ * @returns A deep-sanitized JSON object.
+ */
 function sanitizeRecord(record: JsonObject): JsonObject {
   return sanitizeValue(record) as JsonObject;
 }
 
+/**
+ * Recursively redacts sensitive strings and removes private trace fields from
+ * an arbitrary value.
+ *
+ * @param value - Value to sanitize before durable persistence.
+ * @returns A sanitized copy; primitive non-string values are returned as-is.
+ */
 function sanitizeValue(value: unknown): unknown {
   if (typeof value === "string") return redactSensitiveText(value);
   if (Array.isArray(value)) return value.map(sanitizeValue);
@@ -468,6 +707,13 @@ function sanitizeValue(value: unknown): unknown {
   );
 }
 
+/**
+ * Replaces common personal, payment, credential, address, and private-reasoning
+ * patterns with stable redaction markers.
+ *
+ * @param value - Free-form text that may contain sensitive information.
+ * @returns Text safe for durable Conversation persistence.
+ */
 function redactSensitiveText(value: string): string {
   return value
     .replace(
