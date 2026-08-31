@@ -181,7 +181,10 @@ export function createCommerceAgent(
         }
       }
       if (intentBrief.requestedEffects.includes("ADD_TO_CART")) {
-        const referencedProductIds = intentBrief.referencedProductIds ?? [];
+        const requestedCartItems = intentBrief.requestedCartItems;
+        const referencedProductIds = requestedCartItems?.map(
+          ({ productId }) => productId,
+        ) ?? intentBrief.referencedProductIds ?? [];
         let directlyMatchedProduct: CatalogProduct | undefined;
         let directlyMatchedProducts: CatalogProduct[] = [];
         const resolvesDirectRequest =
@@ -277,7 +280,7 @@ export function createCommerceAgent(
         }
         if (
           !directlyMatchedProduct &&
-          (referencedProductIds.length !== 1 || !referencedProductIds[0])
+          referencedProductIds.length === 0
         ) {
           return needsInputWithCurrentCart({
             turn,
@@ -290,7 +293,15 @@ export function createCommerceAgent(
           });
         }
         const quantity = intentBrief.requestedQuantity ?? 1;
-        if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
+        const quantities = requestedCartItems?.map((item) => item.quantity) ?? [
+          quantity,
+        ];
+        if (
+          quantities.some(
+            (requested) =>
+              !Number.isInteger(requested) || requested < 1 || requested > 10,
+          )
+        ) {
           return needsInputWithCurrentCart({
             turn,
             cart: options.cart,
@@ -303,42 +314,58 @@ export function createCommerceAgent(
         }
         try {
           if (!options.cart) throw new Error("Cart capability unavailable");
-          const productResult = directlyMatchedProduct
-            ? { ok: true as const, value: directlyMatchedProduct }
-            : await catalog.getProduct(referencedProductIds[0]);
-          if (!productResult.ok) {
-            throw new CartError(productResult.error.message);
-          }
-          let completedOutcome: AgentOutcome | undefined;
-          const cart = await options.cart.addItem(
-            productResult.value,
-            quantity,
-            async (updatedCart, transaction) => {
-              const outcome: AgentOutcome = {
-                status: "COMPLETED",
-                conversationId: turn.conversationId,
-                message: cartAdditionMessage(
-                  quantity,
-                  productResult.value.name,
-                  updatedCart,
+          const productResults = directlyMatchedProduct
+            ? [{ ok: true as const, value: directlyMatchedProduct }]
+            : await Promise.all(
+                referencedProductIds.map((productId) =>
+                  catalog.getProduct(productId),
                 ),
-                intentBrief,
-                products: [],
-                cart: updatedCart,
-              };
-              await turn.complete(outcome.message, outcome, transaction);
-              completedOutcome = outcome;
-            },
-          );
+              );
+          const selectedProducts = productResults.map((productResult) => {
+            if (!productResult.ok) {
+              throw new CartError(productResult.error.message);
+            }
+            return productResult.value;
+          });
+          const additions = selectedProducts.map((product) => ({
+            product,
+            quantity:
+              requestedCartItems?.find(
+                (item) => item.productId === product.id,
+              )?.quantity ?? quantity,
+          }));
+          let completedOutcome: AgentOutcome | undefined;
+          const completeAddition: Parameters<CartModule["addItem"]>[2] = async (
+            updatedCart,
+            transaction,
+          ) => {
+            const outcome: AgentOutcome = {
+              status: "COMPLETED",
+              conversationId: turn.conversationId,
+              message: cartAdditionsMessage(additions, updatedCart),
+              intentBrief,
+              products: [],
+              cart: updatedCart,
+            };
+            await turn.complete(outcome.message, outcome, transaction);
+            completedOutcome = outcome;
+          };
+          const cart =
+            additions.length === 1
+              ? await options.cart.addItem(
+                  additions[0].product,
+                  additions[0].quantity,
+                  completeAddition,
+                )
+              : await options.cart.addItems?.(additions, completeAddition);
           if (completedOutcome) return completedOutcome;
+          if (!cart) {
+            throw new Error("Atomic multi-Product Cart addition unavailable");
+          }
           return completeTurn(turn, {
             status: "COMPLETED",
             conversationId: turn.conversationId,
-            message: cartAdditionMessage(
-              quantity,
-              productResult.value.name,
-              cart,
-            ),
+            message: cartAdditionsMessage(additions, cart),
             intentBrief,
             products: [],
             cart,
@@ -500,6 +527,20 @@ function cartAdditionMessage(
       currency: cart.currency,
     }).format(priceMinor / 100);
   return `${confirmation} Its Cart Price changed from ${formatPrice(cart.priceChange.previousCartPriceMinor)} to ${formatPrice(cart.priceChange.currentCartPriceMinor)}.`;
+}
+
+function cartAdditionsMessage(
+  additions: Array<{ product: CatalogProduct; quantity: number }>,
+  cart: Awaited<ReturnType<CartModule["addItem"]>>,
+): string {
+  if (additions.length === 1) {
+    const [{ product, quantity }] = additions;
+    return cartAdditionMessage(quantity, product.name, cart);
+  }
+  const selections = additions.map(
+    ({ product, quantity }) => `${quantity} × ${product.name}`,
+  );
+  return `Added ${selections.slice(0, -1).join(", ")} and ${selections.at(-1)} to your Cart.`;
 }
 
 async function needsInputWithCurrentCart({

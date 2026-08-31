@@ -61,6 +61,7 @@ export type IntentAnalysis = {
   >;
   referencedProductIds?: string[];
   requestedQuantity?: number;
+  requestedCartItems?: Array<{ productId: string; quantity: number }>;
 };
 
 export type AddToCartIntent = {
@@ -85,6 +86,7 @@ export type IntentBrief = {
   >;
   referencedProductIds?: string[];
   requestedQuantity?: number;
+  requestedCartItems?: Array<{ productId: string; quantity: number }>;
 };
 
 export interface IntentAnalyzer {
@@ -357,6 +359,9 @@ export function resolveIntentBrief(
   const referencedProductIds = analysis.referencedProductIds?.filter((id) =>
     currentRecommendationIds.has(id),
   );
+  const requestedCartItems = analysis.requestedCartItems?.filter(({ productId }) =>
+    currentRecommendationIds.has(productId),
+  );
   return {
     goal: analysis.goal,
     constraints: context.productConstraints,
@@ -368,6 +373,7 @@ export function resolveIntentBrief(
     ...(analysis.requestedQuantity === undefined
       ? {}
       : { requestedQuantity: analysis.requestedQuantity }),
+    ...(requestedCartItems?.length ? { requestedCartItems } : {}),
   };
 }
 

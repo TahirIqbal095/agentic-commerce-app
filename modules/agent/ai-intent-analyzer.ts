@@ -218,6 +218,21 @@ const intentAnalysisSchema = jsonSchema<IntentAnalysis>(
         description:
           "The explicitly requested Cart quantity. Omit this property when the Customer did not state a quantity.",
       },
+      requestedCartItems: {
+        type: "array",
+        maxItems: 8,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["productId", "quantity"],
+          properties: {
+            productId: { type: "string", minLength: 1, maxLength: 160 },
+            quantity: { type: "number" },
+          },
+        },
+        description:
+          "Product IDs and their explicitly requested quantities when one Cart addition contains multiple Products.",
+      },
     },
   },
   {
@@ -277,7 +292,7 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
         "confidence",
         "requestedEffects",
       ],
-      ["referencedProductIds", "requestedQuantity"],
+      ["referencedProductIds", "requestedQuantity", "requestedCartItems"],
     ) &&
     typeof brief.goal === "string" &&
     brief.goal.trim().length > 0 &&
@@ -312,7 +327,30 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
           brief.referencedProductIds.length)) &&
     (brief.requestedQuantity === undefined ||
       (typeof brief.requestedQuantity === "number" &&
-        Number.isFinite(brief.requestedQuantity)))
+        Number.isFinite(brief.requestedQuantity))) &&
+    (brief.requestedCartItems === undefined ||
+      (Array.isArray(brief.requestedCartItems) &&
+        brief.requestedCartItems.length > 0 &&
+        brief.requestedCartItems.length <= 8 &&
+        new Set(
+          brief.requestedCartItems.map((item) =>
+            typeof item === "object" && item !== null
+              ? String((item as Record<string, unknown>).productId)
+              : "",
+          ),
+        ).size === brief.requestedCartItems.length &&
+        brief.requestedCartItems.every((item) => {
+          if (typeof item !== "object" || item === null) return false;
+          const candidate = item as Record<string, unknown>;
+          return (
+            hasExactlyKeys(candidate, ["productId", "quantity"]) &&
+            typeof candidate.productId === "string" &&
+            candidate.productId.trim().length > 0 &&
+            candidate.productId.length <= 160 &&
+            typeof candidate.quantity === "number" &&
+            Number.isFinite(candidate.quantity)
+          );
+        })))
   );
 }
 

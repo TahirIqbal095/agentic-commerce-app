@@ -48,8 +48,26 @@ _Avoid_: Recommendation
 
 **Cart**:
 A Customer's mutable selection of the Brand's Products before an Order is
-created. It persists independently of Conversations.
+created. It persists independently of Conversations and does not reserve
+Product inventory.
 _Avoid_: Basket, draft order
+
+**Cart Item**:
+A Product selected in a Cart, together with its positive whole-unit quantity
+and Cart Price. It remains visible when the Product's current price or
+availability changes.
+_Avoid_: Line item, cart line
+
+**Cart Price**:
+The unit price shown for a Cart Item, retained until the Cart is authoritatively
+repriced. Adding the same Product again reprices the entire Cart Item; a
+difference from the Product's current base price is disclosed.
+_Avoid_: Current price, final price
+
+**Cart Subtotal**:
+The sum of each Cart Item's quantity multiplied by its Cart Price, before any
+tax, shipping, discounts, or final checkout pricing.
+_Avoid_: Accumulated total, final total
 
 **Recommendation**:
 A Product suggestion shown in the context of a Customer's intent or Cart,

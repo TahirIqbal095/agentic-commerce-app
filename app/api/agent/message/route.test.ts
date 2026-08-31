@@ -6,7 +6,11 @@ import {
   type CommerceAgentLoop,
 } from "@/modules/agent/commerce-agent";
 import type { CatalogModule } from "@/modules/catalog/catalog";
-import { CartError, type CartModule } from "@/modules/cart/cart";
+import {
+  CartError,
+  type CartModule,
+  type CartView,
+} from "@/modules/cart/cart";
 import {
   createConversationModule,
   ConversationAccessError,
@@ -230,27 +234,40 @@ test("passes a Conversation Turn idempotency key to the Commerce Agent", async (
   ]);
 });
 
-test("returns the original outcome when a Conversation Turn is delivered twice", async () => {
+test("does not duplicate a multi-Product addition when a Conversation Turn is delivered twice", async () => {
   const idempotencyKey = "61000000-0000-4000-8000-000000000002";
-  const product = {
-    id: "71000000-0000-4000-8000-000000000002",
-    slug: "road-two",
-    name: "Road Two",
-    description: "A light road shoe",
-    category: "Footwear",
-    priceMinor: 410000,
-    currency: "INR",
-    inStock: true,
-    attributes: {},
-  };
+  const products = [
+    {
+      id: "71000000-0000-4000-8000-000000000002",
+      slug: "road-two",
+      name: "Road Two",
+      description: "A light road shoe",
+      category: "Footwear",
+      priceMinor: 410000,
+      currency: "INR",
+      inStock: true,
+      attributes: {},
+    },
+    {
+      id: "71000000-0000-4000-8000-000000000003",
+      slug: "court-three",
+      name: "Court Three",
+      description: "A durable court shoe",
+      category: "Footwear",
+      priceMinor: 280000,
+      currency: "INR",
+      inStock: true,
+      attributes: {},
+    },
+  ];
   const context = {
     ...emptyConversationContext(),
-    latestRecommendationSet: [{
+    latestRecommendationSet: products.map((product) => ({
       productId: product.id,
       name: product.name,
       description: product.description,
       category: product.category,
-    }],
+    })),
   };
   let storedOutcome: AgentOutcome | null = null;
   let analyses = 0;
@@ -286,42 +303,49 @@ test("returns the original outcome when a Conversation Turn is delivered twice",
       async analyze() {
         analyses += 1;
         return {
-          goal: "Add a recommended Product",
+          goal: "Add two recommended Products",
           constraintDelta: { set: {}, clear: [] },
           knownEntities: [],
           missingInformation: [],
           confidence: 0.9,
           requestedEffects: ["ADD_TO_CART"],
-          referencedProductIds: [product.id],
+          referencedProductIds: products.map((product) => product.id),
         };
       },
     },
     catalog: {
       async search() { throw new Error("not used"); },
-      async getProduct() { return { ok: true, value: product }; },
+      async getProduct(productId) {
+        const product = products.find((candidate) => candidate.id === productId);
+        assert.ok(product);
+        return { ok: true, value: product };
+      },
     },
     agentLoop: { async run() { throw new Error("not used"); } },
     cart: {
       async addItem() {
+        throw new Error("Multi-Product additions must be atomic");
+      },
+      async addItems() {
         additions += 1;
         return {
           id: "31000000-0000-4000-8000-000000000002",
-          items: [{
+          items: products.map((product) => ({
             productId: product.id,
             productName: product.name,
             quantity: 1,
             cartPriceMinor: product.priceMinor,
             subtotalMinor: product.priceMinor,
-          }],
-          totalQuantity: 1,
-          subtotalMinor: product.priceMinor,
-          currency: product.currency,
+          })),
+          totalQuantity: 2,
+          subtotalMinor: 690000,
+          currency: "INR",
         };
       },
       async inspect() { throw new Error("not used"); },
     },
   });
-  const request = { idempotencyKey, message: "Add the first one" };
+  const request = { idempotencyKey, message: "Add the first and second" };
 
   const first = await postAgentMessage(POST, request);
   const second = await postAgentMessage(POST, request);
@@ -330,6 +354,197 @@ test("returns the original outcome when a Conversation Turn is delivered twice",
   assert.equal(additions, 1);
   assert.equal(analyses, 1);
   assert.equal(userMessages, 1);
+});
+
+test("retains every addition from distinct concurrent multi-Product turns", async () => {
+  const products = [
+    {
+      id: "71000000-0000-4000-8000-000000000041",
+      slug: "trail-one",
+      name: "Trail One",
+      description: "A grippy trail shoe",
+      category: "Footwear",
+      priceMinor: 350000,
+      currency: "INR",
+      inStock: true,
+      attributes: {},
+    },
+    {
+      id: "71000000-0000-4000-8000-000000000042",
+      slug: "court-two",
+      name: "Court Two",
+      description: "A durable court shoe",
+      category: "Footwear",
+      priceMinor: 280000,
+      currency: "INR",
+      inStock: true,
+      attributes: {},
+    },
+  ];
+  const context = {
+    ...emptyConversationContext(),
+    latestRecommendationSet: products.map((product) => ({
+      productId: product.id,
+      name: product.name,
+      description: product.description,
+      category: product.category,
+    })),
+  };
+  let messageNumber = 0;
+  const repository: ConversationRepository = {
+    async findDuplicate() { return null; },
+    async create() {
+      throw new Error("Concurrent turns continue an existing Conversation");
+    },
+    async findOwnedContext() { return { userId, context }; },
+    async saveContextAndMetadata() {},
+    async append() {
+      messageNumber += 1;
+      return `51000000-0000-4000-8000-${String(messageNumber).padStart(12, "0")}`;
+    },
+    async finalizeTurn() {},
+  };
+  const quantities = new Map(products.map((product) => [product.id, 0]));
+  let mutationQueue = Promise.resolve();
+  const cartView = () => {
+    const items = products.flatMap((product) => {
+      const quantity = quantities.get(product.id) ?? 0;
+      return quantity === 0
+        ? []
+        : [{
+            productId: product.id,
+            productName: product.name,
+            quantity,
+            cartPriceMinor: product.priceMinor,
+            subtotalMinor: product.priceMinor * quantity,
+          }];
+    });
+    return {
+      id: items.length > 0
+        ? "31000000-0000-4000-8000-000000000041"
+        : null,
+      items,
+      totalQuantity: items.reduce((total, item) => total + item.quantity, 0),
+      subtotalMinor: items.reduce(
+        (total, item) => total + item.subtotalMinor,
+        0,
+      ),
+      currency: "INR",
+    };
+  };
+  const cart = {
+    async addItem() {
+      throw new Error("Concurrent turns use multi-Product additions");
+    },
+    async addItems(
+      additions: Array<{
+        product: (typeof products)[number];
+        quantity: number;
+      }>,
+      complete: (cart: ReturnType<typeof cartView>, transaction: never) => Promise<void>,
+    ) {
+      const precedingMutation = mutationQueue;
+      let releaseMutation!: () => void;
+      mutationQueue = new Promise<void>((resolve) => {
+        releaseMutation = resolve;
+      });
+      await precedingMutation;
+      try {
+        for (const addition of additions) {
+          quantities.set(
+            addition.product.id,
+            (quantities.get(addition.product.id) ?? 0) + addition.quantity,
+          );
+        }
+        const updatedCart = cartView();
+        await complete(updatedCart, {} as never);
+        return updatedCart;
+      } finally {
+        releaseMutation();
+      }
+    },
+    async inspect() { return cartView(); },
+  };
+  const POST = createConversationPost({
+    repository,
+    analyzer: {
+      async analyze({ message }) {
+        if (message === "What's in my Cart?") {
+          return {
+            goal: "Inspect Cart",
+            constraintDelta: { set: {}, clear: [] },
+            knownEntities: [],
+            missingInformation: [],
+            confidence: 0.99,
+            requestedEffects: ["INSPECT_CART"],
+          };
+        }
+        const quantity = message.includes("two of each") ? 2 : 1;
+        return {
+          goal: "Add two Products",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["ADD_TO_CART"],
+          referencedProductIds: products.map((product) => product.id),
+          requestedQuantity: quantity,
+        };
+      },
+    },
+    catalog: {
+      async search() { throw new Error("not used"); },
+      async getProduct(productId) {
+        const product = products.find((candidate) => candidate.id === productId);
+        assert.ok(product);
+        return { ok: true, value: product };
+      },
+    },
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart,
+  });
+
+  const responses = await Promise.all([
+    postAgentMessage(POST, {
+      conversationId,
+      message: "Add the first and second",
+    }),
+    postAgentMessage(POST, {
+      conversationId,
+      message: "Add the first and second, two of each",
+    }),
+  ]);
+  const inspection = await postAgentMessage(POST, {
+    conversationId,
+    message: "What's in my Cart?",
+  });
+
+  assert.deepEqual(
+    await Promise.all(responses.map(async (response) => (await response.json()).data.status)),
+    ["COMPLETED", "COMPLETED"],
+  );
+  assert.deepEqual((await inspection.json()).data.cart, {
+    id: "31000000-0000-4000-8000-000000000041",
+    items: [
+      {
+        productId: products[0].id,
+        productName: "Trail One",
+        quantity: 3,
+        cartPriceMinor: 350000,
+        subtotalMinor: 1050000,
+      },
+      {
+        productId: products[1].id,
+        productName: "Court Two",
+        quantity: 3,
+        cartPriceMinor: 280000,
+        subtotalMinor: 840000,
+      },
+    ],
+    totalQuantity: 6,
+    subtotalMinor: 1890000,
+    currency: "INR",
+  });
 });
 
 test("returns the winning outcome when simultaneous duplicate turns race to insert", async () => {
@@ -680,6 +895,286 @@ test("adds the second Product from the latest Recommendation Set with a default 
     products: [],
     cart: updatedCart,
   });
+
+});
+
+test("adds different quantities of multiple identified Products in one Conversation Turn", async () => {
+  const products = [
+    {
+      id: "71000000-0000-4000-8000-000000000021",
+      slug: "trail-one",
+      name: "Trail One",
+      description: "A grippy trail shoe",
+      category: "Footwear",
+      priceMinor: 350000,
+      currency: "INR",
+      inStock: true,
+      attributes: {},
+    },
+    {
+      id: "71000000-0000-4000-8000-000000000022",
+      slug: "road-two",
+      name: "Road Two",
+      description: "A light road shoe",
+      category: "Footwear",
+      priceMinor: 410000,
+      currency: "INR",
+      inStock: true,
+      attributes: {},
+    },
+    {
+      id: "71000000-0000-4000-8000-000000000023",
+      slug: "court-three",
+      name: "Court Three",
+      description: "A durable court shoe",
+      category: "Footwear",
+      priceMinor: 280000,
+      currency: "INR",
+      inStock: true,
+      attributes: {},
+    },
+  ];
+  const context = {
+    ...emptyConversationContext(),
+    latestRecommendationSet: products.map((product) => ({
+      productId: product.id,
+      name: product.name,
+      description: product.description,
+      category: product.category,
+    })),
+  };
+  const selectedProducts: typeof products = [];
+  const addProducts = (additions: Array<{
+    product: (typeof products)[number];
+    quantity: number;
+  }>) => {
+    selectedProducts.push(...additions.map(({ product }) => product));
+    const items = additions.map(({ product, quantity }) => ({
+      productId: product.id,
+      productName: product.name,
+      quantity,
+      cartPriceMinor: product.priceMinor,
+      subtotalMinor: product.priceMinor * quantity,
+    }));
+    return {
+      id: "31000000-0000-4000-8000-000000000021",
+      items,
+      totalQuantity: 3,
+      subtotalMinor: 980000,
+      currency: "INR",
+    };
+  };
+  const POST = createConversationPost({
+    repository: {
+      async findDuplicate() { return null; },
+      async create() {
+        return {
+          conversationId,
+          userMessageId: "51000000-0000-4000-8000-000000000021",
+          context,
+        };
+      },
+      async findOwnedContext() { return { userId, context }; },
+      async saveContextAndMetadata() {},
+      async append() { return "51000000-0000-4000-8000-000000000022"; },
+    },
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Add two of the first Product and one of the third",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["ADD_TO_CART"],
+          referencedProductIds: [products[0].id, products[2].id],
+          requestedCartItems: [
+            { productId: products[0].id, quantity: 2 },
+            { productId: products[2].id, quantity: 1 },
+          ],
+        };
+      },
+    },
+    catalog: {
+      async search() { throw new Error("not used"); },
+      async getProduct(productId) {
+        const product = products.find((candidate) => candidate.id === productId);
+        assert.ok(product);
+        return { ok: true, value: product };
+      },
+    },
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem(product, quantity) {
+        return addProducts([{ product, quantity }]);
+      },
+      async addItems(additions) { return addProducts(additions); },
+      async inspect() { throw new Error("not used"); },
+    },
+  });
+
+  const response = await postAgentMessage(POST, {
+    message: "Add two of the first and one of the third",
+  });
+
+  assert.deepEqual((await response.json()).data, {
+    status: "COMPLETED",
+    conversationId,
+    message: "Added 2 × Trail One and 1 × Court Three to your Cart.",
+    intentBrief: {
+      goal: "Add two of the first Product and one of the third",
+      constraints: emptyConversationContext().productConstraints,
+      knownEntities: [],
+      missingInformation: [],
+      confidence: 0.99,
+      requestedEffects: ["ADD_TO_CART"],
+      referencedProductIds: [products[0].id, products[2].id],
+      requestedCartItems: [
+        { productId: products[0].id, quantity: 2 },
+        { productId: products[2].id, quantity: 1 },
+      ],
+    },
+    products: [],
+    cart: {
+      id: "31000000-0000-4000-8000-000000000021",
+      items: [
+        {
+          productId: products[0].id,
+          productName: "Trail One",
+          quantity: 2,
+          cartPriceMinor: 350000,
+          subtotalMinor: 700000,
+        },
+        {
+          productId: products[2].id,
+          productName: "Court Three",
+          quantity: 1,
+          cartPriceMinor: 280000,
+          subtotalMinor: 280000,
+        },
+      ],
+      totalQuantity: 3,
+      subtotalMinor: 980000,
+      currency: "INR",
+    },
+  });
+});
+
+test("returns the unchanged Cart when any Product in a multi-Product addition fails", async () => {
+  const products = [
+    {
+      id: "71000000-0000-4000-8000-000000000031",
+      slug: "trail-one",
+      name: "Trail One",
+      description: "A grippy trail shoe",
+      category: "Footwear",
+      priceMinor: 350000,
+      currency: "INR",
+      inStock: true,
+      attributes: {},
+    },
+    {
+      id: "71000000-0000-4000-8000-000000000033",
+      slug: "court-three",
+      name: "Court Three",
+      description: "A low-stock court shoe",
+      category: "Footwear",
+      priceMinor: 280000,
+      currency: "INR",
+      inStock: true,
+      attributes: {},
+    },
+  ];
+  const context = {
+    ...emptyConversationContext(),
+    latestRecommendationSet: products.map((product) => ({
+      productId: product.id,
+      name: product.name,
+      description: product.description,
+      category: product.category,
+    })),
+  };
+  const unchangedCart = {
+    id: null,
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  let currentCart: CartView = structuredClone(unchangedCart);
+  const cart = {
+    async addItems() {
+      throw new CartError("Court Three only has 1 unit in stock.");
+    },
+    async addItem(product: (typeof products)[number]) {
+      if (product.id === products[1].id) {
+        throw new CartError("Court Three only has 1 unit in stock.");
+      }
+      currentCart = {
+        id: "31000000-0000-4000-8000-000000000031",
+        items: [{
+          productId: product.id,
+          productName: product.name,
+          quantity: 2,
+          cartPriceMinor: product.priceMinor,
+          subtotalMinor: 700000,
+        }],
+        totalQuantity: 2,
+        subtotalMinor: 700000,
+        currency: "INR",
+      };
+      return currentCart;
+    },
+    async inspect() { return structuredClone(currentCart); },
+  };
+  const POST = createConversationPost({
+    repository: {
+      async findDuplicate() { return null; },
+      async create() {
+        return {
+          conversationId,
+          userMessageId: "51000000-0000-4000-8000-000000000031",
+          context,
+        };
+      },
+      async findOwnedContext() { return { userId, context }; },
+      async saveContextAndMetadata() {},
+      async append() { return "51000000-0000-4000-8000-000000000032"; },
+    },
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Add two each of two Products",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["ADD_TO_CART"],
+          referencedProductIds: products.map((product) => product.id),
+          requestedQuantity: 2,
+        };
+      },
+    },
+    catalog: {
+      async search() { throw new Error("not used"); },
+      async getProduct(productId) {
+        const product = products.find((candidate) => candidate.id === productId);
+        assert.ok(product);
+        return { ok: true, value: product };
+      },
+    },
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart,
+  });
+
+  const response = await postAgentMessage(POST, {
+    message: "Add the first and second, two of each",
+  });
+
+  const outcome = (await response.json()).data;
+  assert.equal(outcome.status, "NEEDS_INPUT");
+  assert.equal(outcome.message, "Court Three only has 1 unit in stock.");
+  assert.deepEqual(outcome.cart, unchangedCart);
 });
 
 test("rolls back a Cart addition when its successful Conversation outcome cannot be persisted", async () => {
