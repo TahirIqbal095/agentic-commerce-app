@@ -160,6 +160,10 @@ test("catalog retrieval combines intent, commerce, and availability criteria", a
 
 test("POST adds multiple identified Products through one real atomic Cart mutation", async () => {
   await runSeedCommand();
+  await db.delete(approvals).where(eq(approvals.userId, DEMO_CUSTOMER_ID));
+  await db
+    .delete(checkoutProposals)
+    .where(eq(checkoutProposals.userId, DEMO_CUSTOMER_ID));
   await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
 
   const catalog = createCatalogModule();
@@ -274,6 +278,287 @@ async function prepareCart() {
   assert.ok(product);
   return { cart: createCartModule(DEMO_CUSTOMER_ID), product };
 }
+
+test("Cart clearing removes every Cart Item and returns the authoritative empty Cart", async () => {
+  const { cart, product } = await prepareCart();
+  const catalog = createCatalogModule();
+  const [secondProduct] = (await catalog.search({
+    query: "TrailCrest Grip Running Shoes",
+    limit: 1,
+  })).products;
+  assert.ok(secondProduct);
+  await cart.addItems([
+    { product, quantity: 2 },
+    { product: secondProduct, quantity: 1 },
+  ], async () => {});
+
+  const cleared = await cart.applyMutations!([{ type: "CLEAR" }], async () => {});
+
+  assert.deepEqual(cleared.items, []);
+  assert.equal(cleared.totalQuantity, 0);
+  assert.equal(cleared.subtotalMinor, 0);
+  assert.deepEqual(await cart.inspect(), cleared);
+});
+
+test("one Cart Mutation batch atomically adds, removes, and changes quantities", async () => {
+  const { cart, product: strideFlow } = await prepareCart();
+  const catalog = createCatalogModule();
+  const getProduct = async (query: string) => {
+    const [product] = (await catalog.search({ query, limit: 1 })).products;
+    assert.ok(product);
+    return product;
+  };
+  const trailCrest = await getProduct("TrailCrest Grip Running Shoes");
+  const flexForge = await getProduct("FlexForge Training Shoes");
+  const courtLine = await getProduct("CourtLine Casual Sneakers");
+  await cart.addItems([
+    { product: strideFlow, quantity: 2 },
+    { product: trailCrest, quantity: 1 },
+    { product: flexForge, quantity: 2 },
+  ], async () => {});
+
+  const updated = await cart.applyMutations!([
+    { type: "ADD", product: courtLine, quantity: 1 },
+    { type: "REMOVE", reference: trailCrest.name },
+    {
+      type: "CHANGE_QUANTITY",
+      reference: strideFlow.name,
+      change: { mode: "RELATIVE", quantity: 1 },
+    },
+    {
+      type: "CHANGE_QUANTITY",
+      reference: flexForge.name,
+      change: { mode: "EXACT", quantity: 3 },
+    },
+  ], async () => {});
+
+  assert.deepEqual(
+    updated.items.map(({ productId, quantity }) => ({ productId, quantity })),
+    [
+      { productId: strideFlow.id, quantity: 3 },
+      { productId: flexForge.id, quantity: 3 },
+      { productId: courtLine.id, quantity: 1 },
+    ],
+  );
+  assert.equal(updated.totalQuantity, 7);
+});
+
+test("an invalid Cart Mutation rolls back every operation in its batch", async () => {
+  const { cart, product: strideFlow } = await prepareCart();
+  const [courtLine] = (await createCatalogModule().search({
+    query: "CourtLine Casual Sneakers",
+    limit: 1,
+  })).products;
+  assert.ok(courtLine);
+  await cart.addItem(strideFlow, 2, async () => {});
+  const before = await cart.inspect();
+
+  await assert.rejects(
+    cart.applyMutations!([
+      { type: "ADD", product: courtLine, quantity: 1 },
+      {
+        type: "CHANGE_QUANTITY",
+        reference: strideFlow.name,
+        change: { mode: "EXACT", quantity: 11 },
+      },
+    ], async () => {}),
+    /cannot have more than 10 units/,
+  );
+
+  assert.deepEqual(await cart.inspect(), before);
+});
+
+test("a Cart Mutation batch rolls back when Conversation Turn completion fails", async () => {
+  const { cart, product: strideFlow } = await prepareCart();
+  const [courtLine] = (await createCatalogModule().search({
+    query: "CourtLine Casual Sneakers",
+    limit: 1,
+  })).products;
+  assert.ok(courtLine);
+  await cart.addItem(strideFlow, 2, async () => {});
+  const before = await cart.inspect();
+
+  await assert.rejects(
+    cart.applyMutations!([
+      { type: "ADD", product: courtLine, quantity: 1 },
+      {
+        type: "CHANGE_QUANTITY",
+        reference: strideFlow.name,
+        change: { mode: "RELATIVE", quantity: 1 },
+      },
+    ], async () => {
+      throw new Error("Conversation Turn completion failed");
+    }),
+    /Conversation Turn completion failed/,
+  );
+
+  assert.deepEqual(await cart.inspect(), before);
+});
+
+test("duplicate, contradictory, and ambiguous Cart Mutation batches have no partial effects", async () => {
+  const { cart, product: strideFlow } = await prepareCart();
+  const catalog = createCatalogModule();
+  const [trailCrest] = (await catalog.search({
+    query: "TrailCrest Grip Running Shoes",
+    limit: 1,
+  })).products;
+  const [courtLine] = (await catalog.search({
+    query: "CourtLine Casual Sneakers",
+    limit: 1,
+  })).products;
+  assert.ok(trailCrest);
+  assert.ok(courtLine);
+  await cart.addItems([
+    { product: strideFlow, quantity: 2 },
+    { product: trailCrest, quantity: 1 },
+  ], async () => {});
+
+  const original = await cart.inspect();
+  await assert.rejects(
+    cart.applyMutations!([
+      { type: "ADD", product: courtLine, quantity: 1 },
+      { type: "ADD", product: courtLine, quantity: 1 },
+    ], async () => {}),
+    /same Product cannot be added more than once/,
+  );
+  assert.deepEqual(await cart.inspect(), original);
+
+  await assert.rejects(
+    cart.applyMutations!([
+      { type: "REMOVE", reference: strideFlow.name },
+      {
+        type: "CHANGE_QUANTITY",
+        reference: strideFlow.name,
+        change: { mode: "RELATIVE", quantity: 1 },
+      },
+    ], async () => {}),
+    /duplicate or contradictory/,
+  );
+  assert.deepEqual(await cart.inspect(), original);
+
+  await db
+    .update(products)
+    .set({ name: strideFlow.name })
+    .where(eq(products.id, trailCrest.id));
+  const ambiguous = await cart.inspect();
+  await assert.rejects(
+    cart.applyMutations!([
+      { type: "ADD", product: courtLine, quantity: 1 },
+      { type: "REMOVE", reference: strideFlow.name },
+    ], async () => {}),
+    /More than one Cart Item matches/,
+  );
+  assert.deepEqual(await cart.inspect(), ambiguous);
+});
+
+test("POST safely clears an already-empty Cart and replays its original result", async () => {
+  const { cart } = await prepareCart();
+  let analyses = 0;
+  const agent = createCommerceAgent(
+    createCatalogModule(),
+    {
+      async analyze() {
+        analyses += 1;
+        return {
+          goal: "Clear the Cart",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["CLEAR_CART" as const],
+        };
+      },
+    },
+    createConversationModule(DEMO_CUSTOMER_ID),
+    {
+      agentLoop: { async run() { throw new Error("not used"); } },
+      cart,
+    },
+  );
+  const POST = createPostHandler(async () => agent);
+  const request = new Request("http://localhost/api/agent/message", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      message: "Clear my Cart",
+      idempotencyKey: crypto.randomUUID(),
+    }),
+  });
+
+  const first = await POST(request.clone());
+  const second = await POST(request.clone());
+
+  assert.deepEqual(await second.json(), await first.json());
+  assert.equal(analyses, 1);
+  assert.deepEqual((await cart.inspect()).items, []);
+});
+
+test("a successful Cart Mutation batch advances one version and invalidates stale checkout state", async () => {
+  const { cart, product } = await prepareCart();
+  const [courtLine] = (await createCatalogModule().search({
+    query: "CourtLine Casual Sneakers",
+    limit: 1,
+  })).products;
+  assert.ok(courtLine);
+  await cart.addItem(product, 2, async () => {});
+  const [before] = await db
+    .select({ id: carts.id, version: carts.version })
+    .from(carts)
+    .where(and(eq(carts.userId, DEMO_CUSTOMER_ID), eq(carts.status, "ACTIVE")))
+    .limit(1);
+  const [proposal] = await db
+    .insert(checkoutProposals)
+    .values({
+      cartId: before.id,
+      userId: DEMO_CUSTOMER_ID,
+      cartVersion: before.version,
+      status: "APPROVAL_PENDING",
+      policyDecision: "REQUIRES_APPROVAL",
+      subtotalMinor: product.priceMinor * 2,
+      discountMinor: 0,
+      shippingMinor: 0,
+      taxMinor: 0,
+      totalMinor: product.priceMinor * 2,
+      currency: product.currency,
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+    .returning({ id: checkoutProposals.id });
+  await db.insert(approvals).values({
+    proposalId: proposal.id,
+    userId: DEMO_CUSTOMER_ID,
+    actionType: "PLACE_ORDER",
+    amountMinor: product.priceMinor * 2,
+    currency: product.currency,
+    reason: "Customer Approval required",
+    status: "PENDING",
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+
+  await cart.applyMutations!([
+    { type: "ADD", product: courtLine, quantity: 1 },
+    {
+      type: "CHANGE_QUANTITY",
+      reference: product.name,
+      change: { mode: "RELATIVE", quantity: 1 },
+    },
+  ], async () => {});
+
+  const [afterBatch] = await db
+    .select({ version: carts.version })
+    .from(carts)
+    .where(eq(carts.id, before.id));
+  const [invalidatedProposal] = await db
+    .select({ status: checkoutProposals.status })
+    .from(checkoutProposals)
+    .where(eq(checkoutProposals.id, proposal.id));
+  const [invalidatedApproval] = await db
+    .select({ status: approvals.status })
+    .from(approvals)
+    .where(eq(approvals.proposalId, proposal.id));
+  assert.equal(afterBatch.version, before.version + 1);
+  assert.equal(invalidatedProposal.status, "INVALIDATED");
+  assert.equal(invalidatedApproval.status, "INVALIDATED");
+});
 
 function createQuantityChangePost(
   productName: string | undefined,

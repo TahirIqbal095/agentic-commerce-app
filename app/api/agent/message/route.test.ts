@@ -30,12 +30,14 @@ import { createPostHandler } from "./handler";
 const conversationId = "41000000-0000-4000-8000-000000000001";
 const userId = "11000000-0000-4000-8000-000000000001";
 
-function createInMemoryConversationRepository(): ConversationRepository {
+function createInMemoryConversationRepository(
+  initialContext = emptyConversationContext(),
+): ConversationRepository {
   let persistedContext: ConversationContext | undefined;
   return {
     async findDuplicate() { return null; },
     async create() {
-      persistedContext = emptyConversationContext();
+      persistedContext = structuredClone(initialContext);
       return {
         conversationId,
         userMessageId: "51000000-0000-4000-8000-000000000001",
@@ -776,6 +778,309 @@ test("returns a clear zero-quantity summary when the Customer's Cart is empty", 
   const result = (await response.json()).data;
   assert.equal(result.message, "Your Cart is empty.");
   assert.deepEqual(result.cart, emptyCart);
+});
+
+test("clears every Cart Item through one authoritative Cart Mutation", async () => {
+  const emptyCart = {
+    id: "31000000-0000-4000-8000-000000000023",
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  const mutations: unknown[] = [];
+  const POST = createConversationPost({
+    repository: createInMemoryConversationRepository(),
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Clear the Cart",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["CLEAR_CART" as const],
+          requestedCartMutations: [{ type: "CLEAR" as const }],
+        };
+      },
+    },
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() { throw new Error("must not add to the Cart"); },
+      async addItems() { throw new Error("must not add to the Cart"); },
+      async applyMutations(requested, complete) {
+        mutations.push(...requested);
+        await complete(emptyCart, {} as never);
+        return emptyCart;
+      },
+      async inspect() { throw new Error("must use the authoritative result"); },
+    },
+  });
+
+  const outcome = (await (await postAgentMessage(POST, {
+    message: "Clear my Cart",
+  })).json()).data;
+
+  assert.deepEqual(mutations, [{ type: "CLEAR" }]);
+  assert.equal(outcome.status, "COMPLETED");
+  assert.equal(outcome.message, "Your Cart is empty.");
+  assert.deepEqual(outcome.cart, emptyCart);
+});
+
+test("does not clear the Cart when clearing is combined with another unstructured Cart Mutation", async () => {
+  const unchangedCart = {
+    id: "31000000-0000-4000-8000-000000000026",
+    items: [{
+      productId: "21000000-0000-4000-8000-000000000026",
+      productName: "Trail One",
+      quantity: 1,
+      cartPriceMinor: 350000,
+      subtotalMinor: 350000,
+    }],
+    totalQuantity: 1,
+    subtotalMinor: 350000,
+    currency: "INR",
+  };
+  const POST = createConversationPost({
+    repository: createInMemoryConversationRepository(),
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Clear and remove from the Cart",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["CLEAR_CART" as const, "REMOVE_FROM_CART" as const],
+          requestedCartItemReference: "Trail One",
+        };
+      },
+    },
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() { throw new Error("must not mutate"); },
+      async addItems() { throw new Error("must not mutate"); },
+      async applyMutations() { throw new Error("must not clear"); },
+      async removeItem() { throw new Error("must not remove"); },
+      async inspect() { return unchangedCart; },
+    },
+  });
+
+  const outcome = (await (await postAgentMessage(POST, {
+    message: "Clear my Cart and remove Trail One",
+  })).json()).data;
+
+  assert.equal(outcome.status, "NEEDS_INPUT");
+  assert.match(outcome.message, /cannot be combined/i);
+  assert.deepEqual(outcome.cart, unchangedCart);
+});
+
+test("applies additions, removals, and relative and exact quantity changes as one Cart Mutation batch", async () => {
+  const product = {
+    id: "71000000-0000-4000-8000-000000000023",
+    slug: "road-two",
+    name: "Road Two",
+    description: "A light road shoe",
+    category: "Footwear",
+    priceMinor: 410000,
+    currency: "INR",
+    inStock: true,
+    attributes: {},
+  };
+  const context = {
+    ...emptyConversationContext(),
+    latestRecommendationSet: [{
+      productId: product.id,
+      name: product.name,
+      description: product.description,
+      category: product.category,
+    }],
+  };
+  const updatedCart = {
+    id: "31000000-0000-4000-8000-000000000024",
+    items: [{
+      productId: product.id,
+      productName: product.name,
+      quantity: 2,
+      cartPriceMinor: product.priceMinor,
+      subtotalMinor: 820000,
+    }],
+    totalQuantity: 2,
+    subtotalMinor: 820000,
+    currency: "INR",
+  };
+  const batches: unknown[] = [];
+  const POST = createConversationPost({
+    repository: createInMemoryConversationRepository(context),
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Apply several Cart Mutations",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: [
+            "ADD_TO_CART" as const,
+            "REMOVE_FROM_CART" as const,
+            "CHANGE_CART_QUANTITY" as const,
+          ],
+          requestedCartMutations: [
+            { type: "ADD" as const, productId: product.id, quantity: 2 },
+            { type: "REMOVE" as const, reference: "Trail One" },
+            {
+              type: "CHANGE_QUANTITY" as const,
+              reference: "Court Three",
+              change: { mode: "RELATIVE" as const, quantity: 1 },
+            },
+            {
+              type: "CHANGE_QUANTITY" as const,
+              reference: "Gym Four",
+              change: { mode: "EXACT" as const, quantity: 3 },
+            },
+          ],
+        };
+      },
+    },
+    catalog: {
+      async search() { throw new Error("not used"); },
+      async getProduct(productId) {
+        assert.equal(productId, product.id);
+        return { ok: true, value: product };
+      },
+    },
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() { throw new Error("must use one batch"); },
+      async addItems() { throw new Error("must use one batch"); },
+      async removeItem() { throw new Error("must use one batch"); },
+      async changeItemQuantity() { throw new Error("must use one batch"); },
+      async applyMutations(mutations, complete) {
+        batches.push(mutations);
+        await complete(updatedCart, {} as never);
+        return updatedCart;
+      },
+      async inspect() { throw new Error("must use the authoritative result"); },
+    },
+  });
+
+  const outcome = (await (await postAgentMessage(POST, {
+    message: "Add two Road Two, remove Trail One, add one Court Three, and make Gym Four three",
+  })).json()).data;
+
+  assert.deepEqual(batches, [[
+    { type: "ADD", product, quantity: 2 },
+    { type: "REMOVE", reference: "Trail One" },
+    {
+      type: "CHANGE_QUANTITY",
+      reference: "Court Three",
+      change: { mode: "RELATIVE", quantity: 1 },
+    },
+    {
+      type: "CHANGE_QUANTITY",
+      reference: "Gym Four",
+      change: { mode: "EXACT", quantity: 3 },
+    },
+  ]]);
+  assert.equal(outcome.status, "COMPLETED");
+  assert.equal(outcome.message, "Updated your Cart.");
+  assert.deepEqual(outcome.cart, updatedCart);
+});
+
+test("replays a mixed Cart Mutation turn without applying its batch again", async () => {
+  const idempotencyKey = "61000000-0000-4000-8000-000000000023";
+  const product = {
+    id: "71000000-0000-4000-8000-000000000024",
+    slug: "road-two",
+    name: "Road Two",
+    description: "A light road shoe",
+    category: "Footwear",
+    priceMinor: 410000,
+    currency: "INR",
+    inStock: true,
+    attributes: {},
+  };
+  const context = {
+    ...emptyConversationContext(),
+    latestRecommendationSet: [{
+      productId: product.id,
+      name: product.name,
+      description: product.description,
+      category: product.category,
+    }],
+  };
+  const updatedCart = {
+    id: "31000000-0000-4000-8000-000000000025",
+    items: [{
+      productId: product.id,
+      productName: product.name,
+      quantity: 1,
+      cartPriceMinor: product.priceMinor,
+      subtotalMinor: product.priceMinor,
+    }],
+    totalQuantity: 1,
+    subtotalMinor: product.priceMinor,
+    currency: "INR",
+  };
+  let storedOutcome: AgentOutcome | null = null;
+  let batches = 0;
+  const repository: ConversationRepository = {
+    async findDuplicate() { return storedOutcome; },
+    async create() {
+      return {
+        conversationId,
+        userMessageId: "51000000-0000-4000-8000-000000000023",
+        context,
+      };
+    },
+    async findOwnedContext() { return { userId, context }; },
+    async saveContextAndMetadata() {},
+    async append() { throw new Error("not used"); },
+    async finalizeTurn(_conversationId, _messageId, _message, outcome) {
+      storedOutcome = outcome;
+    },
+  };
+  const POST = createConversationPost({
+    repository,
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Apply mixed Cart Mutations",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["ADD_TO_CART" as const, "REMOVE_FROM_CART" as const],
+          requestedCartMutations: [
+            { type: "ADD" as const, productId: product.id, quantity: 1 },
+            { type: "REMOVE" as const, reference: "Trail One" },
+          ],
+        };
+      },
+    },
+    catalog: {
+      async search() { throw new Error("not used"); },
+      async getProduct() { return { ok: true, value: product }; },
+    },
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() { throw new Error("must use one batch"); },
+      async addItems() { throw new Error("must use one batch"); },
+      async applyMutations(_mutations, complete) {
+        batches += 1;
+        await complete(updatedCart, {} as never);
+        return updatedCart;
+      },
+      async inspect() { throw new Error("not used"); },
+    },
+  });
+  const request = { idempotencyKey, message: "Add Road Two and remove Trail One" };
+
+  const first = await postAgentMessage(POST, request);
+  const second = await postAgentMessage(POST, request);
+
+  assert.deepEqual(await second.json(), await first.json());
+  assert.equal(batches, 1);
 });
 
 test("removes a named Cart Item and returns the authoritative empty Cart Summary", async () => {

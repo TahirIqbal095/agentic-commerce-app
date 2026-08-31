@@ -49,6 +49,16 @@ export type CartQuantityChange = {
   quantity: number;
 };
 
+export type CartMutation =
+  | { type: "ADD"; product: CatalogProduct; quantity: number }
+  | { type: "REMOVE"; reference: string }
+  | {
+      type: "CHANGE_QUANTITY";
+      reference?: string;
+      change: CartQuantityChange;
+    }
+  | { type: "CLEAR" };
+
 export interface CartModule {
   addItem(
     product: CatalogProduct,
@@ -66,6 +76,10 @@ export interface CartModule {
   changeItemQuantity?(
     reference: string | undefined,
     change: CartQuantityChange,
+    complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
+  ): Promise<CartView>;
+  applyMutations?(
+    mutations: CartMutation[],
     complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
   ): Promise<CartView>;
   inspect(): Promise<CartView>;
@@ -254,6 +268,289 @@ export function createCartModule(
       return addItems([{ product, quantity }], complete);
     },
     addItems,
+    async applyMutations(mutations, complete) {
+      if (mutations.length === 0 || mutations.length > 16) {
+        throw new CartError("At least one valid Cart Mutation is required.");
+      }
+      const clearRequested = mutations.some(({ type }) => type === "CLEAR");
+      if (clearRequested && mutations.length !== 1) {
+        throw new CartError("Clearing the Cart cannot be combined with another Cart Mutation.");
+      }
+
+      return db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${userId}))`,
+        );
+        const [activeCart] = await transaction
+          .select({ id: carts.id, currency: carts.currency })
+          .from(carts)
+          .where(and(eq(carts.userId, userId), eq(carts.status, "ACTIVE")))
+          .limit(1);
+        if (clearRequested && !activeCart) {
+          const cart: CartView = {
+            id: null,
+            items: [],
+            totalQuantity: 0,
+            subtotalMinor: 0,
+            currency: defaultCurrency,
+          };
+          await complete(cart, transaction);
+          return cart;
+        }
+
+        if (clearRequested) {
+          const removedItems = await transaction
+            .delete(cartItems)
+            .where(eq(cartItems.cartId, activeCart!.id))
+            .returning({ id: cartItems.id });
+          if (removedItems.length > 0) {
+            await transaction
+              .update(carts)
+              .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
+              .where(eq(carts.id, activeCart!.id));
+            await invalidateCheckoutState(transaction, activeCart!.id);
+          }
+          const cart = await readCart(transaction, activeCart!);
+          await complete(cart, transaction);
+          return cart;
+        }
+
+        const additions = mutations.filter(
+          (mutation) => mutation.type === "ADD",
+        );
+        const additionIds = additions.map(({ product }) => product.id);
+        if (new Set(additionIds).size !== additionIds.length) {
+          throw new CartError("The same Product cannot be added more than once in one turn.");
+        }
+        for (const { product, quantity } of additions) {
+          if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
+            throw new CartError(`${product.name} quantity must be between 1 and 10.`);
+          }
+        }
+        if (!activeCart && mutations.some(({ type }) => type !== "ADD")) {
+          throw new CartError("Your Cart is empty.");
+        }
+
+        const authoritativeProducts = additions.length === 0
+          ? []
+          : await transaction
+              .select({
+                id: products.id,
+                name: products.name,
+                priceMinor: products.priceMinor,
+                currency: products.currency,
+                stock: products.stock,
+                active: products.active,
+              })
+              .from(products)
+              .where(inArray(products.id, additionIds));
+        const authoritativeById = new Map(
+          authoritativeProducts.map((product) => [product.id, product]),
+        );
+        const validatedAdditions = additions.map(({ product, quantity }) => {
+          const authoritative = authoritativeById.get(product.id);
+          if (!authoritative?.active) {
+            throw new CartError(`${product.name} is not available.`);
+          }
+          return { product: authoritative, quantity };
+        });
+
+        let resultingCart = activeCart;
+        const currency = activeCart?.currency ??
+          validatedAdditions[0]?.product.currency ?? defaultCurrency;
+        for (const { product } of validatedAdditions) {
+          if (product.currency !== currency) {
+            throw new CartError(
+              `${product.name} uses ${product.currency}, but the Cart uses ${currency}.`,
+            );
+          }
+        }
+        if (!resultingCart) {
+          [resultingCart] = await transaction
+            .insert(carts)
+            .values({ userId, currency })
+            .returning({ id: carts.id, currency: carts.currency });
+        }
+
+        const currentItems = await transaction
+          .select({
+            id: cartItems.id,
+            productId: cartItems.productId,
+            productName: products.name,
+            quantity: cartItems.quantity,
+            cartPriceMinor: cartItems.unitPriceSnapshotMinor,
+            currentPriceMinor: products.priceMinor,
+            currency: products.currency,
+            stock: products.stock,
+            active: products.active,
+          })
+          .from(cartItems)
+          .innerJoin(products, eq(products.id, cartItems.productId))
+          .where(eq(cartItems.cartId, resultingCart.id));
+        const byProductId = new Map(
+          currentItems.map((item) => [item.productId, item]),
+        );
+        const targetedProductIds = new Set(additionIds);
+        const resolveItem = (reference: string | undefined) => {
+          if (reference === undefined) {
+            if (currentItems.length !== 1) {
+              throw new CartError("Which Cart Item would you like to change?");
+            }
+            return currentItems[0];
+          }
+          const normalized = reference.trim().toLocaleLowerCase();
+          if (!normalized) {
+            throw new CartError("Which Cart Item would you like to change?");
+          }
+          const matches = currentItems.filter(
+            ({ productName }) =>
+              productName.trim().toLocaleLowerCase() === normalized,
+          );
+          if (matches.length === 0) {
+            throw new CartError(`${reference} is not in your Cart.`);
+          }
+          if (matches.length > 1) {
+            throw new CartError(`More than one Cart Item matches ${reference}.`);
+          }
+          return matches[0];
+        };
+        const removals: typeof currentItems = [];
+        const quantityChanges: Array<{
+          item: (typeof currentItems)[number];
+          quantity: number;
+          cartPriceMinor: number;
+        }> = [];
+        const priceChanges: CartPriceChange[] = [];
+
+        for (const mutation of mutations) {
+          if (mutation.type === "ADD") continue;
+          if (mutation.type === "CLEAR") continue;
+          const item = resolveItem(mutation.reference);
+          if (targetedProductIds.has(item.productId)) {
+            throw new CartError(
+              `${item.productName} has duplicate or contradictory Cart Mutations.`,
+            );
+          }
+          targetedProductIds.add(item.productId);
+          if (mutation.type === "REMOVE") {
+            removals.push(item);
+            continue;
+          }
+          const { mode, quantity: requestedQuantity } = mutation.change;
+          if (
+            !["RELATIVE", "EXACT"].includes(mode) ||
+            !Number.isInteger(requestedQuantity) ||
+            (mode === "RELATIVE" && requestedQuantity === 0)
+          ) {
+            throw new CartError("Cart Item quantity must be a clear whole-unit change.");
+          }
+          const quantity = mode === "RELATIVE"
+            ? item.quantity + requestedQuantity
+            : requestedQuantity;
+          if (quantity < 1 || quantity > 10) {
+            throw new CartError(
+              quantity < 1
+                ? `${item.productName} quantity must stay positive. Remove the Cart Item explicitly instead.`
+                : `${item.productName} cannot have more than 10 units in the Cart.`,
+            );
+          }
+          if (quantity === item.quantity) {
+            throw new CartError(`${item.productName} already has quantity ${quantity}.`);
+          }
+          const increasing = quantity > item.quantity;
+          if (increasing && !item.active) {
+            throw new CartError(`${item.productName} is inactive and cannot be increased.`);
+          }
+          if (quantity > item.stock) {
+            throw new CartError(
+              `${item.productName} only has ${item.stock} ${item.stock === 1 ? "unit" : "units"} in stock.`,
+            );
+          }
+          const cartPriceMinor = increasing
+            ? item.currentPriceMinor
+            : item.cartPriceMinor;
+          if (increasing && cartPriceMinor !== item.cartPriceMinor) {
+            priceChanges.push({
+              productId: item.productId,
+              previousCartPriceMinor: item.cartPriceMinor,
+              currentCartPriceMinor: cartPriceMinor,
+              direction: cartPriceMinor > item.cartPriceMinor
+                ? "INCREASED"
+                : "DECREASED",
+            });
+          }
+          quantityChanges.push({ item, quantity, cartPriceMinor });
+        }
+
+        for (const { product, quantity } of validatedAdditions) {
+          const existing = byProductId.get(product.id);
+          const nextQuantity = (existing?.quantity ?? 0) + quantity;
+          if (nextQuantity > 10) {
+            throw new CartError(
+              `${product.name} cannot have more than 10 units in the Cart.`,
+            );
+          }
+          if (nextQuantity > product.stock) {
+            throw new CartError(
+              `${product.name} only has ${product.stock} ${product.stock === 1 ? "unit" : "units"} in stock.`,
+            );
+          }
+          if (existing && existing.cartPriceMinor !== product.priceMinor) {
+            priceChanges.push({
+              productId: product.id,
+              previousCartPriceMinor: existing.cartPriceMinor,
+              currentCartPriceMinor: product.priceMinor,
+              direction: product.priceMinor > existing.cartPriceMinor
+                ? "INCREASED"
+                : "DECREASED",
+            });
+          }
+          await transaction
+            .insert(cartItems)
+            .values({
+              cartId: resultingCart.id,
+              productId: product.id,
+              quantity: nextQuantity,
+              unitPriceSnapshotMinor: product.priceMinor,
+            })
+            .onConflictDoUpdate({
+              target: [cartItems.cartId, cartItems.productId],
+              set: {
+                quantity: nextQuantity,
+                unitPriceSnapshotMinor: product.priceMinor,
+                updatedAt: new Date(),
+              },
+            });
+        }
+        for (const { item, quantity, cartPriceMinor } of quantityChanges) {
+          await transaction
+            .update(cartItems)
+            .set({
+              quantity,
+              unitPriceSnapshotMinor: cartPriceMinor,
+              updatedAt: new Date(),
+            })
+            .where(eq(cartItems.id, item.id));
+        }
+        if (removals.length > 0) {
+          await transaction
+            .delete(cartItems)
+            .where(inArray(cartItems.id, removals.map(({ id }) => id)));
+        }
+
+        await transaction
+          .update(carts)
+          .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
+          .where(eq(carts.id, resultingCart.id));
+        await invalidateCheckoutState(transaction, resultingCart.id);
+        const cart: CartView = {
+          ...(await readCart(transaction, resultingCart)),
+          ...(priceChanges.length > 0 ? { priceChanges } : {}),
+        };
+        await complete(cart, transaction);
+        return cart;
+      });
+    },
     async removeItem(reference, complete) {
       const normalizedReference = reference.trim().toLocaleLowerCase();
       if (!normalizedReference) {

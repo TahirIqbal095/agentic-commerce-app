@@ -64,6 +64,7 @@ export type IntentAnalysis = {
     | "INSPECT_CART"
     | "CHANGE_CART_QUANTITY"
     | "REMOVE_FROM_CART"
+    | "CLEAR_CART"
   >;
   referencedProductIds?: string[];
   requestedQuantity?: number;
@@ -71,6 +72,7 @@ export type IntentAnalysis = {
   requestedCartItemReference?: string;
   requestedCartQuantityChange?: RequestedCartQuantityChange;
   hasMultipleCartQuantityChanges?: true;
+  requestedCartMutations?: RequestedCartMutation[];
 };
 
 export type RequestedCartAddition = {
@@ -79,6 +81,16 @@ export type RequestedCartAddition = {
 };
 
 export type RequestedCartQuantityChange = CartQuantityChange;
+
+export type RequestedCartMutation =
+  | { type: "ADD"; productId: string; quantity: number }
+  | { type: "REMOVE"; reference: string }
+  | {
+      type: "CHANGE_QUANTITY";
+      reference?: string;
+      change: RequestedCartQuantityChange;
+    }
+  | { type: "CLEAR" };
 
 export type AddToCartIntent = {
   action: "ADD_TO_CART";
@@ -103,6 +115,7 @@ export type IntentBrief = {
     | "INSPECT_CART"
     | "CHANGE_CART_QUANTITY"
     | "REMOVE_FROM_CART"
+    | "CLEAR_CART"
   >;
   referencedProductIds?: string[];
   requestedQuantity?: number;
@@ -110,6 +123,7 @@ export type IntentBrief = {
   requestedCartItemReference?: string;
   requestedCartQuantityChange?: RequestedCartQuantityChange;
   hasMultipleCartQuantityChanges?: true;
+  requestedCartMutations?: RequestedCartMutation[];
   hasUnresolvedProductReferences?: true;
   hasConflictingCartRequest?: true;
 };
@@ -418,6 +432,13 @@ export function resolveIntentBrief(
     ...(analysis.referencedProductIds ?? []),
     ...(analysis.requestedAdditions?.map(({ productId }) => productId) ?? []),
   ];
+  const requestedCartMutations = analysis.requestedCartMutations?.filter(
+    (mutation) =>
+      mutation.type !== "ADD" || currentRecommendationIds.has(mutation.productId),
+  );
+  const requestedMutationProductIds = analysis.requestedCartMutations?.flatMap(
+    (mutation) => mutation.type === "ADD" ? [mutation.productId] : [],
+  ) ?? [];
   const hasConflictingCartRequest =
     !haveConsistentProductSelections(
       analysis.referencedProductIds,
@@ -446,7 +467,9 @@ export function resolveIntentBrief(
     ...(analysis.hasMultipleCartQuantityChanges
       ? { hasMultipleCartQuantityChanges: true as const }
       : {}),
-    ...(requestedProductIds.some((id) => !currentRecommendationIds.has(id))
+    ...(requestedCartMutations?.length ? { requestedCartMutations } : {}),
+    ...(requestedProductIds.some((id) => !currentRecommendationIds.has(id)) ||
+      requestedMutationProductIds.some((id) => !currentRecommendationIds.has(id))
       ? { hasUnresolvedProductReferences: true as const }
       : {}),
     ...(hasConflictingCartRequest

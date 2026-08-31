@@ -154,6 +154,145 @@ export function createCommerceAgent(
           });
         }
       }
+      if (intentBrief.requestedCartMutations?.length) {
+        if (intentBrief.hasUnresolvedProductReferences) {
+          return needsInputWithCurrentCart({
+            turn,
+            cart: options.cart,
+            intentBrief,
+            message:
+              "One requested Product is no longer in the latest Recommendation Set.",
+            question: "Which current Products should I use for these Cart Mutations?",
+            missingInformation: ["Current Product references"],
+          });
+        }
+        try {
+          if (!options.cart?.applyMutations) {
+            throw new Error("Cart Mutation batch capability unavailable");
+          }
+          const additions = intentBrief.requestedCartMutations.filter(
+            (mutation) => mutation.type === "ADD",
+          );
+          const productResults = await Promise.all(
+            additions.map((mutation) => catalog.getProduct(mutation.productId)),
+          );
+          const productsById = new Map(
+            productResults.map((result, index) => {
+              if (!result.ok) {
+                throw new CartError(
+                  `${additions[index].productId} is not available.`,
+                );
+              }
+              return [result.value.id, result.value] as const;
+            }),
+          );
+          const mutations = intentBrief.requestedCartMutations.map((mutation) =>
+            mutation.type === "ADD"
+              ? {
+                  type: "ADD" as const,
+                  product: productsById.get(mutation.productId)!,
+                  quantity: mutation.quantity,
+                }
+              : mutation,
+          );
+          let completedOutcome: AgentOutcome | undefined;
+          await options.cart.applyMutations(
+            mutations,
+            async (updatedCart, transaction) => {
+              const outcome: AgentOutcome = {
+                status: "COMPLETED",
+                conversationId: turn.conversationId,
+                message:
+                  updatedCart.items.length === 0
+                    ? "Your Cart is empty."
+                    : "Updated your Cart.",
+                intentBrief,
+                products: [],
+                cart: updatedCart,
+              };
+              await turn.complete(outcome.message, outcome, transaction);
+              completedOutcome = outcome;
+            },
+          );
+          if (completedOutcome) return completedOutcome;
+          throw new Error("Atomic Cart completion was not invoked");
+        } catch (error) {
+          if (error instanceof CartError) {
+            return needsInputWithCurrentCart({
+              turn,
+              cart: options.cart,
+              intentBrief,
+              message: error.message,
+              question: "How should I correct these Cart Mutations?",
+              missingInformation: ["Valid Cart Mutations"],
+            });
+          }
+          return completeTurn(turn, {
+            status: "TEMPORARILY_UNAVAILABLE",
+            conversationId: turn.conversationId,
+            message: "I couldn't update your Cart right now. Please try again.",
+            retryable: true,
+            intentBrief,
+            products: [],
+          });
+        }
+      }
+      if (intentBrief.requestedEffects.includes("CLEAR_CART")) {
+        if (intentBrief.requestedEffects.some((effect) =>
+          ["ADD_TO_CART", "REMOVE_FROM_CART", "CHANGE_CART_QUANTITY"].includes(effect)
+        )) {
+          return needsInputWithCurrentCart({
+            turn,
+            cart: options.cart,
+            intentBrief,
+            message: "Clearing the Cart cannot be combined with another Cart Mutation.",
+            question: "Would you like me to clear the Cart or apply the other changes?",
+            missingInformation: ["One unambiguous Cart Mutation batch"],
+          });
+        }
+        try {
+          if (!options.cart?.applyMutations) {
+            throw new Error("Cart clearing capability unavailable");
+          }
+          let completedOutcome: AgentOutcome | undefined;
+          await options.cart.applyMutations(
+            [{ type: "CLEAR" }],
+            async (updatedCart, transaction) => {
+              const outcome: AgentOutcome = {
+                status: "COMPLETED",
+                conversationId: turn.conversationId,
+                message: "Your Cart is empty.",
+                intentBrief,
+                products: [],
+                cart: updatedCart,
+              };
+              await turn.complete(outcome.message, outcome, transaction);
+              completedOutcome = outcome;
+            },
+          );
+          if (completedOutcome) return completedOutcome;
+          throw new Error("Atomic Cart completion was not invoked");
+        } catch (error) {
+          if (error instanceof CartError) {
+            return needsInputWithCurrentCart({
+              turn,
+              cart: options.cart,
+              intentBrief,
+              message: error.message,
+              question: "How would you like to change your Cart?",
+              missingInformation: ["Valid Cart Mutation"],
+            });
+          }
+          return completeTurn(turn, {
+            status: "TEMPORARILY_UNAVAILABLE",
+            conversationId: turn.conversationId,
+            message: "I couldn't update your Cart right now. Please try again.",
+            retryable: true,
+            intentBrief,
+            products: [],
+          });
+        }
+      }
       if (intentBrief.requestedEffects.includes("INSPECT_CART")) {
         try {
           if (!options.cart) throw new Error("Cart capability unavailable");

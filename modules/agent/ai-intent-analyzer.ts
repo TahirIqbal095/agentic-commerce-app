@@ -209,6 +209,7 @@ const intentAnalysisSchema = jsonSchema<IntentAnalysis>(
             "INSPECT_CART",
             "CHANGE_CART_QUANTITY",
             "REMOVE_FROM_CART",
+            "CLEAR_CART",
           ],
         },
       },
@@ -264,6 +265,60 @@ const intentAnalysisSchema = jsonSchema<IntentAnalysis>(
         description:
           "True when one turn requests quantity changes for multiple Cart Items.",
       },
+      requestedCartMutations: {
+        type: "array",
+        minItems: 1,
+        maxItems: 16,
+        items: {
+          oneOf: [
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["type", "productId", "quantity"],
+              properties: {
+                type: { type: "string", const: "ADD" },
+                productId: { type: "string", minLength: 1, maxLength: 160 },
+                quantity: { type: "number" },
+              },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["type", "reference"],
+              properties: {
+                type: { type: "string", const: "REMOVE" },
+                reference: { type: "string", minLength: 1, maxLength: 160 },
+              },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["type", "reference", "change"],
+              properties: {
+                type: { type: "string", const: "CHANGE_QUANTITY" },
+                reference: { type: "string", minLength: 1, maxLength: 160 },
+                change: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["mode", "quantity"],
+                  properties: {
+                    mode: { type: "string", enum: ["RELATIVE", "EXACT"] },
+                    quantity: { type: "number" },
+                  },
+                },
+              },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["type"],
+              properties: { type: { type: "string", const: "CLEAR" } },
+            },
+          ],
+        },
+        description:
+          "The ordered Cart Mutations requested together in one Conversation Turn.",
+      },
     },
   },
   {
@@ -312,6 +367,7 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
     "INSPECT_CART",
     "CHANGE_CART_QUANTITY",
     "REMOVE_FROM_CART",
+    "CLEAR_CART",
   ]);
 
   return (
@@ -332,6 +388,7 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
         "requestedCartItemReference",
         "requestedCartQuantityChange",
         "hasMultipleCartQuantityChanges",
+        "requestedCartMutations",
       ],
     ) &&
     typeof brief.goal === "string" &&
@@ -392,6 +449,8 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
         ))) &&
     (brief.hasMultipleCartQuantityChanges === undefined ||
       brief.hasMultipleCartQuantityChanges === true) &&
+    (brief.requestedCartMutations === undefined ||
+      isRequestedCartMutations(brief.requestedCartMutations)) &&
     (brief.requestedAdditions === undefined ||
       (Array.isArray(brief.requestedAdditions) &&
         brief.requestedAdditions.length > 0 &&
@@ -422,6 +481,42 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
     (brief.requestedQuantity === undefined ||
       brief.requestedAdditions === undefined)
   );
+}
+
+function isRequestedCartMutations(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 16) {
+    return false;
+  }
+  return value.every((item) => {
+    if (typeof item !== "object" || item === null) return false;
+    const mutation = item as Record<string, unknown>;
+    if (mutation.type === "CLEAR") return hasExactlyKeys(mutation, ["type"]);
+    if (mutation.type === "ADD") {
+      return hasExactlyKeys(mutation, ["type", "productId", "quantity"]) &&
+        typeof mutation.productId === "string" &&
+        mutation.productId.trim().length > 0 &&
+        mutation.productId.length <= 160 &&
+        typeof mutation.quantity === "number" &&
+        Number.isFinite(mutation.quantity);
+    }
+    if (mutation.type === "REMOVE") {
+      return hasExactlyKeys(mutation, ["type", "reference"]) &&
+        typeof mutation.reference === "string" &&
+        mutation.reference.trim().length > 0 &&
+        mutation.reference.length <= 160;
+    }
+    if (mutation.type !== "CHANGE_QUANTITY" ||
+      !hasExactlyKeys(mutation, ["type", "reference", "change"]) ||
+      typeof mutation.reference !== "string" ||
+      mutation.reference.trim().length === 0 ||
+      typeof mutation.change !== "object" || mutation.change === null) {
+      return false;
+    }
+    const change = mutation.change as Record<string, unknown>;
+    return hasExactlyKeys(change, ["mode", "quantity"]) &&
+      ["RELATIVE", "EXACT"].includes(String(change.mode)) &&
+      typeof change.quantity === "number" && Number.isFinite(change.quantity);
+  });
 }
 
 function isConstraintDelta(value: unknown): boolean {

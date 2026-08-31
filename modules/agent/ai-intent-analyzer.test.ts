@@ -92,6 +92,26 @@ test("returns an INSPECT_CART effect for a conversational Cart-inspection reques
   );
 });
 
+test("returns an explicit standalone Cart clearing operation", async () => {
+  const clearing = {
+    goal: "Clear the Cart",
+    constraintDelta: { set: {}, clear: [] },
+    knownEntities: [],
+    missingInformation: [],
+    confidence: 0.99,
+    requestedEffects: ["CLEAR_CART"],
+    requestedCartMutations: [{ type: "CLEAR" }],
+  };
+  const analyzer = createAiIntentAnalyzer(new MockLanguageModelV4({
+    doGenerate: async () => modelResponse(clearing),
+  }));
+
+  assert.deepEqual(await analyzer.analyze({
+    context: createEmptyConversationContext(),
+    message: "Clear my Cart",
+  }), clearing);
+});
+
 test("returns an explicit Cart quantity for application validation", async () => {
   const explicitQuantity = {
     goal: "Add a recommended Product",
@@ -183,6 +203,47 @@ test("returns an exact Cart Quantity Change", async () => {
     context: createEmptyConversationContext(),
     message: "Make Trail One three",
   }), change);
+});
+
+test("returns an ordered batch of mixed Cart Mutations", async () => {
+  const mutations = {
+    goal: "Apply several Cart Mutations",
+    constraintDelta: { set: {}, clear: [] },
+    knownEntities: [],
+    missingInformation: [],
+    confidence: 0.99,
+    requestedEffects: [
+      "ADD_TO_CART",
+      "REMOVE_FROM_CART",
+      "CHANGE_CART_QUANTITY",
+    ],
+    requestedCartMutations: [
+      {
+        type: "ADD",
+        productId: "71000000-0000-4000-8000-000000000001",
+        quantity: 2,
+      },
+      { type: "REMOVE", reference: "Trail One" },
+      {
+        type: "CHANGE_QUANTITY",
+        reference: "Court Three",
+        change: { mode: "RELATIVE", quantity: 1 },
+      },
+      {
+        type: "CHANGE_QUANTITY",
+        reference: "Gym Four",
+        change: { mode: "EXACT", quantity: 3 },
+      },
+    ],
+  };
+  const analyzer = createAiIntentAnalyzer(new MockLanguageModelV4({
+    doGenerate: async () => modelResponse(mutations),
+  }));
+
+  assert.deepEqual(await analyzer.analyze({
+    context: createEmptyConversationContext(),
+    message: "Add two Road Two, remove Trail One, add one Court Three, and make Gym Four three",
+  }), mutations);
 });
 
 test("retries malformed Intent Brief output once", async () => {
