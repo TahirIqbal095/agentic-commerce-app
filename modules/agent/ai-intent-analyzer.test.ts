@@ -143,6 +143,48 @@ test("returns an explicit Cart Item Removal reference", async () => {
   );
 });
 
+test("returns a relative Cart Quantity Change", async () => {
+  const change = {
+    goal: "Increase a Cart Item quantity",
+    constraintDelta: { set: {}, clear: [] },
+    knownEntities: [{ type: "PRODUCT", value: "Trail One" }],
+    missingInformation: [],
+    confidence: 0.99,
+    requestedEffects: ["CHANGE_CART_QUANTITY"],
+    requestedCartItemReference: "Trail One",
+    requestedCartQuantityChange: { mode: "RELATIVE", quantity: 1 },
+  };
+  const analyzer = createAiIntentAnalyzer(new MockLanguageModelV4({
+    doGenerate: async () => modelResponse(change),
+  }));
+
+  assert.deepEqual(await analyzer.analyze({
+    context: createEmptyConversationContext(),
+    message: "Add one more Trail One",
+  }), change);
+});
+
+test("returns an exact Cart Quantity Change", async () => {
+  const change = {
+    goal: "Set a Cart Item quantity",
+    constraintDelta: { set: {}, clear: [] },
+    knownEntities: [{ type: "PRODUCT", value: "Trail One" }],
+    missingInformation: [],
+    confidence: 0.99,
+    requestedEffects: ["CHANGE_CART_QUANTITY"],
+    requestedCartItemReference: "Trail One",
+    requestedCartQuantityChange: { mode: "EXACT", quantity: 3 },
+  };
+  const analyzer = createAiIntentAnalyzer(new MockLanguageModelV4({
+    doGenerate: async () => modelResponse(change),
+  }));
+
+  assert.deepEqual(await analyzer.analyze({
+    context: createEmptyConversationContext(),
+    message: "Make Trail One three",
+  }), change);
+});
+
 test("retries malformed Intent Brief output once", async () => {
   let attempts = 0;
   const model = new MockLanguageModelV4({

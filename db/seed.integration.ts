@@ -275,6 +275,290 @@ async function prepareCart() {
   return { cart: createCartModule(DEMO_CUSTOMER_ID), product };
 }
 
+function createQuantityChangePost(
+  productName: string,
+  cart = createCartModule(DEMO_CUSTOMER_ID),
+) {
+  const agent = createCommerceAgent(
+    createCatalogModule(),
+    {
+      async analyze({ message }) {
+        const exact = message.match(/exact (-?\d+(?:\.\d+)?)/i);
+        const relative = message.match(/relative (-?\d+(?:\.\d+)?)/i);
+        return {
+          goal: "Change a Cart Item quantity",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [{ type: "PRODUCT" as const, value: productName }],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["CHANGE_CART_QUANTITY" as const],
+          requestedCartItemReference: productName,
+          ...((exact || relative)
+            ? {
+                requestedCartQuantityChange: {
+                  mode: exact ? ("EXACT" as const) : ("RELATIVE" as const),
+                  quantity: Number((exact ?? relative)![1]),
+                },
+              }
+            : {}),
+        };
+      },
+    },
+    createConversationModule(DEMO_CUSTOMER_ID),
+    {
+      agentLoop: { async run() { throw new Error("not used"); } },
+      cart,
+    },
+  );
+  const POST = createPostHandler(async () => agent);
+  return (body: Record<string, unknown>) => POST(new Request(
+    "http://localhost/api/agent/message",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  ));
+}
+
+test("POST serializes relative Cart Quantity Changes and exact changes replace current quantity", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 2, async () => {});
+  const post = createQuantityChangePost(product.name, cart);
+  const initial = await post({
+    message: "exact 2",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  const conversationId = (await initial.json()).data.conversationId;
+
+  const [first, second] = await Promise.all([
+    post({
+      conversationId,
+      message: "relative 1",
+      idempotencyKey: crypto.randomUUID(),
+    }),
+    post({
+      conversationId,
+      message: "relative 1",
+      idempotencyKey: crypto.randomUUID(),
+    }),
+  ]);
+
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal((await cart.inspect()).items[0].quantity, 4);
+
+  const exact = await post({
+    conversationId,
+    message: "exact 3",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  assert.equal((await exact.json()).data.cart.items[0].quantity, 3);
+});
+
+test("POST reprices an increased Cart Item at the current Product price and discloses it", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 2, async () => {});
+  await db
+    .update(products)
+    .set({ priceMinor: 429900 })
+    .where(eq(products.id, product.id));
+  const response = await createQuantityChangePost(product.name, cart)({
+    message: "relative 1",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  const outcome = (await response.json()).data;
+
+  assert.equal(outcome.status, "COMPLETED");
+  assert.equal(
+    outcome.message,
+    "Changed StrideFlow Daily Running Shoes quantity to 3. Its Cart Price increased from ₹3,999.00 to ₹4,299.00.",
+  );
+  assert.equal(outcome.cart.items[0].cartPriceMinor, 429900);
+  assert.equal(outcome.cart.items[0].subtotalMinor, 1289700);
+});
+
+test("POST decreases an inactive Cart Item without repricing or removing it", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 3, async () => {});
+  await db
+    .update(products)
+    .set({ active: false, stock: 0, priceMinor: 429900 })
+    .where(eq(products.id, product.id));
+  const response = await createQuantityChangePost(product.name, cart)({
+    message: "relative -1",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  const outcome = (await response.json()).data;
+
+  assert.equal(outcome.status, "COMPLETED");
+  assert.equal(outcome.cart.items[0].quantity, 2);
+  assert.equal(outcome.cart.items[0].cartPriceMinor, 399900);
+  assert.equal(outcome.cart.items[0].subtotalMinor, 799800);
+  assert.deepEqual(outcome.cart.items[0].availabilityWarning, {
+    reason: "INACTIVE",
+  });
+  assert.equal(outcome.cart.priceChanges, undefined);
+});
+
+test("POST returns the unchanged authoritative Cart for quantity, stock, and inactivity failures", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 2, async () => {});
+  const post = createQuantityChangePost(product.name, cart);
+  const invalidLimit = await post({
+    message: "exact 11",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  assert.equal((await invalidLimit.json()).data.status, "NEEDS_INPUT");
+  assert.equal((await cart.inspect()).items[0].quantity, 2);
+
+  await db.update(products).set({ stock: 2 }).where(eq(products.id, product.id));
+  const insufficientStock = await post({
+    message: "relative 1",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  assert.match((await insufficientStock.json()).data.message, /2 units in stock/);
+  assert.equal((await cart.inspect()).items[0].quantity, 2);
+
+  await db
+    .update(products)
+    .set({ active: false, stock: 10 })
+    .where(eq(products.id, product.id));
+  const inactive = await post({
+    message: "relative 1",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  assert.match((await inactive.json()).data.message, /inactive/);
+  assert.equal((await cart.inspect()).items[0].quantity, 2);
+
+  const implicitRemoval = await post({
+    message: "relative -2",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  assert.match((await implicitRemoval.json()).data.message, /Remove the Cart Item explicitly/);
+  assert.equal((await cart.inspect()).items[0].quantity, 2);
+});
+
+test("POST applies a retried relative Cart Quantity Change only once", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 2, async () => {});
+  const post = createQuantityChangePost(product.name, cart);
+  const request = {
+    message: "relative 1",
+    idempotencyKey: crypto.randomUUID(),
+  };
+
+  const first = await post(request);
+  const second = await post(request);
+
+  assert.deepEqual(await second.json(), await first.json());
+  assert.equal((await cart.inspect()).items[0].quantity, 3);
+});
+
+test("POST atomically invalidates checkout state with a Cart Quantity Change", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 2, async () => {});
+  const [activeCart] = await db
+    .select({ id: carts.id, version: carts.version })
+    .from(carts)
+    .where(and(eq(carts.userId, DEMO_CUSTOMER_ID), eq(carts.status, "ACTIVE")))
+    .limit(1);
+  const [proposal] = await db
+    .insert(checkoutProposals)
+    .values({
+      cartId: activeCart.id,
+      userId: DEMO_CUSTOMER_ID,
+      cartVersion: activeCart.version,
+      status: "APPROVAL_PENDING",
+      policyDecision: "REQUIRES_APPROVAL",
+      subtotalMinor: product.priceMinor * 2,
+      discountMinor: 0,
+      shippingMinor: 0,
+      taxMinor: 0,
+      totalMinor: product.priceMinor * 2,
+      currency: product.currency,
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+    .returning({ id: checkoutProposals.id });
+  await db.insert(approvals).values({
+    proposalId: proposal.id,
+    userId: DEMO_CUSTOMER_ID,
+    actionType: "PLACE_ORDER",
+    amountMinor: product.priceMinor * 2,
+    currency: product.currency,
+    reason: "Customer Approval required",
+    status: "PENDING",
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+
+  const response = await createQuantityChangePost(product.name, cart)({
+    message: "exact 3",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  assert.equal((await response.json()).data.status, "COMPLETED");
+
+  const [invalidatedProposal] = await db
+    .select({ status: checkoutProposals.status })
+    .from(checkoutProposals)
+    .where(eq(checkoutProposals.id, proposal.id));
+  const [invalidatedApproval] = await db
+    .select({ status: approvals.status })
+    .from(approvals)
+    .where(eq(approvals.proposalId, proposal.id));
+  assert.equal(invalidatedProposal.status, "INVALIDATED");
+  assert.equal(invalidatedApproval.status, "INVALIDATED");
+});
+
+test("POST rolls back a Cart Quantity Change when Conversation Turn completion fails", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 2, async () => {});
+  const agent = createCommerceAgent(
+    createCatalogModule(),
+    {
+      async analyze() {
+        return {
+          goal: "Change a Cart Item quantity",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [{ type: "PRODUCT" as const, value: product.name }],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["CHANGE_CART_QUANTITY" as const],
+          requestedCartItemReference: product.name,
+          requestedCartQuantityChange: { mode: "EXACT" as const, quantity: 3 },
+        };
+      },
+    },
+    {
+      async startTurn() {
+        return {
+          conversationId: "41000000-0000-4000-8000-000000000016",
+          async recordIntentBrief() {},
+          async complete() {
+            throw new Error("Conversation Turn completion failed");
+          },
+        };
+      },
+    },
+    {
+      agentLoop: { async run() { throw new Error("not used"); } },
+      cart,
+    },
+  );
+  const POST = createPostHandler(async () => agent);
+  const response = await POST(new Request("http://localhost/api/agent/message", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      message: "exact 3",
+      idempotencyKey: crypto.randomUUID(),
+    }),
+  }));
+
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).data.status, "TEMPORARILY_UNAVAILABLE");
+  assert.equal((await cart.inspect()).items[0].quantity, 2);
+});
+
 test("Cart additions do not reserve Product stock", async () => {
   const { cart, product } = await prepareCart();
   const [stockBeforeAddition] = await db

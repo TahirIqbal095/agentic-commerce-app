@@ -247,6 +247,17 @@ const intentAnalysisSchema = jsonSchema<IntentAnalysis>(
         description:
           "The Product name explicitly identified for a Cart Item operation.",
       },
+      requestedCartQuantityChange: {
+        type: "object",
+        additionalProperties: false,
+        required: ["mode", "quantity"],
+        properties: {
+          mode: { type: "string", enum: ["RELATIVE", "EXACT"] },
+          quantity: { type: "number" },
+        },
+        description:
+          "A signed relative adjustment or an exact Cart Item quantity.",
+      },
     },
   },
   {
@@ -313,6 +324,7 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
         "requestedQuantity",
         "requestedAdditions",
         "requestedCartItemReference",
+        "requestedCartQuantityChange",
       ],
     ) &&
     typeof brief.goal === "string" &&
@@ -353,6 +365,24 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
       (typeof brief.requestedCartItemReference === "string" &&
         brief.requestedCartItemReference.trim().length > 0 &&
         brief.requestedCartItemReference.length <= 160)) &&
+    (brief.requestedCartQuantityChange === undefined ||
+      (typeof brief.requestedCartQuantityChange === "object" &&
+        brief.requestedCartQuantityChange !== null &&
+        hasExactlyKeys(
+          brief.requestedCartQuantityChange as Record<string, unknown>,
+          ["mode", "quantity"],
+        ) &&
+        ["RELATIVE", "EXACT"].includes(
+          String(
+            (brief.requestedCartQuantityChange as Record<string, unknown>).mode,
+          ),
+        ) &&
+        typeof (brief.requestedCartQuantityChange as Record<string, unknown>)
+          .quantity === "number" &&
+        Number.isFinite(
+          (brief.requestedCartQuantityChange as Record<string, unknown>)
+            .quantity as number,
+        ))) &&
     (brief.requestedAdditions === undefined ||
       (Array.isArray(brief.requestedAdditions) &&
         brief.requestedAdditions.length > 0 &&

@@ -904,6 +904,155 @@ test("rejects quantity zero as a substitute for Cart Item Removal", async () => 
   assert.deepEqual(outcome.cart, unchangedCart);
 });
 
+test("adds one more unit to a named Cart Item through the authoritative Cart", async () => {
+  const updatedCart = {
+    id: "31000000-0000-4000-8000-000000000016",
+    items: [{
+      productId: "21000000-0000-4000-8000-000000000016",
+      productName: "Trail One",
+      quantity: 3,
+      cartPriceMinor: 350000,
+      subtotalMinor: 1050000,
+    }],
+    totalQuantity: 3,
+    subtotalMinor: 1050000,
+    currency: "INR",
+    priceChanges: [{
+      productId: "21000000-0000-4000-8000-000000000016",
+      previousCartPriceMinor: 330000,
+      currentCartPriceMinor: 350000,
+      direction: "INCREASED" as const,
+    }],
+  };
+  const changes: unknown[] = [];
+  const POST = createConversationPost({
+    repository: createInMemoryConversationRepository(),
+    analyzer: quantityChangeAnalyzer("Trail One", {
+      mode: "RELATIVE",
+      quantity: 1,
+    }),
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() { throw new Error("not used"); },
+      async addItems() { throw new Error("not used"); },
+      async changeItemQuantity(reference, change, complete) {
+        changes.push({ reference, change });
+        await complete(updatedCart, {} as never);
+        return updatedCart;
+      },
+      async inspect() { throw new Error("not used"); },
+    },
+  });
+
+  const outcome = (await (await postAgentMessage(POST, {
+    message: "Add one more Trail One",
+  })).json()).data;
+
+  assert.deepEqual(changes, [{
+    reference: "Trail One",
+    change: { mode: "RELATIVE", quantity: 1 },
+  }]);
+  assert.equal(outcome.status, "COMPLETED");
+  assert.equal(
+    outcome.message,
+    "Changed Trail One quantity to 3. Its Cart Price increased from ₹3,300.00 to ₹3,500.00.",
+  );
+  assert.deepEqual(outcome.cart, updatedCart);
+});
+
+test("replaces a named Cart Item quantity with an exact quantity", async () => {
+  const updatedCart = {
+    id: "31000000-0000-4000-8000-000000000017",
+    items: [{
+      productId: "21000000-0000-4000-8000-000000000017",
+      productName: "Trail One",
+      quantity: 3,
+      cartPriceMinor: 350000,
+      subtotalMinor: 1050000,
+    }],
+    totalQuantity: 3,
+    subtotalMinor: 1050000,
+    currency: "INR",
+  };
+  const changes: unknown[] = [];
+  const POST = createConversationPost({
+    repository: createInMemoryConversationRepository(),
+    analyzer: quantityChangeAnalyzer("Trail One", {
+      mode: "EXACT",
+      quantity: 3,
+    }),
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() { throw new Error("not used"); },
+      async addItems() { throw new Error("not used"); },
+      async changeItemQuantity(reference, change, complete) {
+        changes.push({ reference, change });
+        await complete(updatedCart, {} as never);
+        return updatedCart;
+      },
+      async inspect() { throw new Error("not used"); },
+    },
+  });
+
+  const outcome = (await (await postAgentMessage(POST, {
+    message: "Make Trail One three",
+  })).json()).data;
+
+  assert.deepEqual(changes, [{
+    reference: "Trail One",
+    change: { mode: "EXACT", quantity: 3 },
+  }]);
+  assert.equal(outcome.status, "COMPLETED");
+  assert.deepEqual(outcome.cart, updatedCart);
+});
+
+test("asks for clarification without changing the Cart when quantity intent is unclear", async () => {
+  const unchangedCart = {
+    id: "31000000-0000-4000-8000-000000000018",
+    items: [{
+      productId: "21000000-0000-4000-8000-000000000018",
+      productName: "Trail One",
+      quantity: 2,
+      cartPriceMinor: 350000,
+      subtotalMinor: 700000,
+    }],
+    totalQuantity: 2,
+    subtotalMinor: 700000,
+    currency: "INR",
+  };
+  const POST = createConversationPost({
+    repository: createInMemoryConversationRepository(),
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Change a Cart Item quantity",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [{ type: "PRODUCT" as const, value: "Trail One" }],
+          missingInformation: ["Clear quantity change"],
+          confidence: 0.5,
+          requestedEffects: ["CHANGE_CART_QUANTITY" as const],
+          requestedCartItemReference: "Trail One",
+        };
+      },
+    },
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() { throw new Error("not used"); },
+      async addItems() { throw new Error("not used"); },
+      async changeItemQuantity() { throw new Error("must not mutate"); },
+      async inspect() { return unchangedCart; },
+    },
+  });
+
+  const outcome = (await (await postAgentMessage(POST, {
+    message: "Change Trail One somehow",
+  })).json()).data;
+
+  assert.equal(outcome.status, "NEEDS_INPUT");
+  assert.equal(outcome.question, "Which Cart Item and quantity would you like?");
+  assert.deepEqual(outcome.cart, unchangedCart);
+});
+
 test("asks for clarification when a named reference is ambiguous in the authoritative Cart", async () => {
   const unchangedCart = {
     id: "31000000-0000-4000-8000-000000000003",
@@ -1045,6 +1194,26 @@ function removalAnalyzer(reference: string): IntentAnalyzer {
         confidence: 0.99,
         requestedEffects: ["REMOVE_FROM_CART"],
         requestedCartItemReference: reference,
+      };
+    },
+  };
+}
+
+function quantityChangeAnalyzer(
+  reference: string,
+  change: { mode: "RELATIVE" | "EXACT"; quantity: number },
+): IntentAnalyzer {
+  return {
+    async analyze() {
+      return {
+        goal: "Change a Cart Item quantity",
+        constraintDelta: { set: {}, clear: [] },
+        knownEntities: [{ type: "PRODUCT", value: reference }],
+        missingInformation: [],
+        confidence: 0.99,
+        requestedEffects: ["CHANGE_CART_QUANTITY"],
+        requestedCartItemReference: reference,
+        requestedCartQuantityChange: change,
       };
     },
   };

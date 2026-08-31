@@ -181,7 +181,10 @@ export function createCommerceAgent(
         }
       }
       if (intentBrief.requestedEffects.includes("CHANGE_CART_QUANTITY")) {
-        if (intentBrief.requestedQuantity === 0) {
+        const reference = intentBrief.requestedCartItemReference?.trim();
+        const change = intentBrief.requestedCartQuantityChange;
+        if (intentBrief.requestedQuantity === 0 ||
+          (change?.mode === "EXACT" && change.quantity === 0)) {
           return needsInputWithCurrentCart({
             turn,
             cart: options.cart,
@@ -192,14 +195,68 @@ export function createCommerceAgent(
             missingInformation: ["Explicit Cart Item Removal"],
           });
         }
-        return needsInputWithCurrentCart({
-          turn,
-          cart: options.cart,
-          intentBrief,
-          message: "I couldn't apply that Cart Quantity Change.",
-          question: "Would you like to remove the Cart Item explicitly?",
-          missingInformation: ["Supported Cart Mutation"],
-        });
+        if (!reference || !change) {
+          return needsInputWithCurrentCart({
+            turn,
+            cart: options.cart,
+            intentBrief,
+            message: "I need one specific Cart Item and a clear quantity change.",
+            question: "Which Cart Item and quantity would you like?",
+            missingInformation: ["Unambiguous Cart Item", "Clear quantity change"],
+          });
+        }
+        try {
+          if (!options.cart?.changeItemQuantity) {
+            throw new Error("Cart Quantity Change capability unavailable");
+          }
+          let completedOutcome: AgentOutcome | undefined;
+          await options.cart.changeItemQuantity(
+            reference,
+            change,
+            async (updatedCart, transaction) => {
+              const item = updatedCart.items.find(
+                ({ productName }) =>
+                  productName.trim().toLocaleLowerCase() ===
+                  reference.toLocaleLowerCase(),
+              );
+              const outcome: AgentOutcome = {
+                status: "COMPLETED",
+                conversationId: turn.conversationId,
+                message: cartQuantityChangeMessage(
+                  reference,
+                  item?.quantity ?? change.quantity,
+                  updatedCart,
+                ),
+                intentBrief,
+                products: [],
+                cart: updatedCart,
+              };
+              await turn.complete(outcome.message, outcome, transaction);
+              completedOutcome = outcome;
+            },
+          );
+          if (completedOutcome) return completedOutcome;
+          throw new Error("Atomic Cart completion was not invoked");
+        } catch (error) {
+          if (error instanceof CartError) {
+            return needsInputWithCurrentCart({
+              turn,
+              cart: options.cart,
+              intentBrief,
+              message: error.message,
+              question: "Which Cart Item and quantity would you like?",
+              missingInformation: ["Valid Cart Quantity Change"],
+            });
+          }
+          return completeTurn(turn, {
+            status: "TEMPORARILY_UNAVAILABLE",
+            conversationId: turn.conversationId,
+            message: "I couldn't update your Cart right now. Please try again.",
+            retryable: true,
+            intentBrief,
+            products: [],
+          });
+        }
       }
       if (intentBrief.requestedEffects.includes("REMOVE_FROM_CART")) {
         const reference = intentBrief.requestedCartItemReference?.trim();
@@ -614,6 +671,17 @@ function cartAdditionMessage(
   cart: Awaited<ReturnType<CartModule["addItem"]>>,
 ): string {
   const confirmation = `Added ${quantity} × ${productName} to your Cart.`;
+  const priceChange = cart.priceChanges?.[0];
+  if (!priceChange) return confirmation;
+  return `${confirmation} Its Cart Price ${priceChange.direction.toLowerCase()} from ${formatCartPrice(priceChange.previousCartPriceMinor, cart.currency)} to ${formatCartPrice(priceChange.currentCartPriceMinor, cart.currency)}.`;
+}
+
+function cartQuantityChangeMessage(
+  productName: string,
+  quantity: number,
+  cart: Awaited<ReturnType<CartModule["addItem"]>>,
+): string {
+  const confirmation = `Changed ${productName} quantity to ${quantity}.`;
   const priceChange = cart.priceChanges?.[0];
   if (!priceChange) return confirmation;
   return `${confirmation} Its Cart Price ${priceChange.direction.toLowerCase()} from ${formatCartPrice(priceChange.previousCartPriceMinor, cart.currency)} to ${formatCartPrice(priceChange.currentCartPriceMinor, cart.currency)}.`;

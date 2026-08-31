@@ -44,6 +44,11 @@ export type CartAddition = {
   quantity: number;
 };
 
+export type CartQuantityChange = {
+  mode: "RELATIVE" | "EXACT";
+  quantity: number;
+};
+
 export interface CartModule {
   addItem(
     product: CatalogProduct,
@@ -56,6 +61,11 @@ export interface CartModule {
   ): Promise<CartView>;
   removeItem?(
     reference: string,
+    complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
+  ): Promise<CartView>;
+  changeItemQuantity?(
+    reference: string,
+    change: CartQuantityChange,
     complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
   ): Promise<CartView>;
   inspect(): Promise<CartView>;
@@ -293,6 +303,117 @@ export function createCartModule(
           .where(eq(carts.id, activeCart.id));
         await invalidateCheckoutState(transaction, activeCart.id);
         const cart = await readCart(transaction, activeCart);
+        await complete(cart, transaction);
+        return cart;
+      });
+    },
+    async changeItemQuantity(reference, change, complete) {
+      const normalizedReference = reference.trim().toLocaleLowerCase();
+      if (!normalizedReference) {
+        throw new CartError("Which Cart Item would you like to change?");
+      }
+      if (
+        !["RELATIVE", "EXACT"].includes(change.mode) ||
+        !Number.isInteger(change.quantity) ||
+        (change.mode === "RELATIVE" && change.quantity === 0)
+      ) {
+        throw new CartError("Cart Item quantity must be a clear whole-unit change.");
+      }
+
+      return db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${userId}))`,
+        );
+        const [activeCart] = await transaction
+          .select({ id: carts.id, currency: carts.currency })
+          .from(carts)
+          .where(and(eq(carts.userId, userId), eq(carts.status, "ACTIVE")))
+          .limit(1);
+        if (!activeCart) throw new CartError("Your Cart is empty.");
+
+        const candidates = await transaction
+          .select({
+            id: cartItems.id,
+            productId: cartItems.productId,
+            productName: products.name,
+            quantity: cartItems.quantity,
+            cartPriceMinor: cartItems.unitPriceSnapshotMinor,
+            currentPriceMinor: products.priceMinor,
+            stock: products.stock,
+            active: products.active,
+          })
+          .from(cartItems)
+          .innerJoin(products, eq(products.id, cartItems.productId))
+          .where(eq(cartItems.cartId, activeCart.id));
+        const matches = candidates.filter(
+          ({ productName }) =>
+            productName.trim().toLocaleLowerCase() === normalizedReference,
+        );
+        if (matches.length === 0) {
+          throw new CartError(`${reference} is not in your Cart.`);
+        }
+        if (matches.length > 1) {
+          throw new CartError(`More than one Cart Item matches ${reference}.`);
+        }
+
+        const item = matches[0];
+        const nextQuantity =
+          change.mode === "RELATIVE"
+            ? item.quantity + change.quantity
+            : change.quantity;
+        if (nextQuantity < 1 || nextQuantity > 10) {
+          throw new CartError(
+            nextQuantity < 1
+              ? `${reference} quantity must stay between 1 and 10. Remove the Cart Item explicitly instead.`
+              : `${reference} cannot have more than 10 units in the Cart.`,
+          );
+        }
+        const increasing = nextQuantity > item.quantity;
+        if (increasing && !item.active) {
+          throw new CartError(`${reference} is inactive and cannot be increased.`);
+        }
+        if (increasing && nextQuantity > item.stock) {
+          throw new CartError(
+            `${reference} only has ${item.stock} ${item.stock === 1 ? "unit" : "units"} in stock.`,
+          );
+        }
+
+        if (nextQuantity !== item.quantity) {
+          await transaction
+            .update(cartItems)
+            .set({
+              quantity: nextQuantity,
+              ...(increasing
+                ? { unitPriceSnapshotMinor: item.currentPriceMinor }
+                : {}),
+              updatedAt: new Date(),
+            })
+            .where(eq(cartItems.id, item.id));
+          await transaction
+            .update(carts)
+            .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
+            .where(eq(carts.id, activeCart.id));
+          await invalidateCheckoutState(transaction, activeCart.id);
+        }
+
+        const priceChanged =
+          increasing && item.cartPriceMinor !== item.currentPriceMinor;
+        const cart: CartView = {
+          ...(await readCart(transaction, activeCart)),
+          ...(priceChanged
+            ? {
+                priceChanges: [{
+                  productId: item.productId,
+                  previousCartPriceMinor: item.cartPriceMinor,
+                  currentCartPriceMinor: item.currentPriceMinor,
+                  direction:
+                    item.currentPriceMinor > item.cartPriceMinor
+                      ? ("INCREASED" as const)
+                      : ("DECREASED" as const),
+                }],
+              }
+            : {}),
+        };
         await complete(cart, transaction);
         return cart;
       });
