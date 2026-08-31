@@ -213,6 +213,11 @@ const intentAnalysisSchema = jsonSchema<IntentAnalysis>(
         description:
           "Product IDs resolved from references to the latest ordered Recommendation Set. Use current ordering for phrases such as 'the second one'.",
       },
+      requestedQuantity: {
+        type: "number",
+        description:
+          "The explicitly requested Cart quantity. Omit this property when the Customer did not state a quantity.",
+      },
     },
   },
   {
@@ -272,7 +277,7 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
         "confidence",
         "requestedEffects",
       ],
-      ["referencedProductIds"],
+      ["referencedProductIds", "requestedQuantity"],
     ) &&
     typeof brief.goal === "string" &&
     brief.goal.trim().length > 0 &&
@@ -304,7 +309,10 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
     (brief.referencedProductIds === undefined ||
       (isStringArray(brief.referencedProductIds) &&
         new Set(brief.referencedProductIds).size ===
-          brief.referencedProductIds.length))
+          brief.referencedProductIds.length)) &&
+    (brief.requestedQuantity === undefined ||
+      (typeof brief.requestedQuantity === "number" &&
+        Number.isFinite(brief.requestedQuantity)))
   );
 }
 

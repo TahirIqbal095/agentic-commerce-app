@@ -1,4 +1,5 @@
 import type { CatalogProduct } from "@/modules/catalog/types";
+import type { DbExecutor } from "@/db";
 import type { AgentOutcome } from "./agent-outcome";
 import {
   canonicalPersistedMessage,
@@ -40,7 +41,11 @@ export type AgentTurn = {
   /** Reloads Conversation Context after an optimistic-concurrency conflict. */
   reloadContext?(): Promise<ConversationContext>;
   /** Persists the completed ASSISTANT response and typed outcome. */
-  complete(assistantMessage: string, outcome: AgentOutcome): Promise<void>;
+  complete(
+    assistantMessage: string,
+    outcome: AgentOutcome,
+    executor?: DbExecutor,
+  ): Promise<void>;
 };
 
 export interface ConversationModule {
@@ -214,13 +219,14 @@ export function createConversationModule(
          * @param outcome - Typed result of Commerce Agent processing.
          * @returns A promise that resolves when completion is persisted.
          */
-        async complete(message, outcome) {
+        async complete(message, outcome, executor) {
           if (repository.finalizeTurn) {
             await repository.finalizeTurn(
               conversationId,
               userMessageId,
               message,
               outcome,
+              executor,
             );
             return;
           }

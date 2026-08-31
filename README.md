@@ -49,17 +49,25 @@ GOOGLE_GENERATIVE_AI_API_KEY=your_google_ai_studio_key
 GOOGLE_GENERATIVE_AI_MODEL=
 ```
 
-Send a Customer message to `POST /api/agent/message`:
+Send a Customer message with a client-generated Conversation Turn idempotency
+key to `POST /api/agent/message`:
 
 ```json
-{ "message": "I want road-running shoes under ₹5,000" }
+{
+  "idempotencyKey": "61000000-0000-4000-8000-000000000001",
+  "message": "I want road-running shoes under ₹5,000"
+}
 ```
 
 The same endpoint accepts explicit Cart requests:
 
 ```json
-{ "message": "add two StrideFlow Daily Running Shoes to my cart" }
+{
+  "conversationId": "41000000-0000-4000-8000-000000000001",
+  "idempotencyKey": "61000000-0000-4000-8000-000000000002",
+  "message": "add two of the first one"
+}
 ```
 
-Cart, checkout, Approval, Order, Brand Payment Account, and captured-payment
-capabilities are tracked as planned work under `.scratch/end-to-end-agentic-commerce/`.
+Cart inspection and one-Product additions are implemented. Checkout, Approval,
+Order, Brand Payment Account, and captured-payment capabilities remain planned.

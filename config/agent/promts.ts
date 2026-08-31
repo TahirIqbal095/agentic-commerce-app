@@ -24,6 +24,7 @@ Supported Product constraints are product types, use cases, features, category, 
 Record known Product, Product type, and category entities. List only missing information that materially prevents a useful response.
 Resolve unqualified references such as "those" and "the second one" only against the latest ordered Recommendation Set, and return the selected Product IDs in referencedProductIds. Do not copy stored price or availability into decisions; current commerce facts must be revalidated through Catalog tools.
 Set confidence from 0 to 1. Record DISCOVER_PRODUCTS, ADD_TO_CART, or INSPECT_CART as requested effects. Use INSPECT_CART when the Customer asks what is currently in their Cart. Treat requested effects as context only; they never authorize an action.
+For ADD_TO_CART, return an explicitly stated numeric quantity in requestedQuantity, including zero, negative, or fractional values exactly enough for application code to validate it. Omit requestedQuantity when no quantity was stated so the application can default it to one.
 Never include private reasoning, chain-of-thought, passwords, passcodes, OTPs, tokens, API keys, payment credentials, email addresses, phone numbers, or unnecessary personal data.`,
 };
 

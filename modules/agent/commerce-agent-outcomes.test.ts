@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { MockLanguageModelV4 } from "ai/test";
 import type { CatalogModule } from "@/modules/catalog/catalog";
+import type { CatalogProduct } from "@/modules/catalog/types";
 import { createAiCommerceAgentLoop } from "./ai-commerce-agent-loop";
 import {
   createCommerceAgent as createProductionCommerceAgent,
@@ -175,21 +176,13 @@ test("lets the Commerce Agent choose from only the permitted Catalog capabilitie
   });
 });
 
-test("denies Catalog capabilities when Product discovery is not permitted", async () => {
+test("does not expose Catalog capabilities for an ambiguous Cart addition", async () => {
   const nonDiscoveryBrief: IntentBrief = {
     ...brief,
     requestedEffects: ["ADD_TO_CART"],
   };
   const loop: CommerceAgentLoop = {
-    async run({ capabilities }) {
-      assert.deepEqual(Object.keys(capabilities), []);
-      return {
-        status: "NEEDS_INPUT",
-        message: "Which Product should I help you find?",
-        question: "Which Product should I help you find?",
-        missingInformation: ["Product"],
-      };
-    },
+    async run() { throw new Error("Cart additions must not use the model loop"); },
   };
   const agent = createCommerceAgent(
     {
@@ -206,7 +199,21 @@ test("denies Catalog capabilities when Product discovery is not permitted", asyn
         };
       },
     },
-    { agentLoop: loop },
+    {
+      agentLoop: loop,
+      cart: {
+        async addItem() { throw new Error("Ambiguous requests must not mutate"); },
+        async inspect() {
+          return {
+            id: null,
+            items: [],
+            totalQuantity: 0,
+            subtotalMinor: 0,
+            currency: "INR",
+          };
+        },
+      },
+    },
   );
 
   const outcome = await agent.respond({ message: "add it to my cart" });
@@ -215,13 +222,27 @@ test("denies Catalog capabilities when Product discovery is not permitted", asyn
 });
 
 test("revalidates a referenced Product before a non-discovery follow-up action", async () => {
-  const currentProduct = { ...product, priceMinor: 429900, inStock: false };
+  const currentProduct = { ...product, priceMinor: 429900, inStock: true };
   const referencedBrief: IntentBrief = {
     ...brief,
     requestedEffects: ["ADD_TO_CART"],
     referencedProductIds: [product.id],
   };
   const lookedUpProductIds: string[] = [];
+  const addedProducts: CatalogProduct[] = [];
+  const updatedCart = {
+    id: "31000000-0000-4000-8000-000000000001",
+    items: [{
+      productId: product.id,
+      productName: product.name,
+      quantity: 1,
+      cartPriceMinor: currentProduct.priceMinor,
+      subtotalMinor: currentProduct.priceMinor,
+    }],
+    totalQuantity: 1,
+    subtotalMinor: currentProduct.priceMinor,
+    currency: currentProduct.currency,
+  };
   const agent = createCommerceAgent(
     {
       async search() { throw new Error("Catalog search must not be exposed"); },
@@ -253,20 +274,14 @@ test("revalidates a referenced Product before a non-discovery follow-up action",
     },
     {
       agentLoop: {
-        async run({ capabilities, intentBrief }) {
-          assert.deepEqual(Object.keys(capabilities), ["getProduct"]);
-          assert.ok(capabilities.getProduct);
-          const referencedProductId = intentBrief.referencedProductIds?.[0];
-          assert.ok(referencedProductId);
-          const result = await capabilities.getProduct(referencedProductId);
-          assert.equal(result.ok && result.value.priceMinor, 429900);
-          assert.equal(result.ok && result.value.inStock, false);
-          return {
-            status: "COMPLETED",
-            message: "I checked the current Product before the action.",
-            productIds: [referencedProductId],
-          };
+        async run() { throw new Error("Cart additions must not use the model loop"); },
+      },
+      cart: {
+        async addItem(current) {
+          addedProducts.push(current);
+          return updatedCart;
         },
+        async inspect() { return updatedCart; },
       },
     },
   );
@@ -274,7 +289,9 @@ test("revalidates a referenced Product before a non-discovery follow-up action",
   const outcome = await agent.respond({ message: "add the first one" });
 
   assert.deepEqual(lookedUpProductIds, [product.id]);
-  assert.deepEqual(outcome.products, [currentProduct]);
+  assert.deepEqual(addedProducts, [currentProduct]);
+  assert.deepEqual(outcome.products, []);
+  assert.deepEqual(outcome.cart, updatedCart);
 });
 
 test("bounds Catalog search inputs and results exposed to the Commerce Agent", async () => {

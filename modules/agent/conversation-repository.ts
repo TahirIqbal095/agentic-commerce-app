@@ -1,5 +1,6 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
+import type { DbExecutor } from "@/db";
 import { conversations, messages } from "@/db/schema/agent";
 import type { JsonObject } from "@/db/schema/types";
 import { isAgentOutcome, type AgentOutcome } from "./agent-outcome";
@@ -66,6 +67,7 @@ export interface ConversationRepository {
     userMessageId: string,
     content: string,
     outcome: AgentOutcome,
+    executor?: DbExecutor,
   ): Promise<void>;
   /**
    * Replaces recommendation memory only when Context is still at the expected
@@ -290,8 +292,8 @@ export const postgresConversationRepository: ConversationRepository = {
    * persistence.
    * @param outcome - Typed result returned by the Agent for this turn.
    */
-  async finalizeTurn(conversationId, userMessageId, content, outcome) {
-    await db.transaction(async (transaction) => {
+  async finalizeTurn(conversationId, userMessageId, content, outcome, executor) {
+    const finalize = async (transaction: DbExecutor) => {
       const [userMessage] = await transaction
         .select({ metadata: messages.metadata })
         .from(messages)
@@ -316,7 +318,12 @@ export const postgresConversationRepository: ConversationRepository = {
         .update(conversations)
         .set({ updatedAt: new Date() })
         .where(eq(conversations.id, conversationId));
-    });
+    };
+    if (executor) {
+      await finalize(executor);
+      return;
+    }
+    await db.transaction(finalize);
   },
   /**
    * Stores a bounded summary of the latest Product recommendations in the

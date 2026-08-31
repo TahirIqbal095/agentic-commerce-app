@@ -1,5 +1,6 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
+import type { DbExecutor } from "@/db";
 import { cartItems, carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
@@ -20,10 +21,19 @@ export type CartView = Omit<CartSummary, "id"> & {
     cartPriceMinor: number;
     subtotalMinor: number;
   }>;
+  priceChange?: {
+    productId: string;
+    previousCartPriceMinor: number;
+    currentCartPriceMinor: number;
+  };
 };
 
 export interface CartModule {
-  addItem(product: CatalogProduct, quantity: number): Promise<CartSummary>;
+  addItem(
+    product: CatalogProduct,
+    quantity: number,
+    complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
+  ): Promise<CartView>;
   inspect(): Promise<CartView>;
 }
 
@@ -56,47 +66,17 @@ export function createCartModule(
         };
       }
 
-      const items = await db
-        .select({
-          productId: cartItems.productId,
-          productName: products.name,
-          quantity: cartItems.quantity,
-          cartPriceMinor: cartItems.unitPriceSnapshotMinor,
-        })
-        .from(cartItems)
-        .innerJoin(products, eq(products.id, cartItems.productId))
-        .where(eq(cartItems.cartId, activeCart.id))
-        .orderBy(asc(cartItems.createdAt), asc(cartItems.id));
-      const viewedItems = items.map(
-        ({ productId, productName, quantity, cartPriceMinor }) => ({
-          productId,
-          productName,
-          quantity,
-          cartPriceMinor,
-          subtotalMinor: quantity * cartPriceMinor,
-        }),
-      );
-
-      return {
-        id: activeCart.id,
-        items: viewedItems,
-        totalQuantity: viewedItems.reduce(
-          (total, item) => total + item.quantity,
-          0,
-        ),
-        subtotalMinor: viewedItems.reduce(
-          (total, item) => total + item.subtotalMinor,
-          0,
-        ),
-        currency: activeCart.currency,
-      };
+      return readCart(db, activeCart);
     },
-    async addItem(product, quantity) {
+    async addItem(product, quantity, complete) {
       if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
         throw new CartError("Cart item quantity must be between 1 and 10.");
       }
 
       return db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${userId}))`,
+        );
         const [authoritativeProduct] = await transaction
           .select({
             id: products.id,
@@ -137,7 +117,10 @@ export function createCartModule(
         }
 
         const [existingItem] = await transaction
-          .select({ quantity: cartItems.quantity })
+          .select({
+            quantity: cartItems.quantity,
+            cartPriceMinor: cartItems.unitPriceSnapshotMinor,
+          })
           .from(cartItems)
           .where(
             and(
@@ -180,27 +163,62 @@ export function createCartModule(
           })
           .where(eq(carts.id, activeCart.id));
 
-        const items = await transaction
-          .select({
-            quantity: cartItems.quantity,
-            unitPriceMinor: cartItems.unitPriceSnapshotMinor,
-          })
-          .from(cartItems)
-          .where(eq(cartItems.cartId, activeCart.id));
-
-        return {
-          id: activeCart.id,
-          totalQuantity: items.reduce(
-            (total, item) => total + item.quantity,
-            0,
-          ),
-          subtotalMinor: items.reduce(
-            (total, item) => total + item.quantity * item.unitPriceMinor,
-            0,
-          ),
-          currency: activeCart.currency,
+        const cart: CartView = {
+          ...(await readCart(transaction, activeCart)),
+          ...(existingItem &&
+          existingItem.cartPriceMinor !== authoritativeProduct.priceMinor
+            ? {
+                priceChange: {
+                  productId: authoritativeProduct.id,
+                  previousCartPriceMinor: existingItem.cartPriceMinor,
+                  currentCartPriceMinor: authoritativeProduct.priceMinor,
+                },
+              }
+            : {}),
         };
+        await complete(cart, transaction);
+        return cart;
       });
     },
+  };
+}
+
+async function readCart(
+  executor: DbExecutor,
+  activeCart: { id: string; currency: string },
+): Promise<CartView> {
+  const items = await executor
+    .select({
+      productId: cartItems.productId,
+      productName: products.name,
+      quantity: cartItems.quantity,
+      cartPriceMinor: cartItems.unitPriceSnapshotMinor,
+    })
+    .from(cartItems)
+    .innerJoin(products, eq(products.id, cartItems.productId))
+    .where(eq(cartItems.cartId, activeCart.id))
+    .orderBy(asc(cartItems.createdAt), asc(cartItems.id));
+  const viewedItems = items.map(
+    ({ productId, productName, quantity, cartPriceMinor }) => ({
+      productId,
+      productName,
+      quantity,
+      cartPriceMinor,
+      subtotalMinor: quantity * cartPriceMinor,
+    }),
+  );
+
+  return {
+    id: activeCart.id,
+    items: viewedItems,
+    totalQuantity: viewedItems.reduce(
+      (total, item) => total + item.quantity,
+      0,
+    ),
+    subtotalMinor: viewedItems.reduce(
+      (total, item) => total + item.subtotalMinor,
+      0,
+    ),
+    currency: activeCart.currency,
   };
 }

@@ -1,5 +1,5 @@
 import type { CatalogModule } from "@/modules/catalog/catalog";
-import type { CartModule } from "@/modules/cart/cart";
+import { CartError, type CartModule } from "@/modules/cart/cart";
 import type {
   CatalogProduct,
   CatalogSearch,
@@ -180,6 +180,94 @@ export function createCommerceAgent(
           });
         }
       }
+      if (intentBrief.requestedEffects.includes("ADD_TO_CART")) {
+        const referencedProductIds = intentBrief.referencedProductIds ?? [];
+        if (referencedProductIds.length !== 1 || !referencedProductIds[0]) {
+          return needsInputWithCurrentCart({
+            turn,
+            cart: options.cart,
+            intentBrief,
+            message:
+              "I need one specific Product from the latest Recommendations.",
+            question: "Which recommended Product would you like to add?",
+            missingInformation: ["Unambiguous Product"],
+          });
+        }
+        const productId = referencedProductIds[0];
+        const quantity = intentBrief.requestedQuantity ?? 1;
+        if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
+          return needsInputWithCurrentCart({
+            turn,
+            cart: options.cart,
+            intentBrief,
+            message:
+              "Please choose a positive whole-unit quantity from 1 to 10.",
+            question: "How many units would you like, from 1 to 10?",
+            missingInformation: ["Valid Cart quantity"],
+          });
+        }
+        try {
+          if (!options.cart) throw new Error("Cart capability unavailable");
+          const productResult = await catalog.getProduct(productId);
+          if (!productResult.ok) {
+            throw new CartError(productResult.error.message);
+          }
+          let completedOutcome: AgentOutcome | undefined;
+          const cart = await options.cart.addItem(
+            productResult.value,
+            quantity,
+            async (updatedCart, transaction) => {
+              const outcome: AgentOutcome = {
+                status: "COMPLETED",
+                conversationId: turn.conversationId,
+                message: cartAdditionMessage(
+                  quantity,
+                  productResult.value.name,
+                  updatedCart,
+                ),
+                intentBrief,
+                products: [],
+                cart: updatedCart,
+              };
+              await turn.complete(outcome.message, outcome, transaction);
+              completedOutcome = outcome;
+            },
+          );
+          if (completedOutcome) return completedOutcome;
+          return completeTurn(turn, {
+            status: "COMPLETED",
+            conversationId: turn.conversationId,
+            message: cartAdditionMessage(
+              quantity,
+              productResult.value.name,
+              cart,
+            ),
+            intentBrief,
+            products: [],
+            cart,
+          });
+        } catch (error) {
+          if (error instanceof CartError) {
+            return needsInputWithCurrentCart({
+              turn,
+              cart: options.cart,
+              intentBrief,
+              message: error.message,
+              question:
+                "Would you like to choose a different Product or quantity?",
+              missingInformation: ["Valid Cart addition"],
+            });
+          }
+          return completeTurn(turn, {
+            status: "TEMPORARILY_UNAVAILABLE",
+            conversationId: turn.conversationId,
+            message: "I couldn't update your Cart right now. Please try again.",
+            retryable: true,
+            intentBrief,
+            products: [],
+          });
+        }
+      }
       let loopResult: CommerceAgentLoopResult;
       const observedProducts = new Map<string, CatalogProduct>();
       const limits = boundedAgentLimits(options.limits);
@@ -300,6 +388,61 @@ function contextConflictOutcome(conversationId: string): AgentOutcome {
     retryable: true,
     products: [],
   };
+}
+
+function cartAdditionMessage(
+  quantity: number,
+  productName: string,
+  cart: Awaited<ReturnType<CartModule["addItem"]>>,
+): string {
+  const confirmation = `Added ${quantity} × ${productName} to your Cart.`;
+  if (!cart.priceChange) return confirmation;
+  const formatPrice = (priceMinor: number) =>
+    new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: cart.currency,
+    }).format(priceMinor / 100);
+  return `${confirmation} Its Cart Price changed from ${formatPrice(cart.priceChange.previousCartPriceMinor)} to ${formatPrice(cart.priceChange.currentCartPriceMinor)}.`;
+}
+
+async function needsInputWithCurrentCart({
+  turn,
+  cart,
+  intentBrief,
+  message,
+  question,
+  missingInformation,
+}: {
+  turn: AgentTurn;
+  cart: CartModule | undefined;
+  intentBrief: IntentBrief;
+  message: string;
+  question: string;
+  missingInformation: string[];
+}): Promise<AgentOutcome> {
+  try {
+    if (!cart) throw new Error("Cart capability unavailable");
+    const currentCart = await cart.inspect();
+    return completeTurn(turn, {
+      status: "NEEDS_INPUT",
+      conversationId: turn.conversationId,
+      message,
+      question,
+      missingInformation,
+      intentBrief,
+      products: [],
+      cart: currentCart,
+    });
+  } catch {
+    return completeTurn(turn, {
+      status: "TEMPORARILY_UNAVAILABLE",
+      conversationId: turn.conversationId,
+      message: "I couldn't read your Cart right now. Please try again.",
+      retryable: true,
+      intentBrief,
+      products: [],
+    });
+  }
 }
 
 function resolveCapabilities({

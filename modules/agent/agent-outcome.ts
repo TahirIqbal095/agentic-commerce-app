@@ -21,7 +21,7 @@ export type NeedsInputAgentOutcome = {
   intentBrief: IntentBrief;
   products: [];
   intent?: never;
-  cart?: never;
+  cart?: CartView;
 };
 
 export type TemporarilyUnavailableAgentOutcome = {

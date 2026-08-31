@@ -60,6 +60,7 @@ export type IntentAnalysis = {
     "DISCOVER_PRODUCTS" | "ADD_TO_CART" | "INSPECT_CART"
   >;
   referencedProductIds?: string[];
+  requestedQuantity?: number;
 };
 
 export type AddToCartIntent = {
@@ -83,6 +84,7 @@ export type IntentBrief = {
     "DISCOVER_PRODUCTS" | "ADD_TO_CART" | "INSPECT_CART"
   >;
   referencedProductIds?: string[];
+  requestedQuantity?: number;
 };
 
 export interface IntentAnalyzer {
@@ -363,6 +365,9 @@ export function resolveIntentBrief(
     confidence: analysis.confidence,
     requestedEffects: analysis.requestedEffects,
     ...(referencedProductIds?.length ? { referencedProductIds } : {}),
+    ...(analysis.requestedQuantity === undefined
+      ? {}
+      : { requestedQuantity: analysis.requestedQuantity }),
   };
 }
 

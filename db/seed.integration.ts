@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { GET } from "@/app/api/products/route";
 import { db } from "@/db";
 import { carts } from "@/db/schema/cart";
+import { products } from "@/db/schema/catalog";
 import { brands } from "@/db/schema/identity";
 import { createCatalogModule } from "@/modules/catalog/catalog";
 import { createCartModule } from "@/modules/cart/cart";
@@ -153,7 +154,7 @@ test("catalog retrieval combines intent, commerce, and availability criteria", a
   );
 });
 
-test("customer can add a product to an authoritative active cart", async () => {
+test("concurrent Customer turns retain every authoritative Cart addition", async () => {
   await runSeedCommand();
   await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
 
@@ -166,9 +167,28 @@ test("customer can add a product to an authoritative active cart", async () => {
   assert.ok(product);
 
   const cart = createCartModule(DEMO_CUSTOMER_ID);
-  const summary = await cart.addItem(product, 2);
+  await Promise.all([
+    cart.addItem(product, 1, async () => {}),
+    cart.addItem(product, 1, async () => {}),
+  ]);
+  const summary = await cart.inspect();
 
   assert.equal(summary.totalQuantity, 2);
   assert.equal(summary.subtotalMinor, 799800);
   assert.equal(summary.currency, "INR");
+
+  await db
+    .update(products)
+    .set({ priceMinor: 429900 })
+    .where(eq(products.id, product.id));
+  const repriced = await cart.addItem(product, 1, async () => {});
+
+  assert.equal(repriced.items[0].quantity, 3);
+  assert.equal(repriced.items[0].cartPriceMinor, 429900);
+  assert.equal(repriced.items[0].subtotalMinor, 1289700);
+  assert.deepEqual(repriced.priceChange, {
+    productId: product.id,
+    previousCartPriceMinor: 399900,
+    currentCartPriceMinor: 429900,
+  });
 });

@@ -92,6 +92,32 @@ test("returns an INSPECT_CART effect for a conversational Cart-inspection reques
   );
 });
 
+test("returns an explicit Cart quantity for application validation", async () => {
+  const explicitQuantity = {
+    goal: "Add a recommended Product",
+    constraintDelta: { set: {}, clear: [] },
+    knownEntities: [],
+    missingInformation: [],
+    confidence: 0.99,
+    requestedEffects: ["ADD_TO_CART"],
+    referencedProductIds: ["71000000-0000-4000-8000-000000000001"],
+    requestedQuantity: 2,
+  };
+  const model = new MockLanguageModelV4({
+    doGenerate: async () => modelResponse(explicitQuantity),
+  });
+
+  const analyzer = createAiIntentAnalyzer(model);
+
+  assert.deepEqual(
+    await analyzer.analyze({
+      context: createEmptyConversationContext(),
+      message: "Add two of the first one",
+    }),
+    explicitQuantity,
+  );
+});
+
 test("retries malformed Intent Brief output once", async () => {
   let attempts = 0;
   const model = new MockLanguageModelV4({
