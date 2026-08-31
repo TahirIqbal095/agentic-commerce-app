@@ -14,9 +14,13 @@ export function minimizeIntentBrief(intentBrief: IntentBrief): IntentBrief {
     ...intentBrief,
     goal: intentBrief.requestedEffects.includes("INSPECT_CART")
       ? "Inspect Cart"
-      : intentBrief.requestedEffects.includes("ADD_TO_CART")
+      : intentBrief.requestedEffects.includes("REMOVE_FROM_CART")
         ? "Change Cart"
-        : "Discover Products",
+        : intentBrief.requestedEffects.includes("CHANGE_CART_QUANTITY")
+          ? "Change Cart"
+          : intentBrief.requestedEffects.includes("ADD_TO_CART")
+            ? "Change Cart"
+            : "Discover Products",
     constraints: {
       ...intentBrief.constraints,
       attributes: {},

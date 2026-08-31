@@ -36,6 +36,7 @@ export const approvalStatusEnum = pgEnum("approval_status", [
   "REJECTED",
   "EXPIRED",
   "CONSUMED",
+  "INVALIDATED",
 ]);
 
 export const orderStatusEnum = pgEnum("order_status", [

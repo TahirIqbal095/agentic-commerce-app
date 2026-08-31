@@ -203,7 +203,13 @@ const intentAnalysisSchema = jsonSchema<IntentAnalysis>(
         maxItems: 3,
         items: {
           type: "string",
-          enum: ["DISCOVER_PRODUCTS", "ADD_TO_CART", "INSPECT_CART"],
+          enum: [
+            "DISCOVER_PRODUCTS",
+            "ADD_TO_CART",
+            "INSPECT_CART",
+            "CHANGE_CART_QUANTITY",
+            "REMOVE_FROM_CART",
+          ],
         },
       },
       referencedProductIds: {
@@ -233,6 +239,13 @@ const intentAnalysisSchema = jsonSchema<IntentAnalysis>(
         },
         description:
           "Product IDs and their explicitly requested quantities when one Cart addition contains multiple Products.",
+      },
+      requestedCartItemReference: {
+        type: "string",
+        minLength: 1,
+        maxLength: 160,
+        description:
+          "The Product name explicitly identified for a Cart Item operation.",
       },
     },
   },
@@ -280,6 +293,8 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
     "DISCOVER_PRODUCTS",
     "ADD_TO_CART",
     "INSPECT_CART",
+    "CHANGE_CART_QUANTITY",
+    "REMOVE_FROM_CART",
   ]);
 
   return (
@@ -293,7 +308,12 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
         "confidence",
         "requestedEffects",
       ],
-      ["referencedProductIds", "requestedQuantity", "requestedAdditions"],
+      [
+        "referencedProductIds",
+        "requestedQuantity",
+        "requestedAdditions",
+        "requestedCartItemReference",
+      ],
     ) &&
     typeof brief.goal === "string" &&
     brief.goal.trim().length > 0 &&
@@ -329,6 +349,10 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
     (brief.requestedQuantity === undefined ||
       (typeof brief.requestedQuantity === "number" &&
         Number.isFinite(brief.requestedQuantity))) &&
+    (brief.requestedCartItemReference === undefined ||
+      (typeof brief.requestedCartItemReference === "string" &&
+        brief.requestedCartItemReference.trim().length > 0 &&
+        brief.requestedCartItemReference.length <= 160)) &&
     (brief.requestedAdditions === undefined ||
       (Array.isArray(brief.requestedAdditions) &&
         brief.requestedAdditions.length > 0 &&

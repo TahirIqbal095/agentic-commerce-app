@@ -118,6 +118,31 @@ test("returns an explicit Cart quantity for application validation", async () =>
   );
 });
 
+test("returns an explicit Cart Item Removal reference", async () => {
+  const removal = {
+    goal: "Remove a Cart Item",
+    constraintDelta: { set: {}, clear: [] },
+    knownEntities: [{ type: "PRODUCT", value: "Trail One" }],
+    missingInformation: [],
+    confidence: 0.99,
+    requestedEffects: ["REMOVE_FROM_CART"],
+    requestedCartItemReference: "Trail One",
+  };
+  const model = new MockLanguageModelV4({
+    doGenerate: async () => modelResponse(removal),
+  });
+
+  const analyzer = createAiIntentAnalyzer(model);
+
+  assert.deepEqual(
+    await analyzer.analyze({
+      context: createEmptyConversationContext(),
+      message: "Remove Trail One from my Cart",
+    }),
+    removal,
+  );
+});
+
 test("retries malformed Intent Brief output once", async () => {
   let attempts = 0;
   const model = new MockLanguageModelV4({

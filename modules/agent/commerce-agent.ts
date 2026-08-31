@@ -1,8 +1,5 @@
 import type { CatalogModule } from "@/modules/catalog/catalog";
-import {
-  CartError,
-  type CartModule,
-} from "@/modules/cart/cart";
+import { CartError, type CartModule } from "@/modules/cart/cart";
 import type {
   CatalogProduct,
   CatalogSearch,
@@ -183,11 +180,88 @@ export function createCommerceAgent(
           });
         }
       }
+      if (intentBrief.requestedEffects.includes("CHANGE_CART_QUANTITY")) {
+        if (intentBrief.requestedQuantity === 0) {
+          return needsInputWithCurrentCart({
+            turn,
+            cart: options.cart,
+            intentBrief,
+            message:
+              "Cart Item quantity must be between 1 and 10. Remove the Cart Item explicitly instead.",
+            question: "Would you like to remove that Cart Item?",
+            missingInformation: ["Explicit Cart Item Removal"],
+          });
+        }
+        return needsInputWithCurrentCart({
+          turn,
+          cart: options.cart,
+          intentBrief,
+          message: "I couldn't apply that Cart Quantity Change.",
+          question: "Would you like to remove the Cart Item explicitly?",
+          missingInformation: ["Supported Cart Mutation"],
+        });
+      }
+      if (intentBrief.requestedEffects.includes("REMOVE_FROM_CART")) {
+        const reference = intentBrief.requestedCartItemReference?.trim();
+        if (!reference) {
+          return needsInputWithCurrentCart({
+            turn,
+            cart: options.cart,
+            intentBrief,
+            message: "I need one specific Cart Item to remove.",
+            question: "Which Cart Item would you like to remove?",
+            missingInformation: ["Unambiguous Cart Item"],
+          });
+        }
+        try {
+          if (!options.cart?.removeItem) {
+            throw new Error("Cart Item Removal capability unavailable");
+          }
+          let completedOutcome: AgentOutcome | undefined;
+          await options.cart.removeItem(reference, async (updatedCart, transaction) => {
+            const outcome: AgentOutcome = {
+              status: "COMPLETED",
+              conversationId: turn.conversationId,
+              message:
+                updatedCart.items.length === 0
+                  ? `Removed ${reference} from your Cart. Your Cart is now empty.`
+                  : `Removed ${reference} from your Cart.`,
+              intentBrief,
+              products: [],
+              cart: updatedCart,
+            };
+            await turn.complete(outcome.message, outcome, transaction);
+            completedOutcome = outcome;
+          });
+          if (completedOutcome) return completedOutcome;
+          throw new Error("Atomic Cart completion was not invoked");
+        } catch (error) {
+          if (error instanceof CartError) {
+            return needsInputWithCurrentCart({
+              turn,
+              cart: options.cart,
+              intentBrief,
+              message: error.message,
+              question: "Which Cart Item would you like to remove?",
+              missingInformation: ["Unambiguous Cart Item"],
+            });
+          }
+          return completeTurn(turn, {
+            status: "TEMPORARILY_UNAVAILABLE",
+            conversationId: turn.conversationId,
+            message: "I couldn't update your Cart right now. Please try again.",
+            retryable: true,
+            intentBrief,
+            products: [],
+          });
+        }
+      }
       if (intentBrief.requestedEffects.includes("ADD_TO_CART")) {
         const requestedAdditions = intentBrief.requestedAdditions;
-        const referencedProductIds = requestedAdditions?.map(
-          ({ productId }) => productId,
-        ) ?? intentBrief.referencedProductIds ?? [];
+        const referencedProductIds =
+          requestedAdditions?.map(({ productId }) => productId) ??
+          intentBrief.referencedProductIds ??
+          [];
         if (intentBrief.hasUnresolvedProductReferences) {
           return needsInputWithCurrentCart({
             turn,
@@ -195,7 +269,8 @@ export function createCommerceAgent(
             intentBrief,
             message:
               "One requested Product is no longer in the latest Recommendation Set.",
-            question: "Which current recommended Products would you like to add?",
+            question:
+              "Which current recommended Products would you like to add?",
             missingInformation: ["Current Product references"],
           });
         }
@@ -242,10 +317,7 @@ export function createCommerceAgent(
             });
           }
         }
-        if (
-          directlyMatchedProducts.length > 0 &&
-          !directlyMatchedProduct
-        ) {
+        if (directlyMatchedProducts.length > 0 && !directlyMatchedProduct) {
           try {
             const saved = await turn.recordRecommendationSet?.(
               directlyMatchedProducts,
@@ -285,8 +357,7 @@ export function createCommerceAgent(
             return completeTurn(turn, {
               status: "COMPLETED",
               conversationId: turn.conversationId,
-              message:
-                "I couldn't find a Product matching that Cart request.",
+              message: "I couldn't find a Product matching that Cart request.",
               intentBrief,
               products: [],
               cart,
@@ -302,10 +373,7 @@ export function createCommerceAgent(
             });
           }
         }
-        if (
-          !directlyMatchedProduct &&
-          referencedProductIds.length === 0
-        ) {
+        if (!directlyMatchedProduct && referencedProductIds.length === 0) {
           return needsInputWithCurrentCart({
             turn,
             cart: options.cart,
@@ -326,10 +394,12 @@ export function createCommerceAgent(
         );
         if (invalidQuantityIndex !== -1) {
           const invalidProductId = referencedProductIds[invalidQuantityIndex];
-          const invalidProductName = directlyMatchedProduct?.name ??
+          const invalidProductName =
+            directlyMatchedProduct?.name ??
             resolvedContext.latestRecommendationSet.find(
               ({ productId }) => productId === invalidProductId,
-            )?.name ?? "Product";
+            )?.name ??
+            "Product";
           return needsInputWithCurrentCart({
             turn,
             cart: options.cart,
@@ -348,22 +418,24 @@ export function createCommerceAgent(
                   catalog.getProduct(productId),
                 ),
               );
-          const selectedProducts = productResults.map((productResult, index) => {
-            if (!productResult.ok) {
-              const productId = referencedProductIds[index];
-              const productName = resolvedContext.latestRecommendationSet.find(
-                (reference) => reference.productId === productId,
-              )?.name ?? "Product";
-              throw new CartError(`${productName} is not available.`);
-            }
-            return productResult.value;
-          });
+          const selectedProducts = productResults.map(
+            (productResult, index) => {
+              if (!productResult.ok) {
+                const productId = referencedProductIds[index];
+                const productName =
+                  resolvedContext.latestRecommendationSet.find(
+                    (reference) => reference.productId === productId,
+                  )?.name ?? "Product";
+                throw new CartError(`${productName} is not available.`);
+              }
+              return productResult.value;
+            },
+          );
           const additions = selectedProducts.map((product) => ({
             product,
             quantity:
-              requestedAdditions?.find(
-                (item) => item.productId === product.id,
-              )?.quantity ?? quantity,
+              requestedAdditions?.find((item) => item.productId === product.id)
+                ?.quantity ?? quantity,
           }));
           let completedOutcome: AgentOutcome | undefined;
           const completeAddition: Parameters<CartModule["addItem"]>[2] = async (

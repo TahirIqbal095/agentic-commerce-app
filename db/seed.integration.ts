@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import test, { after } from "node:test";
 import { promisify } from "node:util";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { GET } from "@/app/api/products/route";
 import { createPostHandler } from "@/app/api/agent/message/handler";
 import { db } from "@/db";
 import { carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
+import { approvals, checkoutProposals } from "@/db/schema/checkout";
 import { brands } from "@/db/schema/identity";
 import { createCatalogModule } from "@/modules/catalog/catalog";
 import { createCartModule } from "@/modules/cart/cart";
@@ -259,6 +260,10 @@ test("POST adds multiple identified Products through one real atomic Cart mutati
 
 async function prepareCart() {
   await runSeedCommand();
+  await db.delete(approvals).where(eq(approvals.userId, DEMO_CUSTOMER_ID));
+  await db
+    .delete(checkoutProposals)
+    .where(eq(checkoutProposals.userId, DEMO_CUSTOMER_ID));
   await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
   const catalog = createCatalogModule();
   const result = await catalog.search({
@@ -287,6 +292,89 @@ test("Cart additions do not reserve Product stock", async () => {
 
   assert.equal(stockAfterAddition.stock, stockBeforeAddition.stock);
   assert.equal((await cart.inspect()).totalQuantity, 2);
+});
+
+test("Cart Item Removal invalidates its unconsumed Checkout Proposal and pending Approval", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 1, async () => {});
+  const [activeCart] = await db
+    .select({ id: carts.id, version: carts.version })
+    .from(carts)
+    .where(and(eq(carts.userId, DEMO_CUSTOMER_ID), eq(carts.status, "ACTIVE")))
+    .limit(1);
+  assert.ok(activeCart);
+  const [proposal] = await db
+    .insert(checkoutProposals)
+    .values({
+      cartId: activeCart.id,
+      userId: DEMO_CUSTOMER_ID,
+      cartVersion: activeCart.version,
+      status: "APPROVAL_PENDING",
+      policyDecision: "REQUIRES_APPROVAL",
+      subtotalMinor: product.priceMinor,
+      discountMinor: 0,
+      shippingMinor: 0,
+      taxMinor: 0,
+      totalMinor: product.priceMinor,
+      currency: product.currency,
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+    .returning({ id: checkoutProposals.id });
+  await db.insert(approvals).values({
+    proposalId: proposal.id,
+    userId: DEMO_CUSTOMER_ID,
+    actionType: "PLACE_ORDER",
+    amountMinor: product.priceMinor,
+    currency: product.currency,
+    reason: "Customer Approval required",
+    status: "PENDING",
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+
+  await cart.removeItem!(product.name, async () => {});
+
+  const [invalidatedProposal] = await db
+    .select({ status: checkoutProposals.status })
+    .from(checkoutProposals)
+    .where(eq(checkoutProposals.id, proposal.id));
+  const [invalidatedApproval] = await db
+    .select({ status: approvals.status })
+    .from(approvals)
+    .where(eq(approvals.proposalId, proposal.id));
+  assert.equal(invalidatedProposal.status, "INVALIDATED");
+  assert.equal(invalidatedApproval.status, "INVALIDATED");
+});
+
+test("Cart Item Removal remains allowed when its Product is inactive and out of stock", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 2, async () => {});
+  await db
+    .update(products)
+    .set({ active: false, stock: 0 })
+    .where(eq(products.id, product.id));
+
+  const removed = await cart.removeItem!(product.name, async () => {});
+
+  assert.ok(removed);
+  assert.deepEqual(removed.items, []);
+  assert.equal(removed.totalQuantity, 0);
+  assert.equal(removed.subtotalMinor, 0);
+});
+
+test("Cart Item Removal rolls back when Conversation Turn completion fails", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 1, async () => {});
+
+  await assert.rejects(
+    cart.removeItem!(product.name, async () => {
+      throw new Error("Conversation Turn completion failed");
+    }),
+    /Conversation Turn completion failed/,
+  );
+
+  const unchanged = await cart.inspect();
+  assert.equal(unchanged.items[0].productId, product.id);
+  assert.equal(unchanged.items[0].quantity, 1);
 });
 
 test("Cart inspection discloses base price changes without repricing", async () => {

@@ -57,11 +57,16 @@ export type IntentAnalysis = {
   missingInformation: string[];
   confidence: number;
   requestedEffects: Array<
-    "DISCOVER_PRODUCTS" | "ADD_TO_CART" | "INSPECT_CART"
+    | "DISCOVER_PRODUCTS"
+    | "ADD_TO_CART"
+    | "INSPECT_CART"
+    | "CHANGE_CART_QUANTITY"
+    | "REMOVE_FROM_CART"
   >;
   referencedProductIds?: string[];
   requestedQuantity?: number;
   requestedAdditions?: RequestedCartAddition[];
+  requestedCartItemReference?: string;
 };
 
 export type RequestedCartAddition = {
@@ -87,11 +92,16 @@ export type IntentBrief = {
   missingInformation: string[];
   confidence: number;
   requestedEffects: Array<
-    "DISCOVER_PRODUCTS" | "ADD_TO_CART" | "INSPECT_CART"
+    | "DISCOVER_PRODUCTS"
+    | "ADD_TO_CART"
+    | "INSPECT_CART"
+    | "CHANGE_CART_QUANTITY"
+    | "REMOVE_FROM_CART"
   >;
   referencedProductIds?: string[];
   requestedQuantity?: number;
   requestedAdditions?: RequestedCartAddition[];
+  requestedCartItemReference?: string;
   hasUnresolvedProductReferences?: true;
   hasConflictingCartRequest?: true;
 };
@@ -419,6 +429,9 @@ export function resolveIntentBrief(
       ? {}
       : { requestedQuantity: analysis.requestedQuantity }),
     ...(requestedAdditions?.length ? { requestedAdditions } : {}),
+    ...(analysis.requestedCartItemReference === undefined
+      ? {}
+      : { requestedCartItemReference: analysis.requestedCartItemReference }),
     ...(requestedProductIds.some((id) => !currentRecommendationIds.has(id))
       ? { hasUnresolvedProductReferences: true as const }
       : {}),

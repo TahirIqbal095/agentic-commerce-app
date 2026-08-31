@@ -778,6 +778,278 @@ test("returns a clear zero-quantity summary when the Customer's Cart is empty", 
   assert.deepEqual(result.cart, emptyCart);
 });
 
+test("removes a named Cart Item and returns the authoritative empty Cart Summary", async () => {
+  const emptyCart = {
+    id: "31000000-0000-4000-8000-000000000001",
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  const removedReferences: string[] = [];
+  const POST = createConversationPost({
+    repository: createInMemoryConversationRepository(),
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Remove a Cart Item",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [{ type: "PRODUCT" as const, value: "Trail One" }],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["REMOVE_FROM_CART" as const],
+          requestedCartItemReference: "Trail One",
+        };
+      },
+    },
+    agentLoop: {
+      async run() {
+        throw new Error("Cart Item Removal must be authoritative");
+      },
+    },
+    cart: {
+      async addItem() {
+        throw new Error("Cart Item Removal must not add to the Cart");
+      },
+      async addItems() {
+        throw new Error("Cart Item Removal must not add to the Cart");
+      },
+      async removeItem(reference, complete) {
+        removedReferences.push(reference);
+        await complete(emptyCart, {} as never);
+        return emptyCart;
+      },
+      async inspect() {
+        throw new Error("A successful removal must use its returned Cart");
+      },
+    },
+  });
+
+  const response = await postAgentMessage(POST, {
+    message: "Remove Trail One from my Cart",
+  });
+
+  assert.deepEqual(removedReferences, ["Trail One"]);
+  assert.deepEqual((await response.json()).data, {
+    status: "COMPLETED",
+    conversationId,
+    message: "Removed Trail One from your Cart. Your Cart is now empty.",
+    intentBrief: {
+      goal: "Remove a Cart Item",
+      constraints: emptyConversationContext().productConstraints,
+      knownEntities: [{ type: "PRODUCT", value: "Trail One" }],
+      missingInformation: [],
+      confidence: 0.99,
+      requestedEffects: ["REMOVE_FROM_CART"],
+      requestedCartItemReference: "Trail One",
+    },
+    products: [],
+    cart: emptyCart,
+  });
+});
+
+test("rejects quantity zero as a substitute for Cart Item Removal", async () => {
+  const unchangedCart = {
+    id: "31000000-0000-4000-8000-000000000002",
+    items: [
+      {
+        productId: "21000000-0000-4000-8000-000000000002",
+        productName: "Trail One",
+        quantity: 2,
+        cartPriceMinor: 350000,
+        subtotalMinor: 700000,
+      },
+    ],
+    totalQuantity: 2,
+    subtotalMinor: 700000,
+    currency: "INR",
+  };
+  const POST = createConversationPost({
+    repository: createInMemoryConversationRepository(),
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Set a Cart Item quantity to zero",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [{ type: "PRODUCT" as const, value: "Trail One" }],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["CHANGE_CART_QUANTITY" as const],
+          requestedCartItemReference: "Trail One",
+          requestedQuantity: 0,
+        };
+      },
+    },
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() { throw new Error("not used"); },
+      async addItems() { throw new Error("not used"); },
+      async removeItem() {
+        throw new Error("Quantity zero must not remove a Cart Item");
+      },
+      async inspect() { return unchangedCart; },
+    },
+  });
+
+  const response = await postAgentMessage(POST, {
+    message: "Set Trail One's quantity to zero",
+  });
+  const outcome = (await response.json()).data;
+
+  assert.equal(outcome.status, "NEEDS_INPUT");
+  assert.equal(
+    outcome.message,
+    "Cart Item quantity must be between 1 and 10. Remove the Cart Item explicitly instead.",
+  );
+  assert.deepEqual(outcome.cart, unchangedCart);
+});
+
+test("asks for clarification when a named reference is ambiguous in the authoritative Cart", async () => {
+  const unchangedCart = {
+    id: "31000000-0000-4000-8000-000000000003",
+    items: [
+      {
+        productId: "21000000-0000-4000-8000-000000000003",
+        productName: "Everyday Runner",
+        quantity: 1,
+        cartPriceMinor: 300000,
+        subtotalMinor: 300000,
+      },
+      {
+        productId: "21000000-0000-4000-8000-000000000004",
+        productName: "Everyday Runner",
+        quantity: 1,
+        cartPriceMinor: 400000,
+        subtotalMinor: 400000,
+      },
+    ],
+    totalQuantity: 2,
+    subtotalMinor: 700000,
+    currency: "INR",
+  };
+  const POST = createConversationPost({
+    repository: createInMemoryConversationRepository(),
+    analyzer: removalAnalyzer("Everyday Runner"),
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() { throw new Error("not used"); },
+      async addItems() { throw new Error("not used"); },
+      async removeItem() {
+        throw new CartError(
+          "More than one Cart Item matches Everyday Runner.",
+        );
+      },
+      async inspect() { return unchangedCart; },
+    },
+  });
+
+  const outcome = (await (await postAgentMessage(POST, {
+    message: "Remove Everyday Runner",
+  })).json()).data;
+
+  assert.equal(outcome.status, "NEEDS_INPUT");
+  assert.equal(outcome.question, "Which Cart Item would you like to remove?");
+  assert.deepEqual(outcome.cart, unchangedCart);
+});
+
+test("returns the unchanged Cart when the named Cart Item is missing", async () => {
+  const unchangedCart = {
+    id: "31000000-0000-4000-8000-000000000004",
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  const POST = createConversationPost({
+    repository: createInMemoryConversationRepository(),
+    analyzer: removalAnalyzer("Missing Product"),
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() { throw new Error("not used"); },
+      async addItems() { throw new Error("not used"); },
+      async removeItem() {
+        throw new CartError("Missing Product is not in your Cart.");
+      },
+      async inspect() { return unchangedCart; },
+    },
+  });
+
+  const outcome = (await (await postAgentMessage(POST, {
+    message: "Remove Missing Product",
+  })).json()).data;
+
+  assert.equal(outcome.status, "NEEDS_INPUT");
+  assert.equal(outcome.message, "Missing Product is not in your Cart.");
+  assert.deepEqual(outcome.cart, unchangedCart);
+});
+
+test("does not apply Cart Item Removal twice when a Conversation Turn is retried", async () => {
+  const idempotencyKey = "61000000-0000-4000-8000-000000000015";
+  const emptyCart = {
+    id: "31000000-0000-4000-8000-000000000005",
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  let storedOutcome: AgentOutcome | null = null;
+  let removals = 0;
+  const repository: ConversationRepository = {
+    async findDuplicate() { return storedOutcome; },
+    async create() {
+      return {
+        conversationId,
+        userMessageId: "51000000-0000-4000-8000-000000000015",
+        context: emptyConversationContext(),
+      };
+    },
+    async findOwnedContext() { return null; },
+    async saveContextAndMetadata() {},
+    async append() { throw new Error("not used"); },
+    async finalizeTurn(_conversationId, _messageId, _message, outcome) {
+      storedOutcome = outcome;
+    },
+  };
+  const POST = createConversationPost({
+    repository,
+    analyzer: removalAnalyzer("Trail One"),
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() { throw new Error("not used"); },
+      async addItems() { throw new Error("not used"); },
+      async removeItem(_reference, complete) {
+        removals += 1;
+        await complete(emptyCart, {} as never);
+        return emptyCart;
+      },
+      async inspect() { throw new Error("not used"); },
+    },
+  });
+
+  const request = { idempotencyKey, message: "Remove Trail One" };
+  const first = await postAgentMessage(POST, request);
+  const second = await postAgentMessage(POST, request);
+
+  assert.deepEqual(await second.json(), await first.json());
+  assert.equal(removals, 1);
+});
+
+function removalAnalyzer(reference: string): IntentAnalyzer {
+  return {
+    async analyze() {
+      return {
+        goal: "Remove a Cart Item",
+        constraintDelta: { set: {}, clear: [] },
+        knownEntities: [{ type: "PRODUCT", value: reference }],
+        missingInformation: [],
+        confidence: 0.99,
+        requestedEffects: ["REMOVE_FROM_CART"],
+        requestedCartItemReference: reference,
+      };
+    },
+  };
+}
+
 test("adds the second Product from the latest Recommendation Set with a default quantity of one", async () => {
   const repository = createInMemoryConversationRepository();
   const products = [

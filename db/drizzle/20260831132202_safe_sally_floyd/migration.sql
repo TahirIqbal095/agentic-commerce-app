@@ -1,0 +1,1 @@
+ALTER TYPE "approval_status" ADD VALUE 'INVALIDATED';

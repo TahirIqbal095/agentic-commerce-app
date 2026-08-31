@@ -3,6 +3,7 @@ import { db } from "@/db";
 import type { DbExecutor } from "@/db";
 import { cartItems, carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
+import { approvals, checkoutProposals } from "@/db/schema/checkout";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
 
 export type CartSummary = {
@@ -51,6 +52,10 @@ export interface CartModule {
   ): Promise<CartView>;
   addItems(
     additions: CartAddition[],
+    complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
+  ): Promise<CartView>;
+  removeItem?(
+    reference: string,
     complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
   ): Promise<CartView>;
   inspect(): Promise<CartView>;
@@ -239,7 +244,95 @@ export function createCartModule(
       return addItems([{ product, quantity }], complete);
     },
     addItems,
+    async removeItem(reference, complete) {
+      const normalizedReference = reference.trim().toLocaleLowerCase();
+      if (!normalizedReference) {
+        throw new CartError("Which Cart Item would you like to remove?");
+      }
+
+      return db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${userId}))`,
+        );
+        const [activeCart] = await transaction
+          .select({ id: carts.id, currency: carts.currency })
+          .from(carts)
+          .where(and(eq(carts.userId, userId), eq(carts.status, "ACTIVE")))
+          .limit(1);
+        if (!activeCart) throw new CartError("Your Cart is empty.");
+
+        const candidates = await transaction
+          .select({ productId: cartItems.productId, productName: products.name })
+          .from(cartItems)
+          .innerJoin(products, eq(products.id, cartItems.productId))
+          .where(eq(cartItems.cartId, activeCart.id));
+        const matches = candidates.filter(
+          ({ productName }) =>
+            productName.trim().toLocaleLowerCase() === normalizedReference,
+        );
+        if (matches.length === 0) {
+          throw new CartError(`${reference} is not in your Cart.`);
+        }
+        if (matches.length > 1) {
+          throw new CartError(
+            `More than one Cart Item matches ${reference}.`,
+          );
+        }
+
+        await transaction
+          .delete(cartItems)
+          .where(
+            and(
+              eq(cartItems.cartId, activeCart.id),
+              eq(cartItems.productId, matches[0].productId),
+            ),
+          );
+        await transaction
+          .update(carts)
+          .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
+          .where(eq(carts.id, activeCart.id));
+        await invalidateCheckoutState(transaction, activeCart.id);
+        const cart = await readCart(transaction, activeCart);
+        await complete(cart, transaction);
+        return cart;
+      });
+    },
   };
+}
+
+async function invalidateCheckoutState(
+  transaction: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  cartId: string,
+): Promise<void> {
+  const unconsumedProposals = await transaction
+    .select({ id: checkoutProposals.id })
+    .from(checkoutProposals)
+    .where(
+      and(
+        eq(checkoutProposals.cartId, cartId),
+        inArray(checkoutProposals.status, [
+          "PREPARED",
+          "APPROVAL_PENDING",
+          "APPROVED",
+        ]),
+      ),
+    );
+  if (unconsumedProposals.length === 0) return;
+
+  const proposalIds = unconsumedProposals.map(({ id }) => id);
+  await transaction
+    .update(approvals)
+    .set({ status: "INVALIDATED", resolvedAt: new Date() })
+    .where(
+      and(
+        inArray(approvals.proposalId, proposalIds),
+        eq(approvals.status, "PENDING"),
+      ),
+    );
+  await transaction
+    .update(checkoutProposals)
+    .set({ status: "INVALIDATED", updatedAt: new Date() })
+    .where(inArray(checkoutProposals.id, proposalIds));
 }
 
 async function readCart(
