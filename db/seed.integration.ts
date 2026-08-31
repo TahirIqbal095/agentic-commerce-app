@@ -276,7 +276,7 @@ async function prepareCart() {
 }
 
 function createQuantityChangePost(
-  productName: string,
+  productName: string | undefined,
   cart = createCartModule(DEMO_CUSTOMER_ID),
 ) {
   const agent = createCommerceAgent(
@@ -288,11 +288,13 @@ function createQuantityChangePost(
         return {
           goal: "Change a Cart Item quantity",
           constraintDelta: { set: {}, clear: [] },
-          knownEntities: [{ type: "PRODUCT" as const, value: productName }],
+          knownEntities: productName
+            ? [{ type: "PRODUCT" as const, value: productName }]
+            : [],
           missingInformation: [],
           confidence: 0.99,
           requestedEffects: ["CHANGE_CART_QUANTITY" as const],
-          requestedCartItemReference: productName,
+          ...(productName ? { requestedCartItemReference: productName } : {}),
           ...((exact || relative)
             ? {
                 requestedCartQuantityChange: {
@@ -405,12 +407,22 @@ test("POST returns the unchanged authoritative Cart for quantity, stock, and ina
   const { cart, product } = await prepareCart();
   await cart.addItem(product, 5, async () => {});
   const post = createQuantityChangePost(product.name, cart);
+  const unqualifiedPost = createQuantityChangePost(undefined, cart);
   const invalidLimit = await post({
     message: "exact 11",
     idempotencyKey: crypto.randomUUID(),
   });
   assert.equal((await invalidLimit.json()).data.status, "NEEDS_INPUT");
   assert.equal((await cart.inspect()).items[0].quantity, 5);
+
+  const unqualifiedLimit = await unqualifiedPost({
+    message: "exact 11",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  assert.match(
+    (await unqualifiedLimit.json()).data.message,
+    /StrideFlow Daily Running Shoes cannot have more than 10 units/,
+  );
 
   await db.update(products).set({ stock: 2 }).where(eq(products.id, product.id));
   const aboveStockDecrease = await post({

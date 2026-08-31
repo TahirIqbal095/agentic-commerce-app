@@ -1175,6 +1175,48 @@ test("leaves the Cart unchanged when a turn mixes a Quantity Change with another
   assert.deepEqual(outcome.cart, unchangedCart);
 });
 
+test("leaves the Cart unchanged when a turn requests multiple Cart Quantity Changes", async () => {
+  const unchangedCart = {
+    id: "31000000-0000-4000-8000-000000000022",
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  const POST = createConversationPost({
+    repository: createInMemoryConversationRepository(),
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Change two Cart Item quantities",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["CHANGE_CART_QUANTITY" as const],
+          requestedCartItemReference: "Trail One",
+          requestedCartQuantityChange: { mode: "RELATIVE" as const, quantity: 1 },
+          hasMultipleCartQuantityChanges: true,
+        };
+      },
+    },
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() { throw new Error("must not mutate"); },
+      async addItems() { throw new Error("must not mutate"); },
+      async changeItemQuantity() { throw new Error("must not mutate"); },
+      async inspect() { return unchangedCart; },
+    },
+  });
+
+  const outcome = (await (await postAgentMessage(POST, {
+    message: "Add one Trail One and remove one Road Two",
+  })).json()).data;
+
+  assert.equal(outcome.status, "NEEDS_INPUT");
+  assert.deepEqual(outcome.cart, unchangedCart);
+});
+
 test("asks for clarification when a named reference is ambiguous in the authoritative Cart", async () => {
   const unchangedCart = {
     id: "31000000-0000-4000-8000-000000000003",

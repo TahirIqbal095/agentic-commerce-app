@@ -258,6 +258,12 @@ const intentAnalysisSchema = jsonSchema<IntentAnalysis>(
         description:
           "A signed relative adjustment or an exact Cart Item quantity.",
       },
+      hasMultipleCartQuantityChanges: {
+        type: "boolean",
+        const: true,
+        description:
+          "True when one turn requests quantity changes for multiple Cart Items.",
+      },
     },
   },
   {
@@ -325,6 +331,7 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
         "requestedAdditions",
         "requestedCartItemReference",
         "requestedCartQuantityChange",
+        "hasMultipleCartQuantityChanges",
       ],
     ) &&
     typeof brief.goal === "string" &&
@@ -383,6 +390,8 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
           (brief.requestedCartQuantityChange as Record<string, unknown>)
             .quantity as number,
         ))) &&
+    (brief.hasMultipleCartQuantityChanges === undefined ||
+      brief.hasMultipleCartQuantityChanges === true) &&
     (brief.requestedAdditions === undefined ||
       (Array.isArray(brief.requestedAdditions) &&
         brief.requestedAdditions.length > 0 &&

@@ -369,17 +369,19 @@ export function createCartModule(
         if (nextQuantity < 1 || nextQuantity > 10) {
           throw new CartError(
             nextQuantity < 1
-              ? `${reference} quantity must stay between 1 and 10. Remove the Cart Item explicitly instead.`
-              : `${reference} cannot have more than 10 units in the Cart.`,
+              ? `${item.productName} quantity must stay between 1 and 10. Remove the Cart Item explicitly instead.`
+              : `${item.productName} cannot have more than 10 units in the Cart.`,
           );
         }
         const increasing = nextQuantity > item.quantity;
         if (increasing && !item.active) {
-          throw new CartError(`${reference} is inactive and cannot be increased.`);
+          throw new CartError(
+            `${item.productName} is inactive and cannot be increased.`,
+          );
         }
         if (nextQuantity > item.stock && (increasing || item.active)) {
           throw new CartError(
-            `${reference} only has ${item.stock} ${item.stock === 1 ? "unit" : "units"} in stock.`,
+            `${item.productName} only has ${item.stock} ${item.stock === 1 ? "unit" : "units"} in stock.`,
           );
         }
 

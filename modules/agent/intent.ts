@@ -1,3 +1,5 @@
+import type { CartQuantityChange } from "@/modules/cart/cart";
+
 export type ShoppingAttributes = Record<string, string | number | boolean>;
 
 export type ShoppingIntent = {
@@ -68,6 +70,7 @@ export type IntentAnalysis = {
   requestedAdditions?: RequestedCartAddition[];
   requestedCartItemReference?: string;
   requestedCartQuantityChange?: RequestedCartQuantityChange;
+  hasMultipleCartQuantityChanges?: true;
 };
 
 export type RequestedCartAddition = {
@@ -75,10 +78,7 @@ export type RequestedCartAddition = {
   quantity: number;
 };
 
-export type RequestedCartQuantityChange = {
-  mode: "RELATIVE" | "EXACT";
-  quantity: number;
-};
+export type RequestedCartQuantityChange = CartQuantityChange;
 
 export type AddToCartIntent = {
   action: "ADD_TO_CART";
@@ -109,6 +109,7 @@ export type IntentBrief = {
   requestedAdditions?: RequestedCartAddition[];
   requestedCartItemReference?: string;
   requestedCartQuantityChange?: RequestedCartQuantityChange;
+  hasMultipleCartQuantityChanges?: true;
   hasUnresolvedProductReferences?: true;
   hasConflictingCartRequest?: true;
 };
@@ -442,6 +443,9 @@ export function resolveIntentBrief(
     ...(analysis.requestedCartQuantityChange === undefined
       ? {}
       : { requestedCartQuantityChange: analysis.requestedCartQuantityChange }),
+    ...(analysis.hasMultipleCartQuantityChanges
+      ? { hasMultipleCartQuantityChanges: true as const }
+      : {}),
     ...(requestedProductIds.some((id) => !currentRecommendationIds.has(id))
       ? { hasUnresolvedProductReferences: true as const }
       : {}),

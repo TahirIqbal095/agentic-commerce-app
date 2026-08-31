@@ -184,6 +184,7 @@ export function createCommerceAgent(
         const reference = intentBrief.requestedCartItemReference?.trim();
         const change = intentBrief.requestedCartQuantityChange;
         if (
+          intentBrief.hasMultipleCartQuantityChanges ||
           intentBrief.requestedEffects.some((effect) =>
             ["ADD_TO_CART", "REMOVE_FROM_CART"].includes(effect),
           )
