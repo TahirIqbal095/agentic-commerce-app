@@ -182,7 +182,75 @@ export function createCommerceAgent(
       }
       if (intentBrief.requestedEffects.includes("ADD_TO_CART")) {
         const referencedProductIds = intentBrief.referencedProductIds ?? [];
-        if (referencedProductIds.length !== 1 || !referencedProductIds[0]) {
+        let directlyMatchedProduct: CatalogProduct | undefined;
+        let directlyMatchedProducts: CatalogProduct[] = [];
+        const resolvesDirectRequest =
+          referencedProductIds.length === 0 &&
+          intentBrief.requestedEffects.includes("DISCOVER_PRODUCTS");
+        if (resolvesDirectRequest) {
+          try {
+            const result = await catalog.search({
+              ...activeProductConstraints(intentBrief.constraints),
+              ...(Object.keys(intentBrief.constraints.attributes).length > 0
+                ? { attributes: intentBrief.constraints.attributes }
+                : {}),
+              limit: 2,
+            });
+            directlyMatchedProducts = result.products;
+            if (result.products.length === 1) {
+              directlyMatchedProduct = result.products[0];
+            }
+          } catch {
+            return completeTurn(turn, {
+              status: "TEMPORARILY_UNAVAILABLE",
+              conversationId: turn.conversationId,
+              message:
+                "I couldn't search the Catalog right now. Please try again.",
+              retryable: true,
+              intentBrief,
+              products: [],
+            });
+          }
+        }
+        if (directlyMatchedProducts.length > 1) {
+          return needsInputWithCurrentCart({
+            turn,
+            cart: options.cart,
+            intentBrief,
+            message: "I found multiple Products matching that Cart request.",
+            question: "Which Product would you like to add?",
+            missingInformation: ["Unambiguous Product"],
+            products: directlyMatchedProducts,
+          });
+        }
+        if (resolvesDirectRequest && directlyMatchedProducts.length === 0) {
+          try {
+            if (!options.cart) throw new Error("Cart capability unavailable");
+            const cart = await options.cart.inspect();
+            return completeTurn(turn, {
+              status: "COMPLETED",
+              conversationId: turn.conversationId,
+              message:
+                "I couldn't find a Product matching that Cart request.",
+              intentBrief,
+              products: [],
+              cart,
+            });
+          } catch {
+            return completeTurn(turn, {
+              status: "TEMPORARILY_UNAVAILABLE",
+              conversationId: turn.conversationId,
+              message: "I couldn't read your Cart right now. Please try again.",
+              retryable: true,
+              intentBrief,
+              products: [],
+            });
+          }
+        }
+        if (
+          !directlyMatchedProduct &&
+          (referencedProductIds.length !== 1 || !referencedProductIds[0])
+        ) {
           return needsInputWithCurrentCart({
             turn,
             cart: options.cart,
@@ -193,7 +261,6 @@ export function createCommerceAgent(
             missingInformation: ["Unambiguous Product"],
           });
         }
-        const productId = referencedProductIds[0];
         const quantity = intentBrief.requestedQuantity ?? 1;
         if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
           return needsInputWithCurrentCart({
@@ -208,7 +275,9 @@ export function createCommerceAgent(
         }
         try {
           if (!options.cart) throw new Error("Cart capability unavailable");
-          const productResult = await catalog.getProduct(productId);
+          const productResult = directlyMatchedProduct
+            ? { ok: true as const, value: directlyMatchedProduct }
+            : await catalog.getProduct(referencedProductIds[0]);
           if (!productResult.ok) {
             throw new CartError(productResult.error.message);
           }
@@ -412,6 +481,7 @@ async function needsInputWithCurrentCart({
   message,
   question,
   missingInformation,
+  products,
 }: {
   turn: AgentTurn;
   cart: CartModule | undefined;
@@ -419,6 +489,7 @@ async function needsInputWithCurrentCart({
   message: string;
   question: string;
   missingInformation: string[];
+  products?: CatalogProduct[];
 }): Promise<AgentOutcome> {
   try {
     if (!cart) throw new Error("Cart capability unavailable");
@@ -430,7 +501,7 @@ async function needsInputWithCurrentCart({
       question,
       missingInformation,
       intentBrief,
-      products: [],
+      products: products ?? [],
       cart: currentCart,
     });
   } catch {

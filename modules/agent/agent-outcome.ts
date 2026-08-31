@@ -19,7 +19,7 @@ export type NeedsInputAgentOutcome = {
   question: string;
   missingInformation: string[];
   intentBrief: IntentBrief;
-  products: [];
+  products: CatalogProduct[];
   intent?: never;
   cart?: CartView;
 };

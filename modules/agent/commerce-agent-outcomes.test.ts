@@ -294,6 +294,270 @@ test("revalidates a referenced Product before a non-discovery follow-up action",
   assert.deepEqual(outcome.cart, updatedCart);
 });
 
+test("adds the only Catalog Product matching a direct Cart request", async () => {
+  const blackShirt = {
+    ...product,
+    id: "21000000-0000-4000-8000-000000000002",
+    slug: "everyday-black-shirt",
+    name: "Everyday Black Shirt",
+    description: "A black cotton shirt for everyday wear.",
+    category: "Apparel",
+    priceMinor: 149900,
+    attributes: { color: "Black", sizes: ["M"] },
+  };
+  const directAddBrief: IntentBrief = {
+    ...brief,
+    goal: "Add a black shirt to the Cart",
+    constraints: {
+      ...brief.constraints,
+      productTypes: ["shirt"],
+      useCases: [],
+      features: [],
+      category: "Apparel",
+      minPriceMinor: null,
+      maxPriceMinor: null,
+      size: null,
+      attributes: { color: "Black" },
+    },
+    knownEntities: [{ type: "PRODUCT_TYPE", value: "shirt" }],
+    requestedEffects: ["DISCOVER_PRODUCTS", "ADD_TO_CART"],
+  };
+  const updatedCart = {
+    id: "31000000-0000-4000-8000-000000000001",
+    items: [{
+      productId: blackShirt.id,
+      productName: blackShirt.name,
+      quantity: 1,
+      cartPriceMinor: blackShirt.priceMinor,
+      subtotalMinor: blackShirt.priceMinor,
+    }],
+    totalQuantity: 1,
+    subtotalMinor: blackShirt.priceMinor,
+    currency: blackShirt.currency,
+  };
+  const searches: unknown[] = [];
+  const additions: CatalogProduct[] = [];
+  const transaction = {} as Parameters<
+    Parameters<NonNullable<Parameters<typeof createCommerceAgent>[3]["cart"]>["addItem"]>[2]
+  >[1];
+  let completedTransaction: unknown;
+  const agent = createCommerceAgent(
+    {
+      async search(input) {
+        searches.push(input);
+        return { products: [blackShirt] };
+      },
+      async getProduct() { throw new Error("Direct additions use search results"); },
+    },
+    { async analyze() { return intentAnalysisFor(directAddBrief); } },
+    {
+      async startTurn() {
+        return {
+          conversationId,
+          async recordIntentBrief() {},
+          async complete(_message, _outcome, completedWith) {
+            completedTransaction = completedWith;
+          },
+        };
+      },
+    },
+    {
+      agentLoop: {
+        async run() { throw new Error("The model must not select a direct match"); },
+      },
+      cart: {
+        async addItem(current, quantity, complete) {
+          additions.push(current);
+          assert.equal(quantity, 1);
+          await complete(updatedCart, transaction);
+          return updatedCart;
+        },
+        async inspect() { throw new Error("Successful additions do not inspect"); },
+      },
+    },
+  );
+
+  const outcome = await agent.respond({ message: "add a black shirt" });
+
+  assert.deepEqual(searches, [{
+    productTypes: ["shirt"],
+    category: "Apparel",
+    inStockOnly: true,
+    attributes: { color: "Black" },
+    limit: 2,
+  }]);
+  assert.deepEqual(additions, [blackShirt]);
+  assert.equal(completedTransaction, transaction);
+  assert.deepEqual(outcome, {
+    status: "COMPLETED",
+    conversationId,
+    message: "Added 1 × Everyday Black Shirt to your Cart.",
+    intentBrief: directAddBrief,
+    products: [],
+    cart: updatedCart,
+  });
+});
+
+test("shows matching Products without changing the Cart when a direct addition is ambiguous", async () => {
+  const blackShirts = [
+    {
+      ...product,
+      id: "21000000-0000-4000-8000-000000000002",
+      slug: "everyday-black-shirt",
+      name: "Everyday Black Shirt",
+      description: "A black cotton shirt for everyday wear.",
+      category: "Apparel",
+      priceMinor: 149900,
+      attributes: { color: "Black", sizes: ["M"] },
+    },
+    {
+      ...product,
+      id: "21000000-0000-4000-8000-000000000003",
+      slug: "formal-black-shirt",
+      name: "Formal Black Shirt",
+      description: "A tailored black shirt for formal occasions.",
+      category: "Apparel",
+      priceMinor: 249900,
+      attributes: { color: "Black", sizes: ["M"] },
+    },
+  ];
+  const directAddBrief: IntentBrief = {
+    ...brief,
+    goal: "Add a black shirt to the Cart",
+    constraints: {
+      ...brief.constraints,
+      productTypes: ["shirt"],
+      useCases: [],
+      features: [],
+      category: "Apparel",
+      minPriceMinor: null,
+      maxPriceMinor: null,
+      size: null,
+      attributes: { color: "Black" },
+    },
+    knownEntities: [{ type: "PRODUCT_TYPE", value: "shirt" }],
+    requestedEffects: ["DISCOVER_PRODUCTS", "ADD_TO_CART"],
+  };
+  const currentCart = {
+    id: null,
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  let inspected = 0;
+  const agent = createCommerceAgent(
+    {
+      async search() { return { products: blackShirts }; },
+      async getProduct() { throw new Error("Ambiguous additions do not look up"); },
+    },
+    { async analyze() { return intentAnalysisFor(directAddBrief); } },
+    {
+      async startTurn() {
+        return {
+          conversationId,
+          async recordIntentBrief() {},
+          async complete() {},
+        };
+      },
+    },
+    {
+      agentLoop: {
+        async run() { throw new Error("The model must not choose among matches"); },
+      },
+      cart: {
+        async addItem() { throw new Error("Ambiguous additions must not mutate"); },
+        async inspect() {
+          inspected += 1;
+          return currentCart;
+        },
+      },
+    },
+  );
+
+  const outcome = await agent.respond({ message: "add a black shirt" });
+
+  assert.equal(inspected, 1);
+  assert.deepEqual(outcome, {
+    status: "NEEDS_INPUT",
+    conversationId,
+    message: "I found multiple Products matching that Cart request.",
+    question: "Which Product would you like to add?",
+    missingInformation: ["Unambiguous Product"],
+    intentBrief: directAddBrief,
+    products: blackShirts,
+    cart: currentCart,
+  });
+});
+
+test("explains that no Product matches a direct addition and leaves the Cart unchanged", async () => {
+  const directAddBrief: IntentBrief = {
+    ...brief,
+    goal: "Add a black shirt to the Cart",
+    constraints: {
+      ...brief.constraints,
+      productTypes: ["shirt"],
+      useCases: [],
+      features: [],
+      category: "Apparel",
+      minPriceMinor: null,
+      maxPriceMinor: null,
+      size: null,
+      attributes: { color: "Black" },
+    },
+    knownEntities: [{ type: "PRODUCT_TYPE", value: "shirt" }],
+    requestedEffects: ["DISCOVER_PRODUCTS", "ADD_TO_CART"],
+  };
+  const currentCart = {
+    id: null,
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  let inspected = 0;
+  const agent = createCommerceAgent(
+    {
+      async search() { return { products: [] }; },
+      async getProduct() { throw new Error("Missing Products do not look up"); },
+    },
+    { async analyze() { return intentAnalysisFor(directAddBrief); } },
+    {
+      async startTurn() {
+        return {
+          conversationId,
+          async recordIntentBrief() {},
+          async complete() {},
+        };
+      },
+    },
+    {
+      agentLoop: {
+        async run() { throw new Error("The model must not invent a match"); },
+      },
+      cart: {
+        async addItem() { throw new Error("Missing Products must not mutate"); },
+        async inspect() {
+          inspected += 1;
+          return currentCart;
+        },
+      },
+    },
+  );
+
+  const outcome = await agent.respond({ message: "add a black shirt" });
+
+  assert.equal(inspected, 1);
+  assert.deepEqual(outcome, {
+    status: "COMPLETED",
+    conversationId,
+    message: "I couldn't find a Product matching that Cart request.",
+    intentBrief: directAddBrief,
+    products: [],
+    cart: currentCart,
+  });
+});
+
 test("bounds Catalog search inputs and results exposed to the Commerce Agent", async () => {
   const catalogProducts = Array.from({ length: 12 }, (_, index) => ({
     ...product,
