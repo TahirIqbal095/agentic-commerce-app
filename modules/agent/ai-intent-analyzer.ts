@@ -10,6 +10,7 @@ import {
 import {
   applyProductConstraintDelta,
   createEmptyConversationContext,
+  haveConsistentProductSelections,
   type CommerceIntent,
   type IntentAnalysis,
   type IntentAnalyzer,
@@ -256,27 +257,6 @@ function isStringArray(value: unknown): value is string[] {
   );
 }
 
-function haveConsistentProductSelections(
-  referencedProductIds: unknown,
-  requestedAdditions: unknown,
-): boolean {
-  if (referencedProductIds === undefined || requestedAdditions === undefined) {
-    return true;
-  }
-  if (!Array.isArray(referencedProductIds) || !Array.isArray(requestedAdditions)) {
-    return false;
-  }
-  const additionProductIds = new Set(
-    requestedAdditions.map((item) =>
-      typeof item === "object" && item !== null
-        ? (item as Record<string, unknown>).productId
-        : undefined,
-    ),
-  );
-  return referencedProductIds.length === requestedAdditions.length &&
-    referencedProductIds.every((productId) => additionProductIds.has(productId));
-}
-
 function isCommerceIntent(value: unknown): value is CommerceIntent {
   if (isShoppingIntent(value)) return true;
   if (typeof value !== "object" || value === null) return false;
@@ -375,7 +355,9 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
     haveConsistentProductSelections(
       brief.referencedProductIds,
       brief.requestedAdditions,
-    )
+    ) &&
+    (brief.requestedQuantity === undefined ||
+      brief.requestedAdditions === undefined)
   );
 }
 

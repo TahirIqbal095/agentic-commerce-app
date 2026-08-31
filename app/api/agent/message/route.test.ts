@@ -1219,6 +1219,7 @@ test("returns the unchanged Cart when any Product in a multi-Product addition fa
   assert.equal(outcome.status, "NEEDS_INPUT");
   assert.equal(outcome.message, "Court Three only has 1 unit in stock.");
   assert.deepEqual(outcome.cart, unchangedCart);
+
 });
 
 test("rolls back a Cart addition when its successful Conversation outcome cannot be persisted", async () => {
@@ -1702,7 +1703,23 @@ test("rejects contradictory Product selections before mutating the Cart", async 
       async append() { return "51000000-0000-4000-8000-000000000056"; },
     },
     analyzer: {
-      async analyze() {
+      async analyze({ message }) {
+        if (message.includes("different quantities")) {
+          return {
+            goal: "Add two recommended Products",
+            constraintDelta: { set: {}, clear: [] },
+            knownEntities: [],
+            missingInformation: [],
+            confidence: 0.99,
+            requestedEffects: ["ADD_TO_CART"],
+            referencedProductIds: productIds,
+            requestedQuantity: 3,
+            requestedAdditions: [
+              { productId: productIds[0], quantity: 2 },
+              { productId: productIds[1], quantity: 1 },
+            ],
+          };
+        }
         return {
           goal: "Add two recommended Products",
           constraintDelta: { set: {}, clear: [] },
@@ -1745,6 +1762,18 @@ test("rejects contradictory Product selections before mutating the Cart", async 
     "The requested Products and quantities do not match.",
   );
   assert.deepEqual(outcome.cart, unchangedCart);
+
+  const quantityResponse = await postAgentMessage(POST, {
+    message: "Add the two Products with different quantities",
+  });
+  const quantityOutcome = (await quantityResponse.json()).data;
+  assert.equal(mutations, 0);
+  assert.equal(quantityOutcome.status, "NEEDS_INPUT");
+  assert.equal(
+    quantityOutcome.message,
+    "The requested Products and quantities do not match.",
+  );
+  assert.deepEqual(quantityOutcome.cart, unchangedCart);
 });
 
 test("identifies an inactive requested Product and leaves the Cart unchanged", async () => {

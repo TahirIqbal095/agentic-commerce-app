@@ -93,7 +93,7 @@ export type IntentBrief = {
   requestedQuantity?: number;
   requestedAdditions?: RequestedCartAddition[];
   hasUnresolvedProductReferences?: true;
-  hasConflictingProductReferences?: true;
+  hasConflictingCartRequest?: true;
 };
 
 export interface IntentAnalyzer {
@@ -356,6 +356,33 @@ function sameStrings(left: string[], right: string[]): boolean {
   );
 }
 
+export function haveConsistentProductSelections(
+  referencedProductIds: unknown,
+  requestedAdditions: unknown,
+): boolean {
+  if (referencedProductIds === undefined || requestedAdditions === undefined) {
+    return true;
+  }
+  if (!Array.isArray(referencedProductIds) || !Array.isArray(requestedAdditions)) {
+    return false;
+  }
+  const referencedIds = referencedProductIds.filter(
+    (productId): productId is string => typeof productId === "string",
+  );
+  const additionIds = requestedAdditions.flatMap((item) =>
+    typeof item === "object" && item !== null &&
+      typeof (item as Record<string, unknown>).productId === "string"
+      ? [(item as Record<string, string>).productId]
+      : [],
+  );
+  const referencedIdSet = new Set(referencedIds);
+  const additionIdSet = new Set(additionIds);
+  return referencedIds.length === referencedProductIds.length &&
+    additionIds.length === requestedAdditions.length &&
+    referencedIdSet.size === additionIdSet.size &&
+    [...referencedIdSet].every((id) => additionIdSet.has(id));
+}
+
 export function resolveIntentBrief(
   analysis: IntentAnalysis,
   context: ConversationContext,
@@ -373,15 +400,13 @@ export function resolveIntentBrief(
     ...(analysis.referencedProductIds ?? []),
     ...(analysis.requestedAdditions?.map(({ productId }) => productId) ?? []),
   ];
-  const referencedProductIdSet = new Set(analysis.referencedProductIds ?? []);
-  const additionProductIdSet = new Set(
-    analysis.requestedAdditions?.map(({ productId }) => productId) ?? [],
-  );
-  const hasConflictingProductReferences =
-    analysis.referencedProductIds !== undefined &&
-    analysis.requestedAdditions !== undefined &&
-    (referencedProductIdSet.size !== additionProductIdSet.size ||
-      [...referencedProductIdSet].some((id) => !additionProductIdSet.has(id)));
+  const hasConflictingCartRequest =
+    !haveConsistentProductSelections(
+      analysis.referencedProductIds,
+      analysis.requestedAdditions,
+    ) ||
+    (analysis.requestedQuantity !== undefined &&
+      analysis.requestedAdditions !== undefined);
   return {
     goal: analysis.goal,
     constraints: context.productConstraints,
@@ -397,8 +422,8 @@ export function resolveIntentBrief(
     ...(requestedProductIds.some((id) => !currentRecommendationIds.has(id))
       ? { hasUnresolvedProductReferences: true as const }
       : {}),
-    ...(hasConflictingProductReferences
-      ? { hasConflictingProductReferences: true as const }
+    ...(hasConflictingCartRequest
+      ? { hasConflictingCartRequest: true as const }
       : {}),
   };
 }

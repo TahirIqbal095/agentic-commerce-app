@@ -196,7 +196,7 @@ export function createCommerceAgent(
             missingInformation: ["Current Product references"],
           });
         }
-        if (intentBrief.hasConflictingProductReferences) {
+        if (intentBrief.hasConflictingCartRequest) {
           return needsInputWithCurrentCart({
             turn,
             cart: options.cart,
