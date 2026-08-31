@@ -12,6 +12,12 @@ export type CartSummary = {
   currency: string;
 };
 
+export type CartPriceChange = {
+  productId: string;
+  previousCartPriceMinor: number;
+  currentCartPriceMinor: number;
+};
+
 export type CartView = Omit<CartSummary, "id"> & {
   id: string | null;
   items: Array<{
@@ -28,16 +34,8 @@ export type CartView = Omit<CartSummary, "id"> & {
       | { reason: "INACTIVE" }
       | { reason: "INSUFFICIENT_STOCK"; availableQuantity: number };
   }>;
-  priceChange?: {
-    productId: string;
-    previousCartPriceMinor: number;
-    currentCartPriceMinor: number;
-  };
-  priceChanges?: Array<{
-    productId: string;
-    previousCartPriceMinor: number;
-    currentCartPriceMinor: number;
-  }>;
+  priceChange?: CartPriceChange;
+  priceChanges?: CartPriceChange[];
 };
 
 export type CartAddition = {

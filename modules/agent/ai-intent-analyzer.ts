@@ -256,6 +256,27 @@ function isStringArray(value: unknown): value is string[] {
   );
 }
 
+function haveConsistentProductSelections(
+  referencedProductIds: unknown,
+  requestedAdditions: unknown,
+): boolean {
+  if (referencedProductIds === undefined || requestedAdditions === undefined) {
+    return true;
+  }
+  if (!Array.isArray(referencedProductIds) || !Array.isArray(requestedAdditions)) {
+    return false;
+  }
+  const additionProductIds = new Set(
+    requestedAdditions.map((item) =>
+      typeof item === "object" && item !== null
+        ? (item as Record<string, unknown>).productId
+        : undefined,
+    ),
+  );
+  return referencedProductIds.length === requestedAdditions.length &&
+    referencedProductIds.every((productId) => additionProductIds.has(productId));
+}
+
 function isCommerceIntent(value: unknown): value is CommerceIntent {
   if (isShoppingIntent(value)) return true;
   if (typeof value !== "object" || value === null) return false;
@@ -350,7 +371,11 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
             typeof candidate.quantity === "number" &&
             Number.isFinite(candidate.quantity)
           );
-        })))
+        }))) &&
+    haveConsistentProductSelections(
+      brief.referencedProductIds,
+      brief.requestedAdditions,
+    )
   );
 }
 

@@ -93,6 +93,7 @@ export type IntentBrief = {
   requestedQuantity?: number;
   requestedAdditions?: RequestedCartAddition[];
   hasUnresolvedProductReferences?: true;
+  hasConflictingProductReferences?: true;
 };
 
 export interface IntentAnalyzer {
@@ -372,6 +373,15 @@ export function resolveIntentBrief(
     ...(analysis.referencedProductIds ?? []),
     ...(analysis.requestedAdditions?.map(({ productId }) => productId) ?? []),
   ];
+  const referencedProductIdSet = new Set(analysis.referencedProductIds ?? []);
+  const additionProductIdSet = new Set(
+    analysis.requestedAdditions?.map(({ productId }) => productId) ?? [],
+  );
+  const hasConflictingProductReferences =
+    analysis.referencedProductIds !== undefined &&
+    analysis.requestedAdditions !== undefined &&
+    (referencedProductIdSet.size !== additionProductIdSet.size ||
+      [...referencedProductIdSet].some((id) => !additionProductIdSet.has(id)));
   return {
     goal: analysis.goal,
     constraints: context.productConstraints,
@@ -386,6 +396,9 @@ export function resolveIntentBrief(
     ...(requestedAdditions?.length ? { requestedAdditions } : {}),
     ...(requestedProductIds.some((id) => !currentRecommendationIds.has(id))
       ? { hasUnresolvedProductReferences: true as const }
+      : {}),
+    ...(hasConflictingProductReferences
+      ? { hasConflictingProductReferences: true as const }
       : {}),
   };
 }

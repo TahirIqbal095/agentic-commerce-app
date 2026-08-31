@@ -196,6 +196,16 @@ export function createCommerceAgent(
             missingInformation: ["Current Product references"],
           });
         }
+        if (intentBrief.hasConflictingProductReferences) {
+          return needsInputWithCurrentCart({
+            turn,
+            cart: options.cart,
+            intentBrief,
+            message: "The requested Products and quantities do not match.",
+            question: "Which Products and quantities would you like to add?",
+            missingInformation: ["Consistent Product quantities"],
+          });
+        }
         let directlyMatchedProduct: CatalogProduct | undefined;
         let directlyMatchedProducts: CatalogProduct[] = [];
         const resolvesDirectRequest =
@@ -530,12 +540,7 @@ function cartAdditionMessage(
 ): string {
   const confirmation = `Added ${quantity} × ${productName} to your Cart.`;
   if (!cart.priceChange) return confirmation;
-  const formatPrice = (priceMinor: number) =>
-    new Intl.NumberFormat("en-IN", {
-      style: "currency",
-      currency: cart.currency,
-    }).format(priceMinor / 100);
-  return `${confirmation} Its Cart Price changed from ${formatPrice(cart.priceChange.previousCartPriceMinor)} to ${formatPrice(cart.priceChange.currentCartPriceMinor)}.`;
+  return `${confirmation} Its Cart Price changed from ${formatCartPrice(cart.priceChange.previousCartPriceMinor, cart.currency)} to ${formatCartPrice(cart.priceChange.currentCartPriceMinor, cart.currency)}.`;
 }
 
 function cartAdditionsMessage(
@@ -554,19 +559,21 @@ function cartAdditionsMessage(
   const productNames = new Map(
     additions.map(({ product }) => [product.id, product.name]),
   );
-  const formatPrice = (priceMinor: number) =>
-    new Intl.NumberFormat("en-IN", {
-      style: "currency",
-      currency: cart.currency,
-    }).format(priceMinor / 100);
   const changes = cart.priceChanges.map((change) => {
     const direction =
       change.currentCartPriceMinor > change.previousCartPriceMinor
         ? "increased"
         : "decreased";
-    return `${productNames.get(change.productId) ?? "Product"} ${direction} from ${formatPrice(change.previousCartPriceMinor)} to ${formatPrice(change.currentCartPriceMinor)}`;
+    return `${productNames.get(change.productId) ?? "Product"} ${direction} from ${formatCartPrice(change.previousCartPriceMinor, cart.currency)} to ${formatCartPrice(change.currentCartPriceMinor, cart.currency)}`;
   });
   return `${confirmation} Cart Price changes: ${changes.join("; ")}.`;
+}
+
+function formatCartPrice(priceMinor: number, currency: string): string {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency,
+  }).format(priceMinor / 100);
 }
 
 async function needsInputWithCurrentCart({

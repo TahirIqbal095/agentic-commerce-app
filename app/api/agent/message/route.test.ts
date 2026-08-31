@@ -326,9 +326,9 @@ test("does not duplicate a multi-Product addition when a Conversation Turn is de
       async addItem() {
         throw new Error("Multi-Product additions must be atomic");
       },
-      async addItems() {
+      async addItems(_additions, complete) {
         additions += 1;
-        return {
+        const cart = {
           id: "31000000-0000-4000-8000-000000000002",
           items: products.map((product) => ({
             productId: product.id,
@@ -341,6 +341,8 @@ test("does not duplicate a multi-Product addition when a Conversation Turn is de
           subtotalMinor: 690000,
           currency: "INR",
         };
+        await complete(cart, {} as never);
+        return cart;
       },
       async inspect() { throw new Error("not used"); },
     },
@@ -350,7 +352,10 @@ test("does not duplicate a multi-Product addition when a Conversation Turn is de
   const first = await postAgentMessage(POST, request);
   const second = await postAgentMessage(POST, request);
 
-  assert.deepEqual(await second.json(), await first.json());
+  const firstBody = await first.json();
+  const secondBody = await second.json();
+  assert.equal(firstBody.data.status, "COMPLETED");
+  assert.deepEqual(secondBody, firstBody);
   assert.equal(additions, 1);
   assert.equal(analyses, 1);
   assert.equal(userMessages, 1);
@@ -1656,6 +1661,88 @@ test("leaves the Cart unchanged when any requested Product reference is stale", 
   assert.equal(
     outcome.message,
     "One requested Product is no longer in the latest Recommendation Set.",
+  );
+  assert.deepEqual(outcome.cart, unchangedCart);
+});
+
+test("rejects contradictory Product selections before mutating the Cart", async () => {
+  const productIds = [
+    "71000000-0000-4000-8000-000000000055",
+    "71000000-0000-4000-8000-000000000056",
+  ];
+  const context = {
+    ...emptyConversationContext(),
+    latestRecommendationSet: productIds.map((productId, index) => ({
+      productId,
+      name: index === 0 ? "Trail One" : "Road Two",
+      description: "A running shoe",
+      category: "Footwear",
+    })),
+  };
+  const unchangedCart = {
+    id: null,
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  let mutations = 0;
+  const POST = createConversationPost({
+    repository: {
+      async findDuplicate() { return null; },
+      async create() {
+        return {
+          conversationId,
+          userMessageId: "51000000-0000-4000-8000-000000000055",
+          context,
+        };
+      },
+      async findOwnedContext() { return { userId, context }; },
+      async saveContextAndMetadata() {},
+      async append() { return "51000000-0000-4000-8000-000000000056"; },
+    },
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Add two recommended Products",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["ADD_TO_CART"],
+          referencedProductIds: productIds,
+          requestedAdditions: [{ productId: productIds[0], quantity: 2 }],
+        };
+      },
+    },
+    catalog: {
+      async search() { throw new Error("not used"); },
+      async getProduct() { throw new Error("Conflicting selections must not resolve"); },
+    },
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() {
+        mutations += 1;
+        throw new Error("Conflicting selections must not mutate");
+      },
+      async addItems() {
+        mutations += 1;
+        throw new Error("Conflicting selections must not mutate");
+      },
+      async inspect() { return unchangedCart; },
+    },
+  });
+
+  const response = await postAgentMessage(POST, {
+    message: "Add two of Trail One and Road Two",
+  });
+  const outcome = (await response.json()).data;
+
+  assert.equal(mutations, 0);
+  assert.equal(outcome.status, "NEEDS_INPUT");
+  assert.equal(
+    outcome.message,
+    "The requested Products and quantities do not match.",
   );
   assert.deepEqual(outcome.cart, unchangedCart);
 });
