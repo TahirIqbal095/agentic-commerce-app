@@ -165,6 +165,10 @@ test("concurrent Customer turns retain every authoritative Cart addition", async
   });
   const product = result.products[0];
   assert.ok(product);
+  const [stockBeforeAddition] = await db
+    .select({ stock: products.stock })
+    .from(products)
+    .where(eq(products.id, product.id));
 
   const cart = createCartModule(DEMO_CUSTOMER_ID);
   await Promise.all([
@@ -176,11 +180,26 @@ test("concurrent Customer turns retain every authoritative Cart addition", async
   assert.equal(summary.totalQuantity, 2);
   assert.equal(summary.subtotalMinor, 799800);
   assert.equal(summary.currency, "INR");
+  const [stockAfterAddition] = await db
+    .select({ stock: products.stock })
+    .from(products)
+    .where(eq(products.id, product.id));
+  assert.equal(stockAfterAddition.stock, stockBeforeAddition.stock);
 
   await db
     .update(products)
     .set({ priceMinor: 429900 })
     .where(eq(products.id, product.id));
+  const inspected = await cart.inspect();
+
+  assert.equal(inspected.items[0].cartPriceMinor, 399900);
+  assert.equal(inspected.items[0].subtotalMinor, 799800);
+  assert.equal(inspected.subtotalMinor, 799800);
+  assert.deepEqual(inspected.items[0].priceComparison, {
+    currentBasePriceMinor: 429900,
+    direction: "INCREASED",
+  });
+
   const repriced = await cart.addItem(product, 1, async () => {});
 
   assert.equal(repriced.items[0].quantity, 3);
@@ -191,4 +210,27 @@ test("concurrent Customer turns retain every authoritative Cart addition", async
     previousCartPriceMinor: 399900,
     currentCartPriceMinor: 429900,
   });
+
+  await db
+    .update(products)
+    .set({ stock: 2 })
+    .where(eq(products.id, product.id));
+  const insufficientStock = await cart.inspect();
+
+  assert.deepEqual(insufficientStock.items[0].availabilityWarning, {
+    reason: "INSUFFICIENT_STOCK",
+    availableQuantity: 2,
+  });
+  assert.equal(insufficientStock.items[0].quantity, 3);
+
+  await db
+    .update(products)
+    .set({ active: false })
+    .where(eq(products.id, product.id));
+  const inactive = await cart.inspect();
+
+  assert.deepEqual(inactive.items[0].availabilityWarning, {
+    reason: "INACTIVE",
+  });
+  assert.equal(inactive.items[0].quantity, 3);
 });

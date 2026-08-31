@@ -23,8 +23,49 @@ export function CartPanel({ cart }: { cart: CartView }) {
             <div>
               <p className="font-medium text-[#1d2a24]">{item.productName}</p>
               <p className="mt-1 text-sm text-[#708176]">
-                {item.quantity} × {formatMoney(item.cartPriceMinor, cart.currency)}
+                {item.quantity} × {item.priceComparison ? "Cart Price " : ""}
+                {formatMoney(item.cartPriceMinor, cart.currency)}
               </p>
+              {item.priceComparison ? (
+                <p className="mt-1 text-sm font-medium text-amber-700">
+                  Current price{" "}
+                  {formatMoney(
+                    item.priceComparison.currentBasePriceMinor,
+                    cart.currency,
+                  )}{" "}
+                  — {item.priceComparison.direction.toLowerCase()}
+                </p>
+              ) : null}
+              {cart.priceChange?.productId === item.productId ? (
+                <p className="mt-1 text-sm font-medium text-amber-700">
+                  Cart Price{" "}
+                  {cart.priceChange.currentCartPriceMinor >
+                  cart.priceChange.previousCartPriceMinor
+                    ? "increased"
+                    : "decreased"}{" "}
+                  from{" "}
+                  {formatMoney(
+                    cart.priceChange.previousCartPriceMinor,
+                    cart.currency,
+                  )}{" "}
+                  to{" "}
+                  {formatMoney(
+                    cart.priceChange.currentCartPriceMinor,
+                    cart.currency,
+                  )}
+                  .
+                </p>
+              ) : null}
+              {item.availabilityWarning ? (
+                <p
+                  role="alert"
+                  className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800"
+                >
+                  {item.availabilityWarning.reason === "INACTIVE"
+                    ? "This Product is no longer active."
+                    : `Only ${item.availabilityWarning.availableQuantity} of ${item.quantity} units is currently available.`}
+                </p>
+              ) : null}
             </div>
             <p
               aria-label={`${item.productName} subtotal`}

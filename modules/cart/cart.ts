@@ -20,6 +20,13 @@ export type CartView = Omit<CartSummary, "id"> & {
     quantity: number;
     cartPriceMinor: number;
     subtotalMinor: number;
+    priceComparison?: {
+      currentBasePriceMinor: number;
+      direction: "INCREASED" | "DECREASED";
+    };
+    availabilityWarning?:
+      | { reason: "INACTIVE" }
+      | { reason: "INSUFFICIENT_STOCK"; availableQuantity: number };
   }>;
   priceChange?: {
     productId: string;
@@ -242,18 +249,50 @@ async function readCart(
       productName: products.name,
       quantity: cartItems.quantity,
       cartPriceMinor: cartItems.unitPriceSnapshotMinor,
+      currentBasePriceMinor: products.priceMinor,
+      productActive: products.active,
+      availableQuantity: products.stock,
     })
     .from(cartItems)
     .innerJoin(products, eq(products.id, cartItems.productId))
     .where(eq(cartItems.cartId, activeCart.id))
     .orderBy(asc(cartItems.createdAt), asc(cartItems.id));
   const viewedItems = items.map(
-    ({ productId, productName, quantity, cartPriceMinor }) => ({
+    ({
+      productId,
+      productName,
+      quantity,
+      cartPriceMinor,
+      currentBasePriceMinor,
+      productActive,
+      availableQuantity,
+    }) => ({
       productId,
       productName,
       quantity,
       cartPriceMinor,
       subtotalMinor: quantity * cartPriceMinor,
+      ...(currentBasePriceMinor === cartPriceMinor
+        ? {}
+        : {
+            priceComparison: {
+              currentBasePriceMinor,
+              direction:
+                currentBasePriceMinor > cartPriceMinor
+                  ? ("INCREASED" as const)
+                  : ("DECREASED" as const),
+            },
+          }),
+      ...(!productActive
+        ? { availabilityWarning: { reason: "INACTIVE" as const } }
+        : availableQuantity < quantity
+          ? {
+              availabilityWarning: {
+                reason: "INSUFFICIENT_STOCK" as const,
+                availableQuantity,
+              },
+            }
+          : {}),
     }),
   );
 
