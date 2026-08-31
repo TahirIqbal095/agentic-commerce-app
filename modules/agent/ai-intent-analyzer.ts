@@ -293,7 +293,7 @@ const intentAnalysisSchema = jsonSchema<IntentAnalysis>(
             {
               type: "object",
               additionalProperties: false,
-              required: ["type", "reference", "change"],
+              required: ["type", "change"],
               properties: {
                 type: { type: "string", const: "CHANGE_QUANTITY" },
                 reference: { type: "string", minLength: 1, maxLength: 160 },
@@ -506,9 +506,11 @@ function isRequestedCartMutations(value: unknown): boolean {
         mutation.reference.length <= 160;
     }
     if (mutation.type !== "CHANGE_QUANTITY" ||
-      !hasExactlyKeys(mutation, ["type", "reference", "change"]) ||
-      typeof mutation.reference !== "string" ||
-      mutation.reference.trim().length === 0 ||
+      !(hasExactlyKeys(mutation, ["type", "reference", "change"]) ||
+        hasExactlyKeys(mutation, ["type", "change"])) ||
+      (mutation.reference !== undefined &&
+        (typeof mutation.reference !== "string" ||
+          mutation.reference.trim().length === 0)) ||
       typeof mutation.change !== "object" || mutation.change === null) {
       return false;
     }

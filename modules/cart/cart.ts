@@ -80,7 +80,7 @@ export interface CartModule {
   ): Promise<CartView>;
   applyMutations?(
     mutations: CartMutation[],
-    complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
+    completeTurn: (cart: CartView, transaction: DbExecutor) => Promise<void>,
   ): Promise<CartView>;
   inspect(): Promise<CartView>;
 }
@@ -268,7 +268,7 @@ export function createCartModule(
       return addItems([{ product, quantity }], complete);
     },
     addItems,
-    async applyMutations(mutations, complete) {
+    async applyMutations(mutations, completeTurn) {
       if (mutations.length === 0 || mutations.length > 16) {
         throw new CartError("At least one valid Cart Mutation is required.");
       }
@@ -294,7 +294,7 @@ export function createCartModule(
             subtotalMinor: 0,
             currency: defaultCurrency,
           };
-          await complete(cart, transaction);
+          await completeTurn(cart, transaction);
           return cart;
         }
 
@@ -311,7 +311,7 @@ export function createCartModule(
             await invalidateCheckoutState(transaction, activeCart!.id);
           }
           const cart = await readCart(transaction, activeCart!);
-          await complete(cart, transaction);
+          await completeTurn(cart, transaction);
           return cart;
         }
 
@@ -393,10 +393,13 @@ export function createCartModule(
         const targetedProductIds = new Set(additionIds);
         const resolveItem = (reference: string | undefined) => {
           if (reference === undefined) {
-            if (currentItems.length !== 1) {
+            const untargetedItems = currentItems.filter(
+              ({ productId }) => !targetedProductIds.has(productId),
+            );
+            if (untargetedItems.length !== 1) {
               throw new CartError("Which Cart Item would you like to change?");
             }
-            return currentItems[0];
+            return untargetedItems[0];
           }
           const normalized = reference.trim().toLocaleLowerCase();
           if (!normalized) {
@@ -547,7 +550,7 @@ export function createCartModule(
           ...(await readCart(transaction, resultingCart)),
           ...(priceChanges.length > 0 ? { priceChanges } : {}),
         };
-        await complete(cart, transaction);
+        await completeTurn(cart, transaction);
         return cart;
       });
     },

@@ -343,6 +343,32 @@ test("one Cart Mutation batch atomically adds, removes, and changes quantities",
   assert.equal(updated.totalQuantity, 7);
 });
 
+test("a mixed batch resolves an unqualified change against its sole untargeted Cart Item", async () => {
+  const { cart, product: strideFlow } = await prepareCart();
+  const [trailCrest] = (await createCatalogModule().search({
+    query: "TrailCrest Grip Running Shoes",
+    limit: 1,
+  })).products;
+  assert.ok(trailCrest);
+  await cart.addItems([
+    { product: strideFlow, quantity: 2 },
+    { product: trailCrest, quantity: 1 },
+  ], async () => {});
+
+  const updated = await cart.applyMutations!([
+    { type: "REMOVE", reference: trailCrest.name },
+    {
+      type: "CHANGE_QUANTITY",
+      change: { mode: "RELATIVE", quantity: 1 },
+    },
+  ], async () => {});
+
+  assert.deepEqual(
+    updated.items.map(({ productId, quantity }) => ({ productId, quantity })),
+    [{ productId: strideFlow.id, quantity: 3 }],
+  );
+});
+
 test("an invalid Cart Mutation rolls back every operation in its batch", async () => {
   const { cart, product: strideFlow } = await prepareCart();
   const [courtLine] = (await createCatalogModule().search({

@@ -154,7 +154,63 @@ export function createCommerceAgent(
           });
         }
       }
-      if (intentBrief.requestedCartMutations?.length) {
+      const hasUnstructuredClear =
+        intentBrief.requestedEffects.includes("CLEAR_CART") &&
+        !intentBrief.requestedCartMutations?.length;
+      if (hasUnstructuredClear && intentBrief.requestedEffects.some((effect) =>
+        ["ADD_TO_CART", "REMOVE_FROM_CART", "CHANGE_CART_QUANTITY"].includes(effect)
+      )) {
+        return needsInputWithCurrentCart({
+          turn,
+          cart: options.cart,
+          intentBrief,
+          message: "Clearing the Cart cannot be combined with another Cart Mutation.",
+          question: "Would you like me to clear the Cart or apply the other changes?",
+          missingInformation: ["One unambiguous Cart Mutation batch"],
+        });
+      }
+      const requestedCartMutations = intentBrief.requestedCartMutations ??
+        (hasUnstructuredClear ? [{ type: "CLEAR" as const }] : undefined);
+      if (requestedCartMutations?.length) {
+        const mutationEffects = new Set<string>(requestedCartMutations.map((mutation) => {
+          switch (mutation.type) {
+            case "ADD": return "ADD_TO_CART";
+            case "REMOVE": return "REMOVE_FROM_CART";
+            case "CHANGE_QUANTITY": return "CHANGE_CART_QUANTITY";
+            case "CLEAR": return "CLEAR_CART";
+          }
+        }));
+        const requestedMutationEffects = intentBrief.requestedEffects.filter(
+          (effect) => [
+            "ADD_TO_CART",
+            "REMOVE_FROM_CART",
+            "CHANGE_CART_QUANTITY",
+            "CLEAR_CART",
+          ].includes(effect),
+        );
+        const hasLegacyMutationDetails =
+          intentBrief.referencedProductIds !== undefined ||
+          intentBrief.requestedQuantity !== undefined ||
+          intentBrief.requestedAdditions !== undefined ||
+          intentBrief.requestedCartItemReference !== undefined ||
+          intentBrief.requestedCartQuantityChange !== undefined ||
+          intentBrief.hasMultipleCartQuantityChanges === true ||
+          intentBrief.hasConflictingCartRequest === true;
+        if (
+          hasLegacyMutationDetails ||
+          requestedMutationEffects.length !== mutationEffects.size ||
+          requestedMutationEffects.some((effect) => !mutationEffects.has(effect))
+        ) {
+          return needsInputWithCurrentCart({
+            turn,
+            cart: options.cart,
+            intentBrief,
+            message:
+              "The requested Cart Mutations cannot be combined because their details conflict.",
+            question: "Which exact Cart Mutations would you like me to apply together?",
+            missingInformation: ["Consistent Cart Mutations"],
+          });
+        }
         if (intentBrief.hasUnresolvedProductReferences) {
           return needsInputWithCurrentCart({
             turn,
@@ -170,7 +226,7 @@ export function createCommerceAgent(
           if (!options.cart?.applyMutations) {
             throw new Error("Cart Mutation batch capability unavailable");
           }
-          const additions = intentBrief.requestedCartMutations.filter(
+          const additions = requestedCartMutations.filter(
             (mutation) => mutation.type === "ADD",
           );
           const productResults = await Promise.all(
@@ -186,7 +242,7 @@ export function createCommerceAgent(
               return [result.value.id, result.value] as const;
             }),
           );
-          const mutations = intentBrief.requestedCartMutations.map((mutation) =>
+          const mutations = requestedCartMutations.map((mutation) =>
             mutation.type === "ADD"
               ? {
                   type: "ADD" as const,
@@ -225,62 +281,6 @@ export function createCommerceAgent(
               message: error.message,
               question: "How should I correct these Cart Mutations?",
               missingInformation: ["Valid Cart Mutations"],
-            });
-          }
-          return completeTurn(turn, {
-            status: "TEMPORARILY_UNAVAILABLE",
-            conversationId: turn.conversationId,
-            message: "I couldn't update your Cart right now. Please try again.",
-            retryable: true,
-            intentBrief,
-            products: [],
-          });
-        }
-      }
-      if (intentBrief.requestedEffects.includes("CLEAR_CART")) {
-        if (intentBrief.requestedEffects.some((effect) =>
-          ["ADD_TO_CART", "REMOVE_FROM_CART", "CHANGE_CART_QUANTITY"].includes(effect)
-        )) {
-          return needsInputWithCurrentCart({
-            turn,
-            cart: options.cart,
-            intentBrief,
-            message: "Clearing the Cart cannot be combined with another Cart Mutation.",
-            question: "Would you like me to clear the Cart or apply the other changes?",
-            missingInformation: ["One unambiguous Cart Mutation batch"],
-          });
-        }
-        try {
-          if (!options.cart?.applyMutations) {
-            throw new Error("Cart clearing capability unavailable");
-          }
-          let completedOutcome: AgentOutcome | undefined;
-          await options.cart.applyMutations(
-            [{ type: "CLEAR" }],
-            async (updatedCart, transaction) => {
-              const outcome: AgentOutcome = {
-                status: "COMPLETED",
-                conversationId: turn.conversationId,
-                message: "Your Cart is empty.",
-                intentBrief,
-                products: [],
-                cart: updatedCart,
-              };
-              await turn.complete(outcome.message, outcome, transaction);
-              completedOutcome = outcome;
-            },
-          );
-          if (completedOutcome) return completedOutcome;
-          throw new Error("Atomic Cart completion was not invoked");
-        } catch (error) {
-          if (error instanceof CartError) {
-            return needsInputWithCurrentCart({
-              turn,
-              cart: options.cart,
-              intentBrief,
-              message: error.message,
-              question: "How would you like to change your Cart?",
-              missingInformation: ["Valid Cart Mutation"],
             });
           }
           return completeTurn(turn, {

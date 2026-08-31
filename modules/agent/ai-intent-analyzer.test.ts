@@ -246,6 +246,32 @@ test("returns an ordered batch of mixed Cart Mutations", async () => {
   }), mutations);
 });
 
+test("allows an unqualified quantity change in a mixed Cart Mutation batch", async () => {
+  const mutations = {
+    goal: "Remove one Cart Item and change the sole remaining quantity",
+    constraintDelta: { set: {}, clear: [] },
+    knownEntities: [],
+    missingInformation: [],
+    confidence: 0.9,
+    requestedEffects: ["REMOVE_FROM_CART", "CHANGE_CART_QUANTITY"],
+    requestedCartMutations: [
+      { type: "REMOVE", reference: "Trail One" },
+      {
+        type: "CHANGE_QUANTITY",
+        change: { mode: "RELATIVE", quantity: 1 },
+      },
+    ],
+  };
+  const analyzer = createAiIntentAnalyzer(new MockLanguageModelV4({
+    doGenerate: async () => modelResponse(mutations),
+  }));
+
+  assert.deepEqual(await analyzer.analyze({
+    context: createEmptyConversationContext(),
+    message: "Remove Trail One and add one more to the only other Cart Item",
+  }), mutations);
+});
+
 test("retries malformed Intent Brief output once", async () => {
   let attempts = 0;
   const model = new MockLanguageModelV4({
