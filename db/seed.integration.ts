@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { and, eq } from "drizzle-orm";
 import { GET } from "@/app/api/products/route";
 import { createPostHandler } from "@/app/api/agent/message/handler";
+import { createPostHandler as createCartCommandPostHandler } from "@/app/api/agent/cart-command/handler";
 import { db } from "@/db";
 import { carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
@@ -341,6 +342,47 @@ test("one Cart Mutation batch atomically adds, removes, and changes quantities",
     ],
   );
   assert.equal(updated.totalQuantity, 7);
+});
+
+test("Cart command HTTP decrement uses the latest quantity when stock fell below the Cart quantity", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 5, async () => {});
+  await db
+    .update(products)
+    .set({ stock: 2 })
+    .where(eq(products.id, product.id));
+
+  const conversation = createConversationModule(DEMO_CUSTOMER_ID);
+  const setupTurn = await conversation.startTurn({
+    idempotencyKey: crypto.randomUUID(),
+    message: "Show my Cart",
+  });
+  const POST = createCartCommandPostHandler(async () => ({
+    cart,
+    conversation: createConversationModule(DEMO_CUSTOMER_ID),
+  }));
+  const response = await POST(new Request("http://localhost/api/agent/cart-command", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      conversationId: setupTurn.conversationId,
+      idempotencyKey: crypto.randomUUID(),
+      command: {
+        type: "CHANGE_CART_ITEM_QUANTITY",
+        productId: product.id,
+        mode: "RELATIVE",
+        quantity: -1,
+      },
+    }),
+  }));
+  const updated = (await response.json()).data.cart;
+
+  assert.equal(response.status, 200);
+  assert.equal(updated.items[0].quantity, 4);
+  assert.deepEqual(updated.items[0].availabilityWarning, {
+    reason: "INSUFFICIENT_STOCK",
+    availableQuantity: 2,
+  });
 });
 
 test("a mixed batch resolves an unqualified change against its sole untargeted Cart Item", async () => {

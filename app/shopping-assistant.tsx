@@ -19,11 +19,20 @@ import type {
   ProductConstraintKey,
   ShoppingIntent,
 } from "@/modules/agent/intent";
+import type { CartQuantityChange, CartView } from "@/modules/cart/cart";
+import type { CartControlCommand } from "@/modules/cart/cart-control-command";
 
 type AgentApiResponse = { data: AgentResult } | { error: { message: string } };
 type ConversationApiResponse =
   | { data: CurrentConversation | null }
   | { error: { message: string } };
+function latestInspectedCart(turns: ConversationTurn[]): CartView | null {
+  const cart = [...turns]
+    .reverse()
+    .find((turn) => turn.result?.cart && "items" in turn.result.cart)
+    ?.result?.cart;
+  return cart && "items" in cart ? cart : null;
+}
 
 export function ShoppingAssistant({
   brandName,
@@ -52,9 +61,9 @@ export function ShoppingAssistant({
       .find((turn) => turn.result?.cart)?.result?.cart;
     return latestCart?.totalQuantity ?? 0;
   });
-  const [pendingCartProductId, setPendingCartProductId] = useState<string | null>(
-    null,
-  );
+  const [pendingCartCommand, setPendingCartCommand] = useState<{
+    productId?: string;
+  } | null>(null);
   const [cartCommandError, setCartCommandError] = useState<{
     productId: string;
     message: string;
@@ -142,85 +151,119 @@ export function ShoppingAssistant({
   }
 
   async function removeCartItem(productId: string) {
-    if (!conversationId || pendingCartProductId) return;
-    const currentCart = [...turns]
-      .reverse()
-      .find((turn) => turn.result?.cart && "items" in turn.result.cart)
-      ?.result?.cart;
+    if (!conversationId || pendingCartCommand) return;
+    const currentCart = latestInspectedCart(turns);
     const item = currentCart && "items" in currentCart
       ? currentCart.items.find((candidate) => candidate.productId === productId)
       : undefined;
     if (!item) return;
 
+    await submitCartCommand({
+      command: { type: "REMOVE_CART_ITEM", productId },
+      customerMessage: `Remove ${item.productName} from my Cart`,
+      fallbackMessage: "The Cart Item could not be removed.",
+      productId,
+    });
+  }
+
+  async function changeCartItemQuantity(
+    productId: string,
+    change: CartQuantityChange,
+  ) {
+    if (!conversationId || pendingCartCommand) return;
+    const currentCart = latestInspectedCart(turns);
+    const item = currentCart && "items" in currentCart
+      ? currentCart.items.find((candidate) => candidate.productId === productId)
+      : undefined;
+    if (!item) return;
+
+    const customerMessage = change.mode === "RELATIVE"
+      ? `${change.quantity > 0 ? "Increase" : "Decrease"} ${item.productName} quantity by ${Math.abs(change.quantity)}`
+      : `Set ${item.productName} quantity to ${change.quantity}`;
+    await submitCartCommand({
+      command: { type: "CHANGE_CART_ITEM_QUANTITY", productId, ...change },
+      customerMessage,
+      fallbackMessage: "The Cart Item quantity could not be changed.",
+      productId,
+    });
+  }
+
+  async function clearCart() {
+    if (!conversationId || pendingCartCommand) return;
+    if (!window.confirm("Clear every Cart Item?")) return;
+
+    await submitCartCommand({
+      command: { type: "CLEAR_CART" },
+      customerMessage: "Clear my Cart",
+      fallbackMessage: "The Cart could not be cleared.",
+    });
+  }
+
+  async function submitCartCommand({
+    command,
+    customerMessage,
+    fallbackMessage,
+    productId,
+  }: {
+    command: CartControlCommand;
+    customerMessage: string;
+    fallbackMessage: string;
+    productId?: string;
+  }) {
+    if (!conversationId || pendingCartCommand) return;
     const turnId = crypto.randomUUID();
     setCartCommandError(null);
-    setPendingCartProductId(productId);
+    setPendingCartCommand(productId ? { productId } : {});
     setTurns((currentTurns) => [
       ...currentTurns,
-      {
-        id: turnId,
-        customerMessage: `Remove ${item.productName} from my Cart`,
-        result: null,
-        error: null,
-      },
+      { id: turnId, customerMessage, result: null, error: null },
     ]);
     try {
       const response = await fetch("/api/agent/cart-command", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          conversationId,
-          idempotencyKey: turnId,
-          command: { type: "REMOVE_CART_ITEM", productId },
-        }),
+        body: JSON.stringify({ conversationId, idempotencyKey: turnId, command }),
       });
       const payload = (await response.json()) as AgentApiResponse;
       if (!response.ok || !("data" in payload)) {
-        throw new Error(
-          "error" in payload
-            ? payload.error.message
-            : "The Cart Item could not be removed.",
-        );
+        throw new Error("error" in payload ? payload.error.message : fallbackMessage);
       }
       setTurns((currentTurns) =>
         currentTurns.map((turn) =>
           turn.id === turnId ? { ...turn, result: payload.data } : turn,
         ),
       );
-      if (payload.data.cart) {
-        setCartQuantity(payload.data.cart.totalQuantity);
-      }
+      if (payload.data.cart) setCartQuantity(payload.data.cart.totalQuantity);
     } catch (requestError) {
       const message = requestError instanceof Error
         ? requestError.message
-        : "The Cart Item could not be removed.";
-      let restoredConversation: CurrentConversation | null = null;
-      try {
-        const response = await fetch("/api/agent/conversation");
-        const payload = (await response.json()) as ConversationApiResponse;
-        if (response.ok && "data" in payload) {
-          restoredConversation = payload.data;
-        }
-      } catch {
-        // The last authoritative Cart Summary remains visible below.
-      }
-
+        : fallbackMessage;
+      const restoredConversation = await loadCurrentConversation();
       if (restoredConversation) {
         setConversationId(restoredConversation.conversationId);
-        setTurns(restoredConversation.transcript);
         setContextSummary(restoredConversation.contextSummary);
-        const restoredCart = [...restoredConversation.transcript]
-          .reverse()
-          .find((turn) => turn.result?.cart && "items" in turn.result.cart)
-          ?.result?.cart;
-        if (restoredCart && "items" in restoredCart) {
-          setCartQuantity(restoredCart.totalQuantity);
-          if (restoredCart.items.some((candidate) => candidate.productId === productId)) {
-            setCartCommandError({ productId, message });
-          }
+        const restoredCart = latestInspectedCart(restoredConversation.transcript);
+        if (restoredCart) setCartQuantity(restoredCart.totalQuantity);
+        const persistedTurn = restoredConversation.transcript.find(
+          (turn) => turn.idempotencyKey === turnId,
+        );
+        const commandWasPersisted = Boolean(
+          persistedTurn &&
+          (persistedTurn.result !== null || persistedTurn.error !== null),
+        );
+        if (commandWasPersisted) {
+          setTurns(restoredConversation.transcript);
+        } else if (productId) {
+          setTurns(restoredConversation.transcript);
+          setCartCommandError({ productId, message });
+        } else {
+          setTurns([
+            ...restoredConversation.transcript,
+            { id: turnId, customerMessage, result: null, error: message },
+          ]);
         }
       } else {
-        setCartCommandError({ productId, message });
+        if (productId) setCartCommandError({ productId, message });
         setTurns((currentTurns) =>
           currentTurns.map((turn) =>
             turn.id === turnId ? { ...turn, error: message } : turn,
@@ -228,7 +271,17 @@ export function ShoppingAssistant({
         );
       }
     } finally {
-      setPendingCartProductId(null);
+      setPendingCartCommand(null);
+    }
+  }
+
+  async function loadCurrentConversation(): Promise<CurrentConversation | null> {
+    try {
+      const response = await fetch("/api/agent/conversation");
+      const payload = (await response.json()) as ConversationApiResponse;
+      return response.ok && "data" in payload ? payload.data : null;
+    } catch {
+      return null;
     }
   }
 
@@ -281,11 +334,15 @@ export function ShoppingAssistant({
               ) : null}
               <ResultArea
                 isLoading={isLoading}
+                cartCommandPending={Boolean(pendingCartCommand)}
                 cartCommandError={cartCommandError}
                 onDiscoverProducts={() => void sendMessage("Show me Products")}
                 onRemoveCartItem={(productId) => void removeCartItem(productId)}
+                onChangeCartItemQuantity={(productId, change) =>
+                  void changeCartItemQuantity(productId, change)}
+                onClearCart={() => void clearCart()}
                 onViewProduct={setSelectedProduct}
-                pendingCartProductId={pendingCartProductId}
+                pendingCartProductId={pendingCartCommand?.productId ?? null}
                 turns={turns}
               />
             </>

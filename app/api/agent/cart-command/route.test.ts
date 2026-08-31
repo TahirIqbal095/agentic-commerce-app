@@ -95,6 +95,278 @@ test("structured Cart Item Removal creates a readable persisted turn with the au
   assert.deepEqual(payload.data.cart, emptyCart);
 });
 
+test("structured relative quantity change persists the latest authoritative Cart result", async () => {
+  const originalCart: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    items: [{
+      productId,
+      productName: "Road Two",
+      quantity: 2,
+      cartPriceMinor: 390000,
+      subtotalMinor: 780000,
+      availableQuantity: 8,
+      productActive: true,
+    }],
+    totalQuantity: 2,
+    subtotalMinor: 780000,
+    currency: "INR",
+  };
+  const authoritativeCart: CartView = {
+    ...originalCart,
+    items: [{
+      ...originalCart.items[0],
+      quantity: 5,
+      subtotalMinor: 2050000,
+      cartPriceMinor: 410000,
+    }],
+    totalQuantity: 5,
+    subtotalMinor: 2050000,
+  };
+  const changes: Array<{ productId?: string; mode: string; quantity: number }> = [];
+  const transaction = {} as DbExecutor;
+  const cart: CartModule = {
+    async inspect() { return originalCart; },
+    async addItem() { throw new Error("not used"); },
+    async addItems() { throw new Error("not used"); },
+    async applyMutations(mutations, complete) {
+      const mutation = mutations[0];
+      if (mutation.type !== "CHANGE_QUANTITY") throw new Error("wrong mutation");
+      changes.push({ productId: mutation.productId, ...mutation.change });
+      await complete(authoritativeCart, transaction);
+      return authoritativeCart;
+    },
+  };
+  const customerMessages: string[] = [];
+  let completedOutcome: AgentOutcome | undefined;
+  const repository: ConversationRepository = {
+    async findDuplicate() { return null; },
+    async create() { throw new Error("not used"); },
+    async findOwnedContext() {
+      return { userId, context: createEmptyConversationContext() };
+    },
+    async saveContextAndMetadata() {},
+    async append(_conversationId, role, content) {
+      if (role === "USER") customerMessages.push(content);
+      return "51000000-0000-4000-8000-000000000001";
+    },
+    async finalizeTurn(_conversationId, _messageId, _message, outcome) {
+      completedOutcome = outcome;
+    },
+  };
+  const POST = createPostHandler(async () => ({
+    cart,
+    conversation: createConversationModule(userId, repository),
+  }));
+
+  const response = await POST(new Request("http://localhost/api/agent/cart-command", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      conversationId,
+      idempotencyKey: "61000000-0000-4000-8000-000000000007",
+      command: {
+        type: "CHANGE_CART_ITEM_QUANTITY",
+        productId,
+        mode: "RELATIVE",
+        quantity: 1,
+      },
+    }),
+  }));
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(changes, [{ productId, mode: "RELATIVE", quantity: 1 }]);
+  assert.deepEqual(customerMessages, ["Increase Road Two quantity by 1"]);
+  assert.deepEqual(completedOutcome, payload.data);
+  assert.equal(payload.data.message, "Increased Road Two quantity to 5.");
+  assert.deepEqual(payload.data.cart, authoritativeCart);
+});
+
+test("structured exact quantity change replaces the authoritative Cart quantity", async () => {
+  const originalCart: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    items: [{
+      productId,
+      productName: "Road Two",
+      quantity: 2,
+      cartPriceMinor: 390000,
+      subtotalMinor: 780000,
+    }],
+    totalQuantity: 2,
+    subtotalMinor: 780000,
+    currency: "INR",
+  };
+  const authoritativeCart: CartView = {
+    ...originalCart,
+    items: [{ ...originalCart.items[0], quantity: 4, subtotalMinor: 1560000 }],
+    totalQuantity: 4,
+    subtotalMinor: 1560000,
+  };
+  const applied: unknown[] = [];
+  let completedOutcome: AgentOutcome | undefined;
+  const repository: ConversationRepository = {
+    async findDuplicate() { return null; },
+    async create() { throw new Error("not used"); },
+    async findOwnedContext() { return { userId, context: createEmptyConversationContext() }; },
+    async saveContextAndMetadata() {},
+    async append() { return "51000000-0000-4000-8000-000000000001"; },
+    async finalizeTurn(_conversationId, _messageId, _message, outcome) { completedOutcome = outcome; },
+  };
+  const cart: CartModule = {
+    async inspect() { return originalCart; },
+    async addItem() { throw new Error("not used"); },
+    async addItems() { throw new Error("not used"); },
+    async applyMutations(mutations, complete) {
+      applied.push(...mutations);
+      await complete(authoritativeCart, {} as DbExecutor);
+      return authoritativeCart;
+    },
+  };
+  const POST = createPostHandler(async () => ({ cart, conversation: createConversationModule(userId, repository) }));
+
+  const response = await POST(new Request("http://localhost/api/agent/cart-command", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      conversationId,
+      idempotencyKey: "61000000-0000-4000-8000-000000000008",
+      command: { type: "CHANGE_CART_ITEM_QUANTITY", productId, mode: "EXACT", quantity: 4 },
+    }),
+  }));
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(applied, [{
+    type: "CHANGE_QUANTITY",
+    productId,
+    change: { mode: "EXACT", quantity: 4 },
+  }]);
+  assert.deepEqual(completedOutcome, payload.data);
+  assert.equal(payload.data.message, "Set Road Two quantity to 4.");
+});
+
+test("structured Clear Cart command persists one deterministic empty Cart turn", async () => {
+  const originalCart: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    items: [{
+      productId,
+      productName: "Road Two",
+      quantity: 2,
+      cartPriceMinor: 390000,
+      subtotalMinor: 780000,
+    }],
+    totalQuantity: 2,
+    subtotalMinor: 780000,
+    currency: "INR",
+  };
+  const emptyCart: CartView = {
+    id: originalCart.id,
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  const customerMessages: string[] = [];
+  const applied: unknown[] = [];
+  let completedOutcome: AgentOutcome | undefined;
+  const repository: ConversationRepository = {
+    async findDuplicate() { return null; },
+    async create() { throw new Error("not used"); },
+    async findOwnedContext() { return { userId, context: createEmptyConversationContext() }; },
+    async saveContextAndMetadata() {},
+    async append(_conversationId, role, content) {
+      if (role === "USER") customerMessages.push(content);
+      return "51000000-0000-4000-8000-000000000001";
+    },
+    async finalizeTurn(_conversationId, _messageId, _message, outcome) { completedOutcome = outcome; },
+  };
+  const cart: CartModule = {
+    async inspect() { return originalCart; },
+    async addItem() { throw new Error("not used"); },
+    async addItems() { throw new Error("not used"); },
+    async applyMutations(mutations, complete) {
+      applied.push(...mutations);
+      await complete(emptyCart, {} as DbExecutor);
+      return emptyCart;
+    },
+  };
+  const POST = createPostHandler(async () => ({ cart, conversation: createConversationModule(userId, repository) }));
+
+  const response = await POST(new Request("http://localhost/api/agent/cart-command", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      conversationId,
+      idempotencyKey: "61000000-0000-4000-8000-000000000009",
+      command: { type: "CLEAR_CART" },
+    }),
+  }));
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(applied, [{ type: "CLEAR" }]);
+  assert.deepEqual(customerMessages, ["Clear my Cart"]);
+  assert.deepEqual(completedOutcome, payload.data);
+  assert.equal(payload.data.message, "Cleared your Cart.");
+  assert.deepEqual(payload.data.cart, emptyCart);
+});
+
+test("rejected quantity change persists its reason with refreshed authoritative Cart state", async () => {
+  const cartView: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    items: [{
+      productId,
+      productName: "Road Two",
+      quantity: 2,
+      cartPriceMinor: 390000,
+      subtotalMinor: 780000,
+      availableQuantity: 2,
+      productActive: true,
+    }],
+    totalQuantity: 2,
+    subtotalMinor: 780000,
+    currency: "INR",
+  };
+  let inspections = 0;
+  let completedOutcome: AgentOutcome | undefined;
+  const cart: CartModule = {
+    async inspect() { inspections += 1; return cartView; },
+    async addItem() { throw new Error("not used"); },
+    async addItems() { throw new Error("not used"); },
+    async applyMutations() { throw new CartError("Road Two only has 2 units in stock."); },
+  };
+  const repository: ConversationRepository = {
+    async findDuplicate() { return null; },
+    async create() { throw new Error("not used"); },
+    async findOwnedContext() { return { userId, context: createEmptyConversationContext() }; },
+    async saveContextAndMetadata() {},
+    async append() { return "51000000-0000-4000-8000-000000000001"; },
+    async finalizeTurn(_conversationId, _messageId, _message, outcome) { completedOutcome = outcome; },
+  };
+  const POST = createPostHandler(async () => ({ cart, conversation: createConversationModule(userId, repository) }));
+
+  const response = await POST(new Request("http://localhost/api/agent/cart-command", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      conversationId,
+      idempotencyKey: "61000000-0000-4000-8000-000000000010",
+      command: { type: "CHANGE_CART_ITEM_QUANTITY", productId, mode: "RELATIVE", quantity: 1 },
+    }),
+  }));
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(inspections, 2);
+  assert.deepEqual(completedOutcome, payload.data);
+  assert.equal(payload.data.status, "NEEDS_INPUT");
+  assert.deepEqual(payload.data.cart, cartView);
+  assert.deepEqual(payload.data.cartItemError, {
+    productId,
+    message: "Road Two only has 2 units in stock.",
+  });
+});
+
 test("a rejected Cart Item Removal persists its reason with refreshed authoritative Cart state", async () => {
   const cartView: CartView = {
     id: "31000000-0000-4000-8000-000000000001",

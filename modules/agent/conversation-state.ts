@@ -11,6 +11,7 @@ import {
 
 export type ConversationTranscriptTurn = {
   id: string;
+  idempotencyKey?: string;
   customerMessage: string;
   result: AgentOutcome | null;
   error: string | null;
@@ -43,6 +44,7 @@ export function createConversationState(userId: string): ConversationState {
       const transcriptRows = await db
         .select({
           id: messages.id,
+          idempotencyKey: messages.idempotencyKey,
           content: messages.content,
           metadata: messages.metadata,
         })
@@ -66,6 +68,9 @@ export function createConversationState(userId: string): ConversationState {
               : null;
           return {
             id: row.id,
+            ...(row.idempotencyKey
+              ? { idempotencyKey: row.idempotencyKey }
+              : {}),
             customerMessage: row.content,
             result: error ? null : persistedOutcome,
             error,

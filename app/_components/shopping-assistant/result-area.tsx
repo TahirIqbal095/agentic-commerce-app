@@ -9,40 +9,55 @@ import { CustomerMessage } from "./customer-message";
 import { IntentSummary } from "./intent-summary";
 import { RecommendationCarousel } from "./recommendation-carousel";
 import type { ConversationTurn } from "./types";
+import type { CartQuantityChange } from "@/modules/cart/cart";
 
 export function ResultArea({
   cartCommandError,
   isLoading,
   onDiscoverProducts,
   onRemoveCartItem,
+  onChangeCartItemQuantity,
+  onClearCart,
   onViewProduct,
   pendingCartProductId,
+  cartCommandPending,
   turns,
 }: {
   cartCommandError: { productId: string; message: string } | null;
   isLoading: boolean;
   onDiscoverProducts: () => void;
   onRemoveCartItem: (productId: string) => void;
+  onChangeCartItemQuantity: (
+    productId: string,
+    change: CartQuantityChange,
+  ) => void;
+  onClearCart: () => void;
   onViewProduct: (product: CatalogProduct) => void;
   pendingCartProductId: string | null;
+  cartCommandPending: boolean;
   turns: ConversationTurn[];
 }) {
   const reduceMotion = useReducedMotion();
   const currentCartTurnId = [...turns]
     .reverse()
     .find((turn) => turn.result?.cart && "items" in turn.result.cart)?.id;
+  const hasPendingCommand =
+    isLoading || cartCommandPending || pendingCartProductId !== null;
+  const pendingTurnId = hasPendingCommand ? turns.at(-1)?.id : undefined;
 
   return (
     <section
       aria-live="polite"
-      aria-busy={isLoading}
+      aria-busy={hasPendingCommand}
       className="w-full space-y-7"
     >
       {turns.map((turn) => {
         const intent =
           turn.result?.intentBrief?.constraints ?? turn.result?.intent;
         const isPending =
-          isLoading && turn.result === null && turn.error === null;
+          turn.id === pendingTurnId &&
+          turn.result === null &&
+          turn.error === null;
         const isNeedsInput = turn.result?.status === "NEEDS_INPUT";
         const cart = turn.result?.cart;
         const inspectedCart = cart && "items" in cart ? cart : null;
@@ -122,7 +137,10 @@ export function ResultArea({
                         }
                         onDiscoverProducts={onDiscoverProducts}
                         onRemove={onRemoveCartItem}
+                        onChangeQuantity={onChangeCartItemQuantity}
+                        onClear={onClearCart}
                         pendingProductId={pendingCartProductId}
+                        cartPending={cartCommandPending}
                       />
                     ) : null}
                   </AgentMessage>

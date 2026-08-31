@@ -3,6 +3,7 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import React from "react";
 import { createEmptyConversationContext } from "@/modules/agent/intent";
+import type { CurrentConversation } from "./_components/shopping-assistant/types";
 
 test("customer sees the configured Brand in the Storefront", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
@@ -1443,6 +1444,567 @@ test("failed Cart Item Removal shows the authoritative reason beside the restore
     within(retriedSummaries.at(-1)!).getByRole("alert").textContent,
     "Road Two could not be removed because the Cart changed. Please try again.",
   );
+});
+
+test("only the current Cart Summary offers accessible quantity controls with authoritative limits", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+  const constraints = createEmptyConversationContext().productConstraints;
+  const cart = (quantity: number, availableQuantity: number) => ({
+    id: "31000000-0000-4000-8000-000000000001",
+    items: [{
+      productId: "21000000-0000-4000-8000-000000000001",
+      productName: "Road Two",
+      quantity,
+      cartPriceMinor: 390000,
+      subtotalMinor: quantity * 390000,
+      availableQuantity,
+      productActive: true,
+    }],
+    totalQuantity: quantity,
+    subtotalMinor: quantity * 390000,
+    currency: "INR",
+  });
+  const result = (quantity: number, availableQuantity: number) => ({
+    status: "COMPLETED" as const,
+    conversationId: "41000000-0000-4000-8000-000000000001",
+    message: "Here’s what’s in your Cart.",
+    intentBrief: {
+      goal: "Inspect the Cart",
+      constraints,
+      knownEntities: [],
+      missingInformation: [],
+      confidence: 1,
+      requestedEffects: ["INSPECT_CART" as const],
+    },
+    products: [],
+    cart: cart(quantity, availableQuantity),
+  });
+  const [{ render, cleanup, within }, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(React.createElement(ShoppingAssistant, {
+    brandName: "Arc",
+    initialConversation: {
+      conversationId: "41000000-0000-4000-8000-000000000001",
+      transcript: [
+        {
+          id: "51000000-0000-4000-8000-000000000001",
+          customerMessage: "Show my Cart",
+          result: result(1, 3),
+          error: null,
+        },
+        {
+          id: "51000000-0000-4000-8000-000000000002",
+          customerMessage: "Show my Cart again",
+          result: result(3, 3),
+          error: null,
+        },
+      ],
+      contextSummary: constraints,
+      revision: 0,
+    },
+  }));
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+
+  const summaries = view.getAllByRole("region", { name: "Your Cart" });
+  assert.equal(
+    within(summaries[0]).queryByRole("spinbutton", { name: "Road Two quantity" }),
+    null,
+  );
+  const current = within(summaries[1]);
+  assert.equal(
+    current.getByRole("spinbutton", { name: "Road Two quantity" }).getAttribute("value"),
+    "3",
+  );
+  assert.equal(
+    current.getByRole("button", { name: "Increase Road Two quantity" }).hasAttribute("disabled"),
+    true,
+  );
+  assert.equal(
+    current.getByRole("button", { name: "Decrease Road Two quantity" }).hasAttribute("disabled"),
+    false,
+  );
+  assert.ok(current.getByRole("button", { name: "Remove Road Two" }));
+});
+
+test("increment applies a relative command to the latest authoritative Cart quantity", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+  const constraints = createEmptyConversationContext().productConstraints;
+  let requestBody: Record<string, unknown> | undefined;
+  let finishRequest: (() => void) | undefined;
+  globalThis.fetch = async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body));
+    const response = new Response(JSON.stringify({ data: {
+      status: "COMPLETED",
+      conversationId: "41000000-0000-4000-8000-000000000001",
+      message: "Increased Road Two quantity to 5.",
+      intentBrief: {
+        goal: "Change Road Two quantity",
+        constraints,
+        knownEntities: [],
+        missingInformation: [],
+        confidence: 1,
+        requestedEffects: ["CHANGE_CART_QUANTITY"],
+      },
+      products: [],
+      cart: {
+        id: "31000000-0000-4000-8000-000000000001",
+        items: [{
+          productId: "21000000-0000-4000-8000-000000000001",
+          productName: "Road Two",
+          quantity: 5,
+          cartPriceMinor: 410000,
+          subtotalMinor: 2050000,
+          availableQuantity: 8,
+          productActive: true,
+        }],
+        priceChanges: [{
+          productId: "21000000-0000-4000-8000-000000000001",
+          previousCartPriceMinor: 390000,
+          currentCartPriceMinor: 410000,
+          direction: "INCREASED",
+        }],
+        totalQuantity: 5,
+        subtotalMinor: 2050000,
+        currency: "INR",
+      },
+    } }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Promise<Response>((resolve) => {
+      finishRequest = () => resolve(response);
+    });
+  };
+  const [{ render, cleanup }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(React.createElement(ShoppingAssistant, {
+    brandName: "Arc",
+    initialConversation: {
+      conversationId: "41000000-0000-4000-8000-000000000001",
+      transcript: [{
+        id: "51000000-0000-4000-8000-000000000001",
+        customerMessage: "Show my Cart",
+        result: {
+          status: "COMPLETED",
+          conversationId: "41000000-0000-4000-8000-000000000001",
+          message: "Here’s what’s in your Cart.",
+          intentBrief: {
+            goal: "Inspect the Cart",
+            constraints,
+            knownEntities: [],
+            missingInformation: [],
+            confidence: 1,
+            requestedEffects: ["INSPECT_CART"],
+          },
+          products: [],
+          cart: {
+            id: "31000000-0000-4000-8000-000000000001",
+            items: [{
+              productId: "21000000-0000-4000-8000-000000000001",
+              productName: "Road Two",
+              quantity: 2,
+              cartPriceMinor: 390000,
+              subtotalMinor: 780000,
+              availableQuantity: 8,
+              productActive: true,
+            }],
+            totalQuantity: 2,
+            subtotalMinor: 780000,
+            currency: "INR",
+          },
+        },
+        error: null,
+      }],
+      contextSummary: constraints,
+      revision: 0,
+    },
+  }));
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  await user.click(view.getByRole("button", { name: "Increase Road Two quantity" }));
+
+  assert.deepEqual((requestBody?.command), {
+    type: "CHANGE_CART_ITEM_QUANTITY",
+    productId: "21000000-0000-4000-8000-000000000001",
+    mode: "RELATIVE",
+    quantity: 1,
+  });
+  assert.equal(
+    view.getByRole("button", { name: "Decrease Road Two quantity" }).hasAttribute("disabled"),
+    true,
+  );
+  assert.equal(
+    view.getByRole("spinbutton", { name: "Road Two quantity" }).hasAttribute("disabled"),
+    true,
+  );
+  assert.equal(
+    view.getByRole("button", { name: "Remove Road Two" }).hasAttribute("disabled"),
+    true,
+  );
+  assert.ok(view.container.querySelector('[aria-busy="true"]'));
+  finishRequest?.();
+  assert.ok(await view.findByText("Increased Road Two quantity to 5."));
+  assert.equal(view.getByRole("button", { name: "Cart · 5" }).textContent, " Cart · 5");
+  assert.ok(view.getByText("Cart Price increased from ₹3,900 to ₹4,100."));
+});
+
+test("exact quantity input validates on blur and submits on Enter without mutating while typed", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost/" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: dom.window.navigator });
+  const constraints = createEmptyConversationContext().productConstraints;
+  const cart = (quantity: number) => ({
+    id: "31000000-0000-4000-8000-000000000001",
+    items: [{
+      productId: "21000000-0000-4000-8000-000000000001",
+      productName: "Road Two",
+      quantity,
+      cartPriceMinor: 390000,
+      subtotalMinor: quantity * 390000,
+      availableQuantity: 2,
+      productActive: true,
+    }],
+    totalQuantity: quantity,
+    subtotalMinor: quantity * 390000,
+    currency: "INR",
+  });
+  const requests: Array<Record<string, unknown>> = [];
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body));
+    requests.push(request);
+    const quantity = request.command.quantity as number;
+    return new Response(JSON.stringify({ data: {
+      status: "COMPLETED",
+      conversationId: "41000000-0000-4000-8000-000000000001",
+      message: `Set Road Two quantity to ${quantity}.`,
+      intentBrief: {
+        goal: "Change Road Two quantity",
+        constraints,
+        knownEntities: [],
+        missingInformation: [],
+        confidence: 1,
+        requestedEffects: ["CHANGE_CART_QUANTITY"],
+      },
+      products: [],
+      cart: cart(quantity),
+    } }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const [{ render, cleanup }, userEvent, { ShoppingAssistant }] = await Promise.all([
+    import("@testing-library/react"),
+    import("@testing-library/user-event").then((module) => module.default),
+    import("./shopping-assistant"),
+  ]);
+  const view = render(React.createElement(ShoppingAssistant, {
+    brandName: "Arc",
+    initialConversation: {
+      conversationId: "41000000-0000-4000-8000-000000000001",
+      transcript: [{
+        id: "51000000-0000-4000-8000-000000000001",
+        customerMessage: "Show my Cart",
+        result: {
+          status: "COMPLETED",
+          conversationId: "41000000-0000-4000-8000-000000000001",
+          message: "Here’s what’s in your Cart.",
+          intentBrief: {
+            goal: "Inspect the Cart",
+            constraints,
+            knownEntities: [],
+            missingInformation: [],
+            confidence: 1,
+            requestedEffects: ["INSPECT_CART"],
+          },
+          products: [],
+          cart: cart(5),
+        },
+        error: null,
+      }],
+      contextSummary: constraints,
+      revision: 0,
+    },
+  }));
+  t.after(() => { cleanup(); dom.window.close(); });
+  const user = userEvent.setup({ document: dom.window.document });
+  const input = view.getByRole("spinbutton", { name: "Road Two quantity" });
+
+  for (const invalid of ["", "1.5", "-1", "0", "6"]) {
+    await user.clear(input);
+    if (invalid) await user.type(input, invalid);
+    await user.tab();
+    assert.equal(input.getAttribute("value"), "5");
+    assert.equal(view.getByRole("alert").textContent, "Enter a whole quantity from 1 to 5.");
+    await user.click(input);
+  }
+  assert.equal(requests.length, 0);
+  await user.clear(input);
+  await user.type(input, "4");
+  assert.equal(requests.length, 0);
+  await user.keyboard("{Enter}");
+
+  assert.deepEqual(requests[0].command, {
+    type: "CHANGE_CART_ITEM_QUANTITY",
+    productId: "21000000-0000-4000-8000-000000000001",
+    mode: "EXACT",
+    quantity: 4,
+  });
+  assert.ok(await view.findByText("Set Road Two quantity to 4."));
+
+  const currentInput = view.getByRole("spinbutton", { name: "Road Two quantity" });
+  await user.clear(currentInput);
+  await user.type(currentInput, "3");
+  assert.equal(requests.length, 1);
+  await user.click(view.getByText("Current Cart Summary"));
+  assert.deepEqual(requests[1].command, {
+    type: "CHANGE_CART_ITEM_QUANTITY",
+    productId: "21000000-0000-4000-8000-000000000001",
+    mode: "EXACT",
+    quantity: 3,
+  });
+  assert.ok(await view.findByText("Set Road Two quantity to 3."));
+});
+
+test("a repeated quantity command transport failure remains visible after authoritative recovery", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+  const constraints = createEmptyConversationContext().productConstraints;
+  const initialConversation: CurrentConversation = {
+    conversationId: "41000000-0000-4000-8000-000000000001",
+    transcript: [{
+      id: "51000000-0000-4000-8000-000000000001",
+      idempotencyKey: "61000000-0000-4000-8000-000000000001",
+      customerMessage: "Increase Road Two quantity by 1",
+      result: {
+        status: "COMPLETED",
+        conversationId: "41000000-0000-4000-8000-000000000001",
+        message: "Increased Road Two quantity to 2.",
+        intentBrief: {
+          goal: "Change Road Two quantity",
+          constraints,
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 1,
+          requestedEffects: ["CHANGE_CART_QUANTITY"],
+        },
+        products: [],
+        cart: {
+          id: "31000000-0000-4000-8000-000000000001",
+          items: [{
+            productId: "21000000-0000-4000-8000-000000000001",
+            productName: "Road Two",
+            quantity: 2,
+            cartPriceMinor: 390000,
+            subtotalMinor: 780000,
+            availableQuantity: 5,
+            productActive: true,
+          }],
+          totalQuantity: 2,
+          subtotalMinor: 780000,
+          currency: "INR",
+        },
+      },
+      error: null,
+    }],
+    contextSummary: constraints,
+    revision: 0,
+  };
+  let commandAttempts = 0;
+  globalThis.fetch = async (input) => {
+    if (input === "/api/agent/conversation") {
+      return new Response(JSON.stringify({ data: initialConversation }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    commandAttempts += 1;
+    throw new Error("The Cart connection was interrupted.");
+  };
+  const [{ render, cleanup }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(React.createElement(ShoppingAssistant, {
+    brandName: "Arc",
+    initialConversation,
+  }));
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  await user.click(view.getByRole("button", { name: "Increase Road Two quantity" }));
+
+  assert.equal(commandAttempts, 1);
+  assert.equal(
+    (await view.findByRole("alert")).textContent,
+    "The Cart connection was interrupted.",
+  );
+  assert.equal(
+    view.getByRole("spinbutton", { name: "Road Two quantity" }).getAttribute("value"),
+    "2",
+  );
+});
+
+test("Clear Cart requires confirmation and renders the persisted empty Cart Summary", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost/" });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: dom.window.navigator });
+  const constraints = createEmptyConversationContext().productConstraints;
+  let confirmed = false;
+  t.mock.method(dom.window, "confirm", () => confirmed);
+  const requests: Array<Record<string, unknown>> = [];
+  globalThis.fetch = async (_input, init) => {
+    requests.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify({ data: {
+      status: "COMPLETED",
+      conversationId: "41000000-0000-4000-8000-000000000001",
+      message: "Cleared your Cart.",
+      intentBrief: {
+        goal: "Clear the Cart",
+        constraints,
+        knownEntities: [],
+        missingInformation: [],
+        confidence: 1,
+        requestedEffects: ["CLEAR_CART"],
+      },
+      products: [],
+      cart: {
+        id: "31000000-0000-4000-8000-000000000001",
+        items: [],
+        totalQuantity: 0,
+        subtotalMinor: 0,
+        currency: "INR",
+      },
+    } }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const [{ render, cleanup, within }, userEvent, { ShoppingAssistant }] = await Promise.all([
+    import("@testing-library/react"),
+    import("@testing-library/user-event").then((module) => module.default),
+    import("./shopping-assistant"),
+  ]);
+  const view = render(React.createElement(ShoppingAssistant, {
+    brandName: "Arc",
+    initialConversation: {
+      conversationId: "41000000-0000-4000-8000-000000000001",
+      transcript: [{
+        id: "51000000-0000-4000-8000-000000000001",
+        customerMessage: "Show my Cart",
+        result: {
+          status: "COMPLETED",
+          conversationId: "41000000-0000-4000-8000-000000000001",
+          message: "Here’s what’s in your Cart.",
+          intentBrief: {
+            goal: "Inspect the Cart",
+            constraints,
+            knownEntities: [],
+            missingInformation: [],
+            confidence: 1,
+            requestedEffects: ["INSPECT_CART"],
+          },
+          products: [],
+          cart: {
+            id: "31000000-0000-4000-8000-000000000001",
+            items: [{
+              productId: "21000000-0000-4000-8000-000000000001",
+              productName: "Road Two",
+              quantity: 2,
+              cartPriceMinor: 390000,
+              subtotalMinor: 780000,
+              availableQuantity: 8,
+              productActive: true,
+            }],
+            totalQuantity: 2,
+            subtotalMinor: 780000,
+            currency: "INR",
+          },
+        },
+        error: null,
+      }],
+      contextSummary: constraints,
+      revision: 0,
+    },
+  }));
+  t.after(() => { cleanup(); dom.window.close(); });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  await user.click(view.getByRole("button", { name: "Clear Cart" }));
+  assert.equal(requests.length, 0);
+  confirmed = true;
+  await user.click(view.getByRole("button", { name: "Clear Cart" }));
+
+  assert.deepEqual(requests[0].command, { type: "CLEAR_CART" });
+  assert.ok(await view.findByText("Cleared your Cart."));
+  const summaries = view.getAllByRole("region", { name: "Your Cart" });
+  assert.equal(summaries.length, 2);
+  assert.equal(within(summaries[1]).queryByRole("button", { name: "Clear Cart" }), null);
+  assert.ok(within(summaries[1]).getByText("Your Cart is empty."));
 });
 
 test("Storefront reuses the server conversation identifier on later turns", async (t) => {

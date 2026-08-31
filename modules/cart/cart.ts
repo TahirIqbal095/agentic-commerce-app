@@ -28,6 +28,8 @@ export type CartView = Omit<CartSummary, "id"> & {
     quantity: number;
     cartPriceMinor: number;
     subtotalMinor: number;
+    availableQuantity?: number;
+    productActive?: boolean;
     priceComparison?: {
       currentBasePriceMinor: number;
       direction: "INCREASED" | "DECREASED";
@@ -55,6 +57,7 @@ export type CartMutation =
   | {
       type: "CHANGE_QUANTITY";
       reference?: string;
+      productId?: string;
       change: CartQuantityChange;
     }
   | { type: "CLEAR" };
@@ -462,7 +465,15 @@ export function createCartModule(
           currentItems.map((item) => [item.productId, item]),
         );
         const targetedProductIds = new Set(additionIds);
-        const resolveItem = (reference: string | undefined) => {
+        const resolveItem = (
+          reference: string | undefined,
+          productId?: string,
+        ) => {
+          if (productId !== undefined) {
+            const item = byProductId.get(productId);
+            if (!item) throw new CartError("That Cart Item is no longer in your Cart.");
+            return item;
+          }
           if (reference === undefined) {
             const untargetedItems = currentItems.filter(
               ({ productId }) => !targetedProductIds.has(productId),
@@ -503,11 +514,15 @@ export function createCartModule(
         for (const [index, mutation] of mutations.entries()) {
           if (
             (mutation.type !== "REMOVE" && mutation.type !== "CHANGE_QUANTITY") ||
-            mutation.reference === undefined
+            mutation.reference === undefined &&
+            !(mutation.type === "CHANGE_QUANTITY" && mutation.productId)
           ) {
             continue;
           }
-          const item = resolveItem(mutation.reference);
+          const item = resolveItem(
+            mutation.reference,
+            mutation.type === "CHANGE_QUANTITY" ? mutation.productId : undefined,
+          );
           if (targetedProductIds.has(item.productId)) {
             throw new CartError(
               `${item.productName} has duplicate or contradictory Cart Mutations.`,
@@ -554,7 +569,7 @@ export function createCartModule(
           if (increasing && !item.active) {
             throw new CartError(`${item.productName} is inactive and cannot be increased.`);
           }
-          if (quantity > item.stock) {
+          if (increasing && quantity > item.stock) {
             throw new CartError(
               `${item.productName} only has ${item.stock} ${item.stock === 1 ? "unit" : "units"} in stock.`,
             );
@@ -839,6 +854,8 @@ async function readCart(
       quantity,
       cartPriceMinor,
       subtotalMinor: quantity * cartPriceMinor,
+      availableQuantity,
+      productActive,
       ...(currentBasePriceMinor === cartPriceMinor
         ? {}
         : {
