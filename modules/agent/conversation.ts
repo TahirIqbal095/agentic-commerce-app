@@ -31,7 +31,7 @@ export type AgentTurn = {
   recordRecommendationSet?(
     products: CatalogProduct[],
     context: ConversationContext,
-  ): Promise<void>;
+  ): Promise<boolean | void>;
   context?: ConversationContext;
   /** Persists the resolved Intent Brief and next Conversation Context. */
   recordIntentBrief(
@@ -198,7 +198,7 @@ export function createConversationModule(
          */
         async recordRecommendationSet(products, expectedContext) {
           if (!repository.saveRecommendationSet) return;
-          await repository.saveRecommendationSet(
+          return repository.saveRecommendationSet(
             conversationId,
             expectedContext.revision,
             products.slice(0, 8).map((product) => ({

@@ -546,6 +546,45 @@ test("does not add a Product when the Catalog reports more matching pages", asyn
   assert.deepEqual(outcome.cart, emptyCart);
 });
 
+test("returns a retryable outcome when ambiguous direct matches cannot be retained", async () => {
+  const agent = createCommerceAgent(
+    {
+      async search() { return { products: [blackShirt, formalBlackShirt] }; },
+      async getProduct() { throw new Error("Ambiguous additions do not look up"); },
+    },
+    { async analyze() { return intentAnalysisFor(directAddBrief); } },
+    {
+      async startTurn() {
+        return {
+          conversationId,
+          async recordIntentBrief() {},
+          async recordRecommendationSet() { return false; },
+          async complete() {},
+        };
+      },
+    },
+    {
+      agentLoop: {
+        async run() { throw new Error("The model must not choose among matches"); },
+      },
+      cart: {
+        async addItem() { throw new Error("Ambiguous additions must not mutate"); },
+        async inspect() { throw new Error("Stale outcomes do not inspect"); },
+      },
+    },
+  );
+
+  const outcome = await agent.respond({ message: "add a black shirt" });
+
+  assert.deepEqual(outcome, {
+    status: "TEMPORARILY_UNAVAILABLE",
+    conversationId,
+    message: "That conversation changed. Please retry your request.",
+    retryable: true,
+    products: [],
+  });
+});
+
 test("bounds Catalog search inputs and results exposed to the Commerce Agent", async () => {
   const catalogProducts = Array.from({ length: 12 }, (_, index) => ({
     ...product,

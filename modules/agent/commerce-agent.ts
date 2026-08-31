@@ -220,10 +220,16 @@ export function createCommerceAgent(
           !directlyMatchedProduct
         ) {
           try {
-            await turn.recordRecommendationSet?.(
+            const saved = await turn.recordRecommendationSet?.(
               directlyMatchedProducts,
               resolvedContext,
             );
+            if (saved === false) {
+              return completeTurn(
+                turn,
+                contextConflictOutcome(turn.conversationId),
+              );
+            }
           } catch {
             return completeTurn(turn, {
               status: "TEMPORARILY_UNAVAILABLE",
