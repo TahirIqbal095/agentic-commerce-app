@@ -425,9 +425,17 @@ export function createCartModule(
         }> = [];
         const priceChanges: CartPriceChange[] = [];
 
-        for (const mutation of mutations) {
-          if (mutation.type === "ADD") continue;
-          if (mutation.type === "CLEAR") continue;
+        const explicitTargets = new Map<
+          number,
+          (typeof currentItems)[number]
+        >();
+        for (const [index, mutation] of mutations.entries()) {
+          if (
+            (mutation.type !== "REMOVE" && mutation.type !== "CHANGE_QUANTITY") ||
+            mutation.reference === undefined
+          ) {
+            continue;
+          }
           const item = resolveItem(mutation.reference);
           if (targetedProductIds.has(item.productId)) {
             throw new CartError(
@@ -435,6 +443,17 @@ export function createCartModule(
             );
           }
           targetedProductIds.add(item.productId);
+          explicitTargets.set(index, item);
+        }
+
+        for (const [index, mutation] of mutations.entries()) {
+          if (mutation.type === "ADD") continue;
+          if (mutation.type === "CLEAR") continue;
+          const explicitTarget = explicitTargets.get(index);
+          const item = explicitTarget ?? resolveItem(undefined);
+          if (!explicitTarget) {
+            targetedProductIds.add(item.productId);
+          }
           if (mutation.type === "REMOVE") {
             removals.push(item);
             continue;

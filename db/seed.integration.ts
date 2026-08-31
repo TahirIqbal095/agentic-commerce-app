@@ -369,6 +369,32 @@ test("a mixed batch resolves an unqualified change against its sole untargeted C
   );
 });
 
+test("unqualified mixed Cart Item resolution does not depend on operation order", async () => {
+  const { cart, product: strideFlow } = await prepareCart();
+  const [trailCrest] = (await createCatalogModule().search({
+    query: "TrailCrest Grip Running Shoes",
+    limit: 1,
+  })).products;
+  assert.ok(trailCrest);
+  await cart.addItems([
+    { product: strideFlow, quantity: 2 },
+    { product: trailCrest, quantity: 1 },
+  ], async () => {});
+
+  const updated = await cart.applyMutations!([
+    {
+      type: "CHANGE_QUANTITY",
+      change: { mode: "RELATIVE", quantity: 1 },
+    },
+    { type: "REMOVE", reference: trailCrest.name },
+  ], async () => {});
+
+  assert.deepEqual(
+    updated.items.map(({ productId, quantity }) => ({ productId, quantity })),
+    [{ productId: strideFlow.id, quantity: 3 }],
+  );
+});
+
 test("an invalid Cart Mutation rolls back every operation in its batch", async () => {
   const { cart, product: strideFlow } = await prepareCart();
   const [courtLine] = (await createCatalogModule().search({
