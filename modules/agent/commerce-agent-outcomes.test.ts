@@ -245,6 +245,7 @@ test("does not expose Catalog capabilities for an ambiguous Cart addition", asyn
       agentLoop: loop,
       cart: {
         async addItem() { throw new Error("Ambiguous requests must not mutate"); },
+        async addItems() { throw new Error("Ambiguous requests must not mutate"); },
         async inspect() {
           return {
             id: null,
@@ -319,10 +320,12 @@ test("revalidates a referenced Product before a non-discovery follow-up action",
         async run() { throw new Error("Cart additions must not use the model loop"); },
       },
       cart: {
-        async addItem(current) {
+        async addItem(current, _quantity, complete) {
           addedProducts.push(current);
+          await complete(updatedCart, {} as never);
           return updatedCart;
         },
+        async addItems() { throw new Error("Single addition expected"); },
         async inspect() { return updatedCart; },
       },
     },
@@ -387,6 +390,7 @@ test("adds the only Catalog Product matching a direct Cart request", async () =>
           await complete(updatedCart, transaction);
           return updatedCart;
         },
+        async addItems() { throw new Error("Single addition expected"); },
         async inspect() { throw new Error("Successful additions do not inspect"); },
       },
     },
@@ -441,6 +445,7 @@ test("shows matching Products without changing the Cart when a direct addition i
       },
       cart: {
         async addItem() { throw new Error("Ambiguous additions must not mutate"); },
+        async addItems() { throw new Error("Ambiguous additions must not mutate"); },
         async inspect() {
           inspected += 1;
           return emptyCart;
@@ -488,6 +493,7 @@ test("explains that no Product matches a direct addition and leaves the Cart unc
       },
       cart: {
         async addItem() { throw new Error("Missing Products must not mutate"); },
+        async addItems() { throw new Error("Missing Products must not mutate"); },
         async inspect() {
           inspected += 1;
           return emptyCart;
@@ -534,6 +540,7 @@ test("does not add a Product when the Catalog reports more matching pages", asyn
       },
       cart: {
         async addItem() { throw new Error("Paginated matches must not mutate"); },
+        async addItems() { throw new Error("Paginated matches must not mutate"); },
         async inspect() { return emptyCart; },
       },
     },
@@ -569,6 +576,7 @@ test("returns a retryable outcome when ambiguous direct matches cannot be retain
       },
       cart: {
         async addItem() { throw new Error("Ambiguous additions must not mutate"); },
+        async addItems() { throw new Error("Ambiguous additions must not mutate"); },
         async inspect() { throw new Error("Stale outcomes do not inspect"); },
       },
     },

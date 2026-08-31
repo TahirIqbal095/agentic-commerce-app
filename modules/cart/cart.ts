@@ -33,6 +33,11 @@ export type CartView = Omit<CartSummary, "id"> & {
     previousCartPriceMinor: number;
     currentCartPriceMinor: number;
   };
+  priceChanges?: Array<{
+    productId: string;
+    previousCartPriceMinor: number;
+    currentCartPriceMinor: number;
+  }>;
 };
 
 export type CartAddition = {
@@ -46,7 +51,7 @@ export interface CartModule {
     quantity: number,
     complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
   ): Promise<CartView>;
-  addItems?(
+  addItems(
     additions: CartAddition[],
     complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
   ): Promise<CartView>;
@@ -64,7 +69,7 @@ export function createCartModule(
   userId: string,
   defaultCurrency = "INR",
 ): CartModule {
-  const addItems: NonNullable<CartModule["addItems"]> = async (
+  const addItems: CartModule["addItems"] = async (
     additions,
     complete,
   ) => {
@@ -190,20 +195,22 @@ export function createCartModule(
         .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
         .where(eq(carts.id, activeCart.id));
 
-      const firstPriceChange = validatedAdditions.find(
-        ({ product, existing }) =>
-          existing && existing.cartPriceMinor !== product.priceMinor,
+      const priceChanges = validatedAdditions.flatMap(({ product, existing }) =>
+        existing && existing.cartPriceMinor !== product.priceMinor
+          ? [{
+              productId: product.id,
+              previousCartPriceMinor: existing.cartPriceMinor,
+              currentCartPriceMinor: product.priceMinor,
+            }]
+          : [],
       );
+      const [firstPriceChange] = priceChanges;
       const cart: CartView = {
         ...(await readCart(transaction, activeCart)),
-        ...(firstPriceChange?.existing
+        ...(firstPriceChange
           ? {
-              priceChange: {
-                productId: firstPriceChange.product.id,
-                previousCartPriceMinor:
-                  firstPriceChange.existing.cartPriceMinor,
-                currentCartPriceMinor: firstPriceChange.product.priceMinor,
-              },
+              priceChange: firstPriceChange,
+              priceChanges,
             }
           : {}),
       };

@@ -672,6 +672,9 @@ test("returns the Customer's active Cart in stable first-added order without rep
     async addItem() {
       throw new Error("Cart inspection must not mutate the Cart");
     },
+    async addItems() {
+      throw new Error("Cart inspection must not mutate the Cart");
+    },
     async inspect() { return structuredClone(retainedCart); },
   };
   const POST = createConversationPost({
@@ -752,6 +755,9 @@ test("returns a clear zero-quantity summary when the Customer's Cart is empty", 
     },
     cart: {
       async addItem() {
+        throw new Error("Cart inspection must not mutate the Cart");
+      },
+      async addItems() {
         throw new Error("Cart inspection must not mutate the Cart");
       },
       async inspect() { return emptyCart; },
@@ -861,10 +867,12 @@ test("adds the second Product from the latest Recommendation Set with a default 
       },
     },
     cart: {
-      async addItem(product, quantity) {
+      async addItem(product, quantity, complete) {
         additions.push({ productId: product.id, priceMinor: product.priceMinor, quantity });
+        await complete(updatedCart, {} as never);
         return updatedCart;
       },
+      async addItems() { throw new Error("Single addition expected"); },
       async inspect() { return updatedCart; },
     },
   });
@@ -898,7 +906,7 @@ test("adds the second Product from the latest Recommendation Set with a default 
 
 });
 
-test("adds different quantities of multiple identified Products in one Conversation Turn", async () => {
+test("discloses every authoritative reprice in a multi-Product addition", async () => {
   const products = [
     {
       id: "71000000-0000-4000-8000-000000000021",
@@ -962,6 +970,18 @@ test("adds different quantities of multiple identified Products in one Conversat
       totalQuantity: 3,
       subtotalMinor: 980000,
       currency: "INR",
+      priceChanges: [
+        {
+          productId: products[0].id,
+          previousCartPriceMinor: 360000,
+          currentCartPriceMinor: 350000,
+        },
+        {
+          productId: products[2].id,
+          previousCartPriceMinor: 270000,
+          currentCartPriceMinor: 280000,
+        },
+      ],
     };
   };
   const POST = createConversationPost({
@@ -988,7 +1008,7 @@ test("adds different quantities of multiple identified Products in one Conversat
           confidence: 0.99,
           requestedEffects: ["ADD_TO_CART"],
           referencedProductIds: [products[0].id, products[2].id],
-          requestedCartItems: [
+          requestedAdditions: [
             { productId: products[0].id, quantity: 2 },
             { productId: products[2].id, quantity: 1 },
           ],
@@ -1005,10 +1025,16 @@ test("adds different quantities of multiple identified Products in one Conversat
     },
     agentLoop: { async run() { throw new Error("not used"); } },
     cart: {
-      async addItem(product, quantity) {
-        return addProducts([{ product, quantity }]);
+      async addItem(product, quantity, complete) {
+        const cart = addProducts([{ product, quantity }]);
+        await complete(cart, {} as never);
+        return cart;
       },
-      async addItems(additions) { return addProducts(additions); },
+      async addItems(additions, complete) {
+        const cart = addProducts(additions);
+        await complete(cart, {} as never);
+        return cart;
+      },
       async inspect() { throw new Error("not used"); },
     },
   });
@@ -1020,7 +1046,8 @@ test("adds different quantities of multiple identified Products in one Conversat
   assert.deepEqual((await response.json()).data, {
     status: "COMPLETED",
     conversationId,
-    message: "Added 2 × Trail One and 1 × Court Three to your Cart.",
+    message:
+      "Added 2 × Trail One and 1 × Court Three to your Cart. Cart Price changes: Trail One decreased from ₹3,600.00 to ₹3,500.00; Court Three increased from ₹2,700.00 to ₹2,800.00.",
     intentBrief: {
       goal: "Add two of the first Product and one of the third",
       constraints: emptyConversationContext().productConstraints,
@@ -1029,7 +1056,7 @@ test("adds different quantities of multiple identified Products in one Conversat
       confidence: 0.99,
       requestedEffects: ["ADD_TO_CART"],
       referencedProductIds: [products[0].id, products[2].id],
-      requestedCartItems: [
+      requestedAdditions: [
         { productId: products[0].id, quantity: 2 },
         { productId: products[2].id, quantity: 1 },
       ],
@@ -1056,6 +1083,18 @@ test("adds different quantities of multiple identified Products in one Conversat
       totalQuantity: 3,
       subtotalMinor: 980000,
       currency: "INR",
+      priceChanges: [
+        {
+          productId: products[0].id,
+          previousCartPriceMinor: 360000,
+          currentCartPriceMinor: 350000,
+        },
+        {
+          productId: products[2].id,
+          previousCartPriceMinor: 270000,
+          currentCartPriceMinor: 280000,
+        },
+      ],
     },
   });
 });
@@ -1264,6 +1303,7 @@ test("rolls back a Cart addition when its successful Conversation outcome cannot
           throw error;
         }
       },
+      async addItems() { throw new Error("Single addition expected"); },
       async inspect() { throw new Error("not used"); },
     },
   });
@@ -1276,7 +1316,7 @@ test("rolls back a Cart addition when its successful Conversation outcome cannot
   assert.equal(cartQuantity, 0);
 });
 
-test("adds an explicit positive whole-unit quantity", async () => {
+test("adds an explicit quantity only when the Cart invokes atomic completion", async () => {
   const product = {
     id: "71000000-0000-4000-8000-000000000013",
     slug: "road-two",
@@ -1300,6 +1340,7 @@ test("adds an explicit positive whole-unit quantity", async () => {
     ],
   };
   let addedQuantity: number | undefined;
+  let invokeCompletion = true;
   const POST = createConversationPost({
     repository: {
       async findDuplicate() { return null; },
@@ -1334,9 +1375,9 @@ test("adds an explicit positive whole-unit quantity", async () => {
     },
     agentLoop: { async run() { throw new Error("not used"); } },
     cart: {
-      async addItem(_product, quantity) {
+      async addItem(_product, quantity, complete) {
         addedQuantity = quantity;
-        return {
+        const cart = {
           id: "31000000-0000-4000-8000-000000000013",
           items: [{
             productId: product.id,
@@ -1349,7 +1390,10 @@ test("adds an explicit positive whole-unit quantity", async () => {
           subtotalMinor: quantity * product.priceMinor,
           currency: product.currency,
         };
+        if (invokeCompletion) await complete(cart, {} as never);
+        return cart;
       },
+      async addItems() { throw new Error("Single addition expected"); },
       async inspect() { throw new Error("not used"); },
     },
   });
@@ -1360,6 +1404,15 @@ test("adds an explicit positive whole-unit quantity", async () => {
 
   assert.equal(addedQuantity, 2);
   assert.equal((await response.json()).data.cart.items[0].quantity, 2);
+
+  invokeCompletion = false;
+  const incompleteResponse = await postAgentMessage(POST, {
+    message: "Add two of the first one",
+  });
+  assert.equal(
+    (await incompleteResponse.json()).data.status,
+    "TEMPORARILY_UNAVAILABLE",
+  );
 });
 
 test("asks for a positive whole-unit quantity and leaves the Cart unchanged", async () => {
@@ -1429,6 +1482,9 @@ test("asks for a positive whole-unit quantity and leaves the Cart unchanged", as
         additions += 1;
         throw new Error("Invalid quantities must not mutate the Cart");
       },
+      async addItems() {
+        throw new Error("Invalid quantities must not mutate the Cart");
+      },
       async inspect() { return unchangedCart; },
     },
   });
@@ -1441,8 +1497,8 @@ test("asks for a positive whole-unit quantity and leaves the Cart unchanged", as
   assert.deepEqual((await response.json()).data, {
     status: "NEEDS_INPUT",
     conversationId,
-    message: "Please choose a positive whole-unit quantity from 1 to 10.",
-    question: "How many units would you like, from 1 to 10?",
+    message: "Road Two quantity must be between 1 and 10.",
+    question: "How many units of Road Two would you like, from 1 to 10?",
     missingInformation: ["Valid Cart quantity"],
     intentBrief: {
       goal: "Add part of a Product",
@@ -1486,6 +1542,7 @@ test("asks which Product to add when the Recommendation reference is ambiguous",
     },
     cart: {
       async addItem() { throw new Error("Ambiguous Cart additions must not mutate"); },
+      async addItems() { throw new Error("Ambiguous Cart additions must not mutate"); },
       async inspect() { return unchangedCart; },
     },
   });
@@ -1511,6 +1568,181 @@ test("asks which Product to add when the Recommendation reference is ambiguous",
     products: [],
     cart: unchangedCart,
   });
+});
+
+test("leaves the Cart unchanged when any requested Product reference is stale", async () => {
+  const product = {
+    id: "71000000-0000-4000-8000-000000000051",
+    slug: "trail-one",
+    name: "Trail One",
+    description: "A grippy trail shoe",
+    category: "Footwear",
+    priceMinor: 350000,
+    currency: "INR",
+    inStock: true,
+    attributes: {},
+  };
+  const staleProductId = "71000000-0000-4000-8000-000000000052";
+  const context = {
+    ...emptyConversationContext(),
+    latestRecommendationSet: [{
+      productId: product.id,
+      name: product.name,
+      description: product.description,
+      category: product.category,
+    }],
+  };
+  const unchangedCart = {
+    id: null,
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  let mutations = 0;
+  const POST = createConversationPost({
+    repository: {
+      async findDuplicate() { return null; },
+      async create() {
+        return {
+          conversationId,
+          userMessageId: "51000000-0000-4000-8000-000000000051",
+          context,
+        };
+      },
+      async findOwnedContext() { return { userId, context }; },
+      async saveContextAndMetadata() {},
+      async append() { return "51000000-0000-4000-8000-000000000052"; },
+    },
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Add two recommended Products",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["ADD_TO_CART"],
+          referencedProductIds: [product.id, staleProductId],
+          requestedQuantity: 1,
+        };
+      },
+    },
+    catalog: {
+      async search() { throw new Error("not used"); },
+      async getProduct() { return { ok: true, value: product }; },
+    },
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() {
+        mutations += 1;
+        throw new Error("Stale references must not mutate the Cart");
+      },
+      async addItems() {
+        mutations += 1;
+        throw new Error("Stale references must not mutate the Cart");
+      },
+      async inspect() { return unchangedCart; },
+    },
+  });
+
+  const response = await postAgentMessage(POST, {
+    message: "Add the first and the stale Product",
+  });
+
+  const outcome = (await response.json()).data;
+  assert.equal(mutations, 0);
+  assert.equal(outcome.status, "NEEDS_INPUT");
+  assert.equal(
+    outcome.message,
+    "One requested Product is no longer in the latest Recommendation Set.",
+  );
+  assert.deepEqual(outcome.cart, unchangedCart);
+});
+
+test("identifies an inactive requested Product and leaves the Cart unchanged", async () => {
+  const productId = "71000000-0000-4000-8000-000000000053";
+  const context = {
+    ...emptyConversationContext(),
+    latestRecommendationSet: [{
+      productId,
+      name: "Court Three",
+      description: "A stable court shoe",
+      category: "Footwear",
+    }],
+  };
+  const unchangedCart = {
+    id: null,
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  let mutations = 0;
+  const POST = createConversationPost({
+    repository: {
+      async findDuplicate() { return null; },
+      async create() {
+        return {
+          conversationId,
+          userMessageId: "51000000-0000-4000-8000-000000000053",
+          context,
+        };
+      },
+      async findOwnedContext() { return { userId, context }; },
+      async saveContextAndMetadata() {},
+      async append() { return "51000000-0000-4000-8000-000000000054"; },
+    },
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Add Court Three",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["ADD_TO_CART"],
+          referencedProductIds: [productId],
+          requestedQuantity: 1,
+        };
+      },
+    },
+    catalog: {
+      async search() { throw new Error("not used"); },
+      async getProduct() {
+        return {
+          ok: false,
+          error: {
+            code: "PRODUCT_NOT_FOUND",
+            message: "Product not found.",
+            details: {},
+          },
+        } as const;
+      },
+    },
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() {
+        mutations += 1;
+        throw new Error("Inactive Products must not mutate the Cart");
+      },
+      async addItems() {
+        mutations += 1;
+        throw new Error("Inactive Products must not mutate the Cart");
+      },
+      async inspect() { return unchangedCart; },
+    },
+  });
+
+  const response = await postAgentMessage(POST, {
+    message: "Add Court Three",
+  });
+
+  const outcome = (await response.json()).data;
+  assert.equal(mutations, 0);
+  assert.equal(outcome.status, "NEEDS_INPUT");
+  assert.equal(outcome.message, "Court Three is not available.");
+  assert.deepEqual(outcome.cart, unchangedCart);
 });
 
 test("returns a correctable Cart rule failure with the unchanged Cart", async () => {
@@ -1584,6 +1816,7 @@ test("returns a correctable Cart rule failure with the unchanged Cart", async ()
       async addItem() {
         throw new CartError("A Cart Item cannot have more than 10 units.");
       },
+      async addItems() { throw new Error("Single addition expected"); },
       async inspect() { return unchangedCart; },
     },
   });

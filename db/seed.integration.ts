@@ -4,12 +4,15 @@ import test, { after } from "node:test";
 import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
 import { GET } from "@/app/api/products/route";
+import { createPostHandler } from "@/app/api/agent/message/handler";
 import { db } from "@/db";
 import { carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
 import { brands } from "@/db/schema/identity";
 import { createCatalogModule } from "@/modules/catalog/catalog";
 import { createCartModule } from "@/modules/cart/cart";
+import { createCommerceAgent } from "@/modules/agent/commerce-agent";
+import { createConversationModule } from "@/modules/agent/conversation";
 import { DEMO_CUSTOMER_ID } from "@/db/seed";
 
 const execFileAsync = promisify(execFile);
@@ -152,6 +155,106 @@ test("catalog retrieval combines intent, commerce, and availability criteria", a
     result.products.map((product) => product.slug),
     ["strideflow-daily-running-shoes"],
   );
+});
+
+test("POST adds multiple identified Products through one real atomic Cart mutation", async () => {
+  await runSeedCommand();
+  await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
+
+  const catalog = createCatalogModule();
+  const selected = (await catalog.search({
+    queries: ["running shoes"],
+    category: "Footwear",
+    limit: 2,
+  })).products;
+  assert.equal(selected.length, 2);
+
+  const agent = createCommerceAgent(
+    catalog,
+    {
+      async analyze({ message }) {
+        if (message === "Show me running shoes") {
+          return {
+            goal: "Find running shoes",
+            constraintDelta: {
+              set: { productTypes: ["running shoes"], category: "Footwear" },
+              clear: [],
+            },
+            knownEntities: [],
+            missingInformation: [],
+            confidence: 0.99,
+            requestedEffects: ["DISCOVER_PRODUCTS"],
+          };
+        }
+        return {
+          goal: "Add both running shoes",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["ADD_TO_CART"],
+          referencedProductIds: selected.map(({ id }) => id),
+          requestedAdditions: [
+            { productId: selected[0].id, quantity: 2 },
+            { productId: selected[1].id, quantity: 1 },
+          ],
+        };
+      },
+    },
+    createConversationModule(DEMO_CUSTOMER_ID),
+    {
+      agentLoop: {
+        async run({ capabilities }) {
+          const result = await capabilities.searchProducts?.({
+            queries: ["running shoes"],
+            category: "Footwear",
+            limit: 2,
+          });
+          assert.ok(result);
+          return {
+            status: "COMPLETED",
+            message: "Two running shoes.",
+            productIds: result.products.map(({ id }) => id),
+          };
+        },
+      },
+      cart: createCartModule(DEMO_CUSTOMER_ID),
+    },
+  );
+  const POST = createPostHandler(async () => agent);
+  const post = (body: Record<string, unknown>) => POST(new Request(
+    "http://localhost/api/agent/message",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  ));
+
+  const discovery = await post({
+    message: "Show me running shoes",
+    idempotencyKey: "61000000-0000-4000-8000-000000000001",
+  });
+  const discoveryOutcome = (await discovery.json()).data;
+  const addition = await post({
+    conversationId: discoveryOutcome.conversationId,
+    message: "Add two of the first and one of the second",
+    idempotencyKey: "61000000-0000-4000-8000-000000000002",
+  });
+  const outcome = (await addition.json()).data;
+
+  assert.equal(outcome.status, "COMPLETED");
+  assert.deepEqual(
+    outcome.cart.items.map((item: { productId: string; quantity: number }) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+    })),
+    [
+      { productId: selected[0].id, quantity: 2 },
+      { productId: selected[1].id, quantity: 1 },
+    ],
+  );
+  assert.equal(outcome.cart.totalQuantity, 3);
 });
 
 test("concurrent Customer turns retain every authoritative Cart addition", async () => {

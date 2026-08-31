@@ -61,7 +61,12 @@ export type IntentAnalysis = {
   >;
   referencedProductIds?: string[];
   requestedQuantity?: number;
-  requestedCartItems?: Array<{ productId: string; quantity: number }>;
+  requestedAdditions?: RequestedCartAddition[];
+};
+
+export type RequestedCartAddition = {
+  productId: string;
+  quantity: number;
 };
 
 export type AddToCartIntent = {
@@ -86,7 +91,8 @@ export type IntentBrief = {
   >;
   referencedProductIds?: string[];
   requestedQuantity?: number;
-  requestedCartItems?: Array<{ productId: string; quantity: number }>;
+  requestedAdditions?: RequestedCartAddition[];
+  hasUnresolvedProductReferences?: true;
 };
 
 export interface IntentAnalyzer {
@@ -359,9 +365,13 @@ export function resolveIntentBrief(
   const referencedProductIds = analysis.referencedProductIds?.filter((id) =>
     currentRecommendationIds.has(id),
   );
-  const requestedCartItems = analysis.requestedCartItems?.filter(({ productId }) =>
-    currentRecommendationIds.has(productId),
+  const requestedAdditions = analysis.requestedAdditions?.filter(
+    ({ productId }) => currentRecommendationIds.has(productId),
   );
+  const requestedProductIds = [
+    ...(analysis.referencedProductIds ?? []),
+    ...(analysis.requestedAdditions?.map(({ productId }) => productId) ?? []),
+  ];
   return {
     goal: analysis.goal,
     constraints: context.productConstraints,
@@ -373,7 +383,10 @@ export function resolveIntentBrief(
     ...(analysis.requestedQuantity === undefined
       ? {}
       : { requestedQuantity: analysis.requestedQuantity }),
-    ...(requestedCartItems?.length ? { requestedCartItems } : {}),
+    ...(requestedAdditions?.length ? { requestedAdditions } : {}),
+    ...(requestedProductIds.some((id) => !currentRecommendationIds.has(id))
+      ? { hasUnresolvedProductReferences: true as const }
+      : {}),
   };
 }
 

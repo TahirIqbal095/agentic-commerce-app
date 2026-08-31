@@ -218,7 +218,7 @@ const intentAnalysisSchema = jsonSchema<IntentAnalysis>(
         description:
           "The explicitly requested Cart quantity. Omit this property when the Customer did not state a quantity.",
       },
-      requestedCartItems: {
+      requestedAdditions: {
         type: "array",
         maxItems: 8,
         items: {
@@ -292,7 +292,7 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
         "confidence",
         "requestedEffects",
       ],
-      ["referencedProductIds", "requestedQuantity", "requestedCartItems"],
+      ["referencedProductIds", "requestedQuantity", "requestedAdditions"],
     ) &&
     typeof brief.goal === "string" &&
     brief.goal.trim().length > 0 &&
@@ -328,18 +328,18 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
     (brief.requestedQuantity === undefined ||
       (typeof brief.requestedQuantity === "number" &&
         Number.isFinite(brief.requestedQuantity))) &&
-    (brief.requestedCartItems === undefined ||
-      (Array.isArray(brief.requestedCartItems) &&
-        brief.requestedCartItems.length > 0 &&
-        brief.requestedCartItems.length <= 8 &&
+    (brief.requestedAdditions === undefined ||
+      (Array.isArray(brief.requestedAdditions) &&
+        brief.requestedAdditions.length > 0 &&
+        brief.requestedAdditions.length <= 8 &&
         new Set(
-          brief.requestedCartItems.map((item) =>
+          brief.requestedAdditions.map((item) =>
             typeof item === "object" && item !== null
               ? String((item as Record<string, unknown>).productId)
               : "",
           ),
-        ).size === brief.requestedCartItems.length &&
-        brief.requestedCartItems.every((item) => {
+        ).size === brief.requestedAdditions.length &&
+        brief.requestedAdditions.every((item) => {
           if (typeof item !== "object" || item === null) return false;
           const candidate = item as Record<string, unknown>;
           return (

@@ -181,10 +181,21 @@ export function createCommerceAgent(
         }
       }
       if (intentBrief.requestedEffects.includes("ADD_TO_CART")) {
-        const requestedCartItems = intentBrief.requestedCartItems;
-        const referencedProductIds = requestedCartItems?.map(
+        const requestedAdditions = intentBrief.requestedAdditions;
+        const referencedProductIds = requestedAdditions?.map(
           ({ productId }) => productId,
         ) ?? intentBrief.referencedProductIds ?? [];
+        if (intentBrief.hasUnresolvedProductReferences) {
+          return needsInputWithCurrentCart({
+            turn,
+            cart: options.cart,
+            intentBrief,
+            message:
+              "One requested Product is no longer in the latest Recommendation Set.",
+            question: "Which current recommended Products would you like to add?",
+            missingInformation: ["Current Product references"],
+          });
+        }
         let directlyMatchedProduct: CatalogProduct | undefined;
         let directlyMatchedProducts: CatalogProduct[] = [];
         const resolvesDirectRequest =
@@ -293,22 +304,25 @@ export function createCommerceAgent(
           });
         }
         const quantity = intentBrief.requestedQuantity ?? 1;
-        const quantities = requestedCartItems?.map((item) => item.quantity) ?? [
+        const quantities = requestedAdditions?.map((item) => item.quantity) ?? [
           quantity,
         ];
-        if (
-          quantities.some(
-            (requested) =>
-              !Number.isInteger(requested) || requested < 1 || requested > 10,
-          )
-        ) {
+        const invalidQuantityIndex = quantities.findIndex(
+          (requested) =>
+            !Number.isInteger(requested) || requested < 1 || requested > 10,
+        );
+        if (invalidQuantityIndex !== -1) {
+          const invalidProductId = referencedProductIds[invalidQuantityIndex];
+          const invalidProductName = directlyMatchedProduct?.name ??
+            resolvedContext.latestRecommendationSet.find(
+              ({ productId }) => productId === invalidProductId,
+            )?.name ?? "Product";
           return needsInputWithCurrentCart({
             turn,
             cart: options.cart,
             intentBrief,
-            message:
-              "Please choose a positive whole-unit quantity from 1 to 10.",
-            question: "How many units would you like, from 1 to 10?",
+            message: `${invalidProductName} quantity must be between 1 and 10.`,
+            question: `How many units of ${invalidProductName} would you like, from 1 to 10?`,
             missingInformation: ["Valid Cart quantity"],
           });
         }
@@ -321,16 +335,20 @@ export function createCommerceAgent(
                   catalog.getProduct(productId),
                 ),
               );
-          const selectedProducts = productResults.map((productResult) => {
+          const selectedProducts = productResults.map((productResult, index) => {
             if (!productResult.ok) {
-              throw new CartError(productResult.error.message);
+              const productId = referencedProductIds[index];
+              const productName = resolvedContext.latestRecommendationSet.find(
+                (reference) => reference.productId === productId,
+              )?.name ?? "Product";
+              throw new CartError(`${productName} is not available.`);
             }
             return productResult.value;
           });
           const additions = selectedProducts.map((product) => ({
             product,
             quantity:
-              requestedCartItems?.find(
+              requestedAdditions?.find(
                 (item) => item.productId === product.id,
               )?.quantity ?? quantity,
           }));
@@ -350,26 +368,17 @@ export function createCommerceAgent(
             await turn.complete(outcome.message, outcome, transaction);
             completedOutcome = outcome;
           };
-          const cart =
-            additions.length === 1
-              ? await options.cart.addItem(
-                  additions[0].product,
-                  additions[0].quantity,
-                  completeAddition,
-                )
-              : await options.cart.addItems?.(additions, completeAddition);
-          if (completedOutcome) return completedOutcome;
-          if (!cart) {
-            throw new Error("Atomic multi-Product Cart addition unavailable");
+          if (additions.length === 1) {
+            await options.cart.addItem(
+              additions[0].product,
+              additions[0].quantity,
+              completeAddition,
+            );
+          } else {
+            await options.cart.addItems(additions, completeAddition);
           }
-          return completeTurn(turn, {
-            status: "COMPLETED",
-            conversationId: turn.conversationId,
-            message: cartAdditionsMessage(additions, cart),
-            intentBrief,
-            products: [],
-            cart,
-          });
+          if (completedOutcome) return completedOutcome;
+          throw new Error("Atomic Cart completion was not invoked");
         } catch (error) {
           if (error instanceof CartError) {
             return needsInputWithCurrentCart({
@@ -540,7 +549,24 @@ function cartAdditionsMessage(
   const selections = additions.map(
     ({ product, quantity }) => `${quantity} × ${product.name}`,
   );
-  return `Added ${selections.slice(0, -1).join(", ")} and ${selections.at(-1)} to your Cart.`;
+  const confirmation = `Added ${selections.slice(0, -1).join(", ")} and ${selections.at(-1)} to your Cart.`;
+  if (!cart.priceChanges?.length) return confirmation;
+  const productNames = new Map(
+    additions.map(({ product }) => [product.id, product.name]),
+  );
+  const formatPrice = (priceMinor: number) =>
+    new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: cart.currency,
+    }).format(priceMinor / 100);
+  const changes = cart.priceChanges.map((change) => {
+    const direction =
+      change.currentCartPriceMinor > change.previousCartPriceMinor
+        ? "increased"
+        : "decreased";
+    return `${productNames.get(change.productId) ?? "Product"} ${direction} from ${formatPrice(change.previousCartPriceMinor)} to ${formatPrice(change.currentCartPriceMinor)}`;
+  });
+  return `${confirmation} Cart Price changes: ${changes.join("; ")}.`;
 }
 
 async function needsInputWithCurrentCart({
