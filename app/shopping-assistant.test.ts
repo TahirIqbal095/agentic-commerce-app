@@ -824,6 +824,154 @@ test("customer sees the updated cart after the agent adds a product", async (t) 
   assert.equal(view.queryByText("No close matches yet. Try broadening the request."), null);
 });
 
+test("Customer sees a structured Cart panel within the Conversation", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        data: {
+          status: "COMPLETED",
+          conversationId: "41000000-0000-4000-8000-000000000001",
+          message: "Here’s what’s in your Cart.",
+          products: [],
+          cart: {
+            id: "31000000-0000-4000-8000-000000000001",
+            items: [
+              {
+                productId: "21000000-0000-4000-8000-000000000002",
+                productName: "TrailCrest Grip Running Shoes",
+                quantity: 1,
+                cartPriceMinor: 529900,
+                subtotalMinor: 529900,
+              },
+              {
+                productId: "21000000-0000-4000-8000-000000000001",
+                productName: "StrideFlow Daily Running Shoes",
+                quantity: 2,
+                cartPriceMinor: 379900,
+                subtotalMinor: 759800,
+              },
+            ],
+            totalQuantity: 3,
+            subtotalMinor: 1289700,
+            currency: "INR",
+          },
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+
+  const [{ render, cleanup, within }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(
+    React.createElement(ShoppingAssistant, { brandName: "Arc" }),
+  );
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  await user.type(
+    view.getByRole("textbox", { name: "Message the Arc Commerce Agent" }),
+    "What's in my Cart?",
+  );
+  await user.click(view.getByRole("button", { name: "Send" }));
+
+  const panel = await view.findByRole("region", { name: "Your Cart" });
+  const cart = within(panel);
+  assert.ok(cart.getByText("TrailCrest Grip Running Shoes"));
+  assert.ok(cart.getByText("StrideFlow Daily Running Shoes"));
+  assert.ok(cart.getByText("1 × ₹5,299"));
+  assert.ok(cart.getByText("2 × ₹3,799"));
+  assert.ok(cart.getByText("₹12,897"));
+  assert.equal(view.getByRole("button", { name: "Cart · 3" }).textContent, " Cart · 3");
+});
+
+test("Customer sees an empty Cart summary without an empty panel", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        data: {
+          status: "COMPLETED",
+          conversationId: "41000000-0000-4000-8000-000000000001",
+          message: "Your Cart is empty.",
+          products: [],
+          cart: {
+            id: null,
+            items: [],
+            totalQuantity: 0,
+            subtotalMinor: 0,
+            currency: "INR",
+          },
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+
+  const [{ render, cleanup }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(
+    React.createElement(ShoppingAssistant, { brandName: "Arc" }),
+  );
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  await user.type(
+    view.getByRole("textbox", { name: "Message the Arc Commerce Agent" }),
+    "Is there anything in my Cart?",
+  );
+  await user.click(view.getByRole("button", { name: "Send" }));
+
+  assert.ok(await view.findByText("Your Cart is empty."));
+  assert.equal(view.getByRole("button", { name: "Cart · 0" }).textContent, " Cart · 0");
+  assert.equal(view.queryByRole("region", { name: "Your Cart" }), null);
+});
+
 test("Storefront reuses the server conversation identifier on later turns", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",

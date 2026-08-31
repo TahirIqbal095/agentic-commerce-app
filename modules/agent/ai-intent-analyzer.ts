@@ -199,10 +199,10 @@ const intentAnalysisSchema = jsonSchema<IntentAnalysis>(
       requestedEffects: {
         type: "array",
         uniqueItems: true,
-        maxItems: 2,
+        maxItems: 3,
         items: {
           type: "string",
-          enum: ["DISCOVER_PRODUCTS", "ADD_TO_CART"],
+          enum: ["DISCOVER_PRODUCTS", "ADD_TO_CART", "INSPECT_CART"],
         },
       },
       referencedProductIds: {
@@ -255,7 +255,11 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
   if (typeof value !== "object" || value === null) return false;
   const brief = value as Record<string, unknown>;
   const knownEntityTypes = new Set(["PRODUCT", "PRODUCT_TYPE", "CATEGORY"]);
-  const requestedEffects = new Set(["DISCOVER_PRODUCTS", "ADD_TO_CART"]);
+  const requestedEffects = new Set([
+    "DISCOVER_PRODUCTS",
+    "ADD_TO_CART",
+    "INSPECT_CART",
+  ]);
 
   return (
     hasRequiredAndAllowedKeys(
@@ -292,7 +296,7 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
     brief.confidence >= 0 &&
     brief.confidence <= 1 &&
     Array.isArray(brief.requestedEffects) &&
-    brief.requestedEffects.length <= 2 &&
+    brief.requestedEffects.length <= 3 &&
     new Set(brief.requestedEffects).size === brief.requestedEffects.length &&
     brief.requestedEffects.every((effect) =>
       requestedEffects.has(String(effect)),

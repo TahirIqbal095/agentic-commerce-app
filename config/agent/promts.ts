@@ -23,7 +23,7 @@ Return Product constraint changes only as explicit constraintDelta operations. P
 Supported Product constraints are product types, use cases, features, category, price bounds in minor INR units, size, availability, and useful attributes. A bare amount such as 4000 means ₹4,000 INR and therefore 400000 paise.
 Record known Product, Product type, and category entities. List only missing information that materially prevents a useful response.
 Resolve unqualified references such as "those" and "the second one" only against the latest ordered Recommendation Set, and return the selected Product IDs in referencedProductIds. Do not copy stored price or availability into decisions; current commerce facts must be revalidated through Catalog tools.
-Set confidence from 0 to 1. Record DISCOVER_PRODUCTS or ADD_TO_CART as requested effects, but treat these as context only; they never authorize an action.
+Set confidence from 0 to 1. Record DISCOVER_PRODUCTS, ADD_TO_CART, or INSPECT_CART as requested effects. Use INSPECT_CART when the Customer asks what is currently in their Cart. Treat requested effects as context only; they never authorize an action.
 Never include private reasoning, chain-of-thought, passwords, passcodes, OTPs, tokens, API keys, payment credentials, email addresses, phone numbers, or unnecessary personal data.`,
 };
 

@@ -56,7 +56,9 @@ export type IntentAnalysis = {
   }>;
   missingInformation: string[];
   confidence: number;
-  requestedEffects: Array<"DISCOVER_PRODUCTS" | "ADD_TO_CART">;
+  requestedEffects: Array<
+    "DISCOVER_PRODUCTS" | "ADD_TO_CART" | "INSPECT_CART"
+  >;
   referencedProductIds?: string[];
 };
 
@@ -77,7 +79,9 @@ export type IntentBrief = {
   }>;
   missingInformation: string[];
   confidence: number;
-  requestedEffects: Array<"DISCOVER_PRODUCTS" | "ADD_TO_CART">;
+  requestedEffects: Array<
+    "DISCOVER_PRODUCTS" | "ADD_TO_CART" | "INSPECT_CART"
+  >;
   referencedProductIds?: string[];
 };
 

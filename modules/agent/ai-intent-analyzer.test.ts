@@ -68,6 +68,30 @@ test("returns typed Product constraint set and clear operations", async () => {
   ]);
 });
 
+test("returns an INSPECT_CART effect for a conversational Cart-inspection request", async () => {
+  const cartInspection = {
+    goal: "Inspect Cart",
+    constraintDelta: { set: {}, clear: [] },
+    knownEntities: [],
+    missingInformation: [],
+    confidence: 0.99,
+    requestedEffects: ["INSPECT_CART"],
+  };
+  const model = new MockLanguageModelV4({
+    doGenerate: async () => modelResponse(cartInspection),
+  });
+
+  const analyzer = createAiIntentAnalyzer(model);
+
+  assert.deepEqual(
+    await analyzer.analyze({
+      context: createEmptyConversationContext(),
+      message: "What's in my Cart?",
+    }),
+    cartInspection,
+  );
+});
+
 test("retries malformed Intent Brief output once", async () => {
   let attempts = 0;
   const model = new MockLanguageModelV4({

@@ -12,9 +12,11 @@ import type { IntentBrief } from "./intent";
 export function minimizeIntentBrief(intentBrief: IntentBrief): IntentBrief {
   return {
     ...intentBrief,
-    goal: intentBrief.requestedEffects.includes("ADD_TO_CART")
-      ? "Change Cart"
-      : "Discover Products",
+    goal: intentBrief.requestedEffects.includes("INSPECT_CART")
+      ? "Inspect Cart"
+      : intentBrief.requestedEffects.includes("ADD_TO_CART")
+        ? "Change Cart"
+        : "Discover Products",
     constraints: {
       ...intentBrief.constraints,
       attributes: {},
@@ -35,7 +37,7 @@ export function minimizeIntentBrief(intentBrief: IntentBrief): IntentBrief {
 export function canonicalPersistedMessage(outcome: AgentOutcome): string {
   switch (outcome.status) {
     case "COMPLETED":
-      return "Product discovery completed.";
+      return outcome.cart ? "Cart inspected." : "Product discovery completed.";
     case "NEEDS_INPUT":
       return "Additional Product information requested.";
     case "TEMPORARILY_UNAVAILABLE":

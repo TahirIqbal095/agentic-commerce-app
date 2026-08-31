@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { cartItems, carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
@@ -11,8 +11,20 @@ export type CartSummary = {
   currency: string;
 };
 
+export type CartView = Omit<CartSummary, "id"> & {
+  id: string | null;
+  items: Array<{
+    productId: string;
+    productName: string;
+    quantity: number;
+    cartPriceMinor: number;
+    subtotalMinor: number;
+  }>;
+};
+
 export interface CartModule {
   addItem(product: CatalogProduct, quantity: number): Promise<CartSummary>;
+  inspect(): Promise<CartView>;
 }
 
 export class CartError extends Error {
@@ -22,8 +34,63 @@ export class CartError extends Error {
   }
 }
 
-export function createCartModule(userId: string): CartModule {
+export function createCartModule(
+  userId: string,
+  defaultCurrency = "INR",
+): CartModule {
   return {
+    async inspect() {
+      const [activeCart] = await db
+        .select({ id: carts.id, currency: carts.currency })
+        .from(carts)
+        .where(and(eq(carts.userId, userId), eq(carts.status, "ACTIVE")))
+        .limit(1);
+
+      if (!activeCart) {
+        return {
+          id: null,
+          items: [],
+          totalQuantity: 0,
+          subtotalMinor: 0,
+          currency: defaultCurrency,
+        };
+      }
+
+      const items = await db
+        .select({
+          productId: cartItems.productId,
+          productName: products.name,
+          quantity: cartItems.quantity,
+          cartPriceMinor: cartItems.unitPriceSnapshotMinor,
+        })
+        .from(cartItems)
+        .innerJoin(products, eq(products.id, cartItems.productId))
+        .where(eq(cartItems.cartId, activeCart.id))
+        .orderBy(asc(cartItems.createdAt), asc(cartItems.id));
+      const viewedItems = items.map(
+        ({ productId, productName, quantity, cartPriceMinor }) => ({
+          productId,
+          productName,
+          quantity,
+          cartPriceMinor,
+          subtotalMinor: quantity * cartPriceMinor,
+        }),
+      );
+
+      return {
+        id: activeCart.id,
+        items: viewedItems,
+        totalQuantity: viewedItems.reduce(
+          (total, item) => total + item.quantity,
+          0,
+        ),
+        subtotalMinor: viewedItems.reduce(
+          (total, item) => total + item.subtotalMinor,
+          0,
+        ),
+        currency: activeCart.currency,
+      };
+    },
     async addItem(product, quantity) {
       if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
         throw new CartError("Cart item quantity must be between 1 and 10.");

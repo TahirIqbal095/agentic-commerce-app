@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
 import { AgentMessage } from "./agent-message";
 import { AgentProgress } from "./agent-progress";
+import { CartPanel } from "./cart-panel";
 import { CustomerMessage } from "./customer-message";
 import { IntentSummary } from "./intent-summary";
 import { RecommendationCarousel } from "./recommendation-carousel";
@@ -32,6 +33,8 @@ export function ResultArea({
         const isPending =
           isLoading && turn.result === null && turn.error === null;
         const isNeedsInput = turn.result?.status === "NEEDS_INPUT";
+        const cart = turn.result?.cart;
+        const inspectedCart = cart && "items" in cart ? cart : null;
 
         return (
           <div key={turn.id} className="space-y-7">
@@ -94,6 +97,9 @@ export function ResultArea({
                         products={turn.result.products}
                         onViewProduct={onViewProduct}
                       />
+                    ) : null}
+                    {inspectedCart && inspectedCart.items.length > 0 ? (
+                      <CartPanel cart={inspectedCart} />
                     ) : null}
                   </AgentMessage>
                 </motion.div>

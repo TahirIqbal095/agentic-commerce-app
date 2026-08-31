@@ -1,4 +1,5 @@
 import type { CatalogModule } from "@/modules/catalog/catalog";
+import type { CartModule } from "@/modules/cart/cart";
 import type {
   CatalogProduct,
   CatalogSearch,
@@ -67,6 +68,7 @@ export const MAX_COMMERCE_AGENT_TOOL_PRODUCTS = 8;
 
 type CommerceAgentOptions = {
   agentLoop: CommerceAgentLoop;
+  cart?: CartModule;
   limits?: CommerceAgentLimits;
 };
 
@@ -146,6 +148,32 @@ export function createCommerceAgent(
             conversationId: turn.conversationId,
             message:
               "I couldn't save that request right now. Please try again.",
+            retryable: true,
+            intentBrief,
+            products: [],
+          });
+        }
+      }
+      if (intentBrief.requestedEffects.includes("INSPECT_CART")) {
+        try {
+          if (!options.cart) throw new Error("Cart capability unavailable");
+          const cart = await options.cart.inspect();
+          return completeTurn(turn, {
+            status: "COMPLETED",
+            conversationId: turn.conversationId,
+            message:
+              cart.items.length > 0
+                ? "Here’s what’s in your Cart."
+                : "Your Cart is empty.",
+            intentBrief,
+            products: [],
+            cart,
+          });
+        } catch {
+          return completeTurn(turn, {
+            status: "TEMPORARILY_UNAVAILABLE",
+            conversationId: turn.conversationId,
+            message: "I couldn't read your Cart right now. Please try again.",
             retryable: true,
             intentBrief,
             products: [],

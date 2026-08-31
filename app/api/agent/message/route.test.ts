@@ -6,6 +6,7 @@ import {
   type CommerceAgentLoop,
 } from "@/modules/agent/commerce-agent";
 import type { CatalogModule } from "@/modules/catalog/catalog";
+import type { CartModule } from "@/modules/cart/cart";
 import {
   createConversationModule,
   ConversationAccessError,
@@ -369,6 +370,7 @@ function createConversationPost({
   repository,
   analyzer,
   agentLoop,
+  cart,
   catalog = {
     async search() { return { products: [] }; },
     async getProduct() { throw new Error("not used"); },
@@ -377,16 +379,140 @@ function createConversationPost({
   repository: ConversationRepository;
   analyzer: IntentAnalyzer;
   agentLoop: CommerceAgentLoop;
+  cart?: CartModule;
   catalog?: CatalogModule;
 }) {
   const agent = createCommerceAgent(
     catalog,
     analyzer,
     createConversationModule(userId, repository),
-    { agentLoop },
+    { agentLoop, cart },
   );
   return createPostHandler(async () => agent);
 }
+
+test("returns the Customer's active Cart in stable first-added order without repricing it", async () => {
+  const repository = createInMemoryConversationRepository();
+  const retainedCart = {
+    id: "31000000-0000-4000-8000-000000000001",
+    items: [
+      {
+        productId: "21000000-0000-4000-8000-000000000002",
+        productName: "TrailCrest Grip Running Shoes",
+        quantity: 1,
+        cartPriceMinor: 529900,
+        subtotalMinor: 529900,
+      },
+      {
+        productId: "21000000-0000-4000-8000-000000000001",
+        productName: "StrideFlow Daily Running Shoes",
+        quantity: 2,
+        cartPriceMinor: 379900,
+        subtotalMinor: 759800,
+      },
+    ],
+    totalQuantity: 3,
+    subtotalMinor: 1289700,
+    currency: "INR",
+  };
+  const cart: CartModule = {
+    async addItem() {
+      throw new Error("Cart inspection must not mutate the Cart");
+    },
+    async inspect() { return structuredClone(retainedCart); },
+  };
+  const POST = createConversationPost({
+    repository,
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Inspect Cart",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["INSPECT_CART"],
+        };
+      },
+    },
+    catalog: {
+      async search() {
+        throw new Error("Cart inspection must not search the Catalog");
+      },
+      async getProduct() {
+        throw new Error("Cart inspection must not reprice Cart Items");
+      },
+    },
+    agentLoop: {
+      async run() { throw new Error("Cart inspection must be authoritative"); },
+    },
+    cart,
+  });
+
+  const first = await postAgentMessage(POST, { message: "What's in my Cart?" });
+  const second = await postAgentMessage(POST, { message: "Show my Cart again" });
+
+  assert.deepEqual(await first.json(), {
+    data: {
+      status: "COMPLETED",
+      conversationId,
+      message: "Here’s what’s in your Cart.",
+      intentBrief: {
+        goal: "Inspect Cart",
+        constraints: emptyConversationContext().productConstraints,
+        knownEntities: [],
+        missingInformation: [],
+        confidence: 0.99,
+        requestedEffects: ["INSPECT_CART"],
+      },
+      products: [],
+      cart: retainedCart,
+    },
+  });
+  assert.deepEqual((await second.json()).data.cart, retainedCart);
+});
+
+test("returns a clear zero-quantity summary when the Customer's Cart is empty", async () => {
+  const emptyCart = {
+    id: null,
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  const POST = createConversationPost({
+    repository: createInMemoryConversationRepository(),
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Inspect Cart",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: ["INSPECT_CART"],
+        };
+      },
+    },
+    agentLoop: {
+      async run() { throw new Error("Cart inspection must be authoritative"); },
+    },
+    cart: {
+      async addItem() {
+        throw new Error("Cart inspection must not mutate the Cart");
+      },
+      async inspect() { return emptyCart; },
+    },
+  });
+
+  const response = await postAgentMessage(POST, {
+    message: "Is there anything in my Cart?",
+  });
+
+  const result = (await response.json()).data;
+  assert.equal(result.message, "Your Cart is empty.");
+  assert.deepEqual(result.cart, emptyCart);
+});
 
 test("carries Product constraints across Conversation Turns", async () => {
   const contextsSeenByAnalyzer: ConversationContext[] = [];
