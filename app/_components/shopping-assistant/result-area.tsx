@@ -11,15 +11,26 @@ import { RecommendationCarousel } from "./recommendation-carousel";
 import type { ConversationTurn } from "./types";
 
 export function ResultArea({
+  cartCommandError,
   isLoading,
+  onDiscoverProducts,
+  onRemoveCartItem,
   onViewProduct,
+  pendingCartProductId,
   turns,
 }: {
+  cartCommandError: { productId: string; message: string } | null;
   isLoading: boolean;
+  onDiscoverProducts: () => void;
+  onRemoveCartItem: (productId: string) => void;
   onViewProduct: (product: CatalogProduct) => void;
+  pendingCartProductId: string | null;
   turns: ConversationTurn[];
 }) {
   const reduceMotion = useReducedMotion();
+  const currentCartTurnId = [...turns]
+    .reverse()
+    .find((turn) => turn.result?.cart && "items" in turn.result.cart)?.id;
 
   return (
     <section
@@ -98,8 +109,21 @@ export function ResultArea({
                         onViewProduct={onViewProduct}
                       />
                     ) : null}
-                    {inspectedCart && inspectedCart.items.length > 0 ? (
-                      <CartPanel cart={inspectedCart} />
+                    {inspectedCart ? (
+                      <CartPanel
+                        cart={inspectedCart}
+                        current={turn.id === currentCartTurnId}
+                        itemError={
+                          turn.id === currentCartTurnId && cartCommandError
+                            ? cartCommandError
+                            : turn.result?.status === "NEEDS_INPUT"
+                            ? turn.result.cartItemError
+                            : undefined
+                        }
+                        onDiscoverProducts={onDiscoverProducts}
+                        onRemove={onRemoveCartItem}
+                        pendingProductId={pendingCartProductId}
+                      />
                     ) : null}
                   </AgentMessage>
                 </motion.div>

@@ -971,7 +971,7 @@ test("Cart Item Removal invalidates its unconsumed Checkout Proposal and pending
     expiresAt: new Date(Date.now() + 60_000),
   });
 
-  await cart.removeItem!(product.name, async () => {});
+  await cart.removeItemByProductId!(product.id, async () => {});
 
   const [invalidatedProposal] = await db
     .select({ status: checkoutProposals.status })
@@ -1001,12 +1001,23 @@ test("Cart Item Removal remains allowed when its Product is inactive and out of 
   assert.equal(removed.subtotalMinor, 0);
 });
 
+test("structured Cart Item Removal targets the stable Product ID", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 1, async () => {});
+
+  const removed = await cart.removeItemByProductId!(product.id, async () => {});
+
+  assert.deepEqual(removed.items, []);
+  assert.equal(removed.totalQuantity, 0);
+  assert.equal(removed.subtotalMinor, 0);
+});
+
 test("Cart Item Removal rolls back when Conversation Turn completion fails", async () => {
   const { cart, product } = await prepareCart();
   await cart.addItem(product, 1, async () => {});
 
   await assert.rejects(
-    cart.removeItem!(product.name, async () => {
+    cart.removeItemByProductId!(product.id, async () => {
       throw new Error("Conversation Turn completion failed");
     }),
     /Conversation Turn completion failed/,

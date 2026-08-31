@@ -21,6 +21,9 @@ import type {
 } from "@/modules/agent/intent";
 
 type AgentApiResponse = { data: AgentResult } | { error: { message: string } };
+type ConversationApiResponse =
+  | { data: CurrentConversation | null }
+  | { error: { message: string } };
 
 export function ShoppingAssistant({
   brandName,
@@ -43,7 +46,19 @@ export function ShoppingAssistant({
   const [selectedProduct, setSelectedProduct] = useState<CatalogProduct | null>(
     null,
   );
-  const [cartQuantity, setCartQuantity] = useState(0);
+  const [cartQuantity, setCartQuantity] = useState(() => {
+    const latestCart = [...(initialConversation?.transcript ?? [])]
+      .reverse()
+      .find((turn) => turn.result?.cart)?.result?.cart;
+    return latestCart?.totalQuantity ?? 0;
+  });
+  const [pendingCartProductId, setPendingCartProductId] = useState<string | null>(
+    null,
+  );
+  const [cartCommandError, setCartCommandError] = useState<{
+    productId: string;
+    message: string;
+  } | null>(null);
 
   async function submitPrompt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -55,6 +70,7 @@ export function ShoppingAssistant({
 
   async function sendMessage(message: string) {
     const turnId = crypto.randomUUID();
+    setCartCommandError(null);
     setTurns((currentTurns) => [
       ...currentTurns,
       { id: turnId, customerMessage: message, result: null, error: null },
@@ -125,6 +141,97 @@ export function ShoppingAssistant({
     void sendMessage(messages[key]);
   }
 
+  async function removeCartItem(productId: string) {
+    if (!conversationId || pendingCartProductId) return;
+    const currentCart = [...turns]
+      .reverse()
+      .find((turn) => turn.result?.cart && "items" in turn.result.cart)
+      ?.result?.cart;
+    const item = currentCart && "items" in currentCart
+      ? currentCart.items.find((candidate) => candidate.productId === productId)
+      : undefined;
+    if (!item) return;
+
+    const turnId = crypto.randomUUID();
+    setCartCommandError(null);
+    setPendingCartProductId(productId);
+    setTurns((currentTurns) => [
+      ...currentTurns,
+      {
+        id: turnId,
+        customerMessage: `Remove ${item.productName} from my Cart`,
+        result: null,
+        error: null,
+      },
+    ]);
+    try {
+      const response = await fetch("/api/agent/cart-command", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          conversationId,
+          idempotencyKey: turnId,
+          command: { type: "REMOVE_CART_ITEM", productId },
+        }),
+      });
+      const payload = (await response.json()) as AgentApiResponse;
+      if (!response.ok || !("data" in payload)) {
+        throw new Error(
+          "error" in payload
+            ? payload.error.message
+            : "The Cart Item could not be removed.",
+        );
+      }
+      setTurns((currentTurns) =>
+        currentTurns.map((turn) =>
+          turn.id === turnId ? { ...turn, result: payload.data } : turn,
+        ),
+      );
+      if (payload.data.cart) {
+        setCartQuantity(payload.data.cart.totalQuantity);
+      }
+    } catch (requestError) {
+      const message = requestError instanceof Error
+        ? requestError.message
+        : "The Cart Item could not be removed.";
+      let restoredConversation: CurrentConversation | null = null;
+      try {
+        const response = await fetch("/api/agent/conversation");
+        const payload = (await response.json()) as ConversationApiResponse;
+        if (response.ok && "data" in payload) {
+          restoredConversation = payload.data;
+        }
+      } catch {
+        // The last authoritative Cart Summary remains visible below.
+      }
+
+      if (restoredConversation) {
+        setConversationId(restoredConversation.conversationId);
+        setTurns(restoredConversation.transcript);
+        setContextSummary(restoredConversation.contextSummary);
+        const restoredCart = [...restoredConversation.transcript]
+          .reverse()
+          .find((turn) => turn.result?.cart && "items" in turn.result.cart)
+          ?.result?.cart;
+        if (restoredCart && "items" in restoredCart) {
+          setCartQuantity(restoredCart.totalQuantity);
+          if (restoredCart.items.some((candidate) => candidate.productId === productId)) {
+            setCartCommandError({ productId, message });
+          }
+        }
+      } else {
+        setCartCommandError({ productId, message });
+        setTurns((currentTurns) =>
+          currentTurns.map((turn) =>
+            turn.id === turnId ? { ...turn, error: message } : turn,
+          ),
+        );
+      }
+    } finally {
+      setPendingCartProductId(null);
+    }
+  }
+
   async function startNewConversation() {
     if (isLoading) return;
     const response = await fetch("/api/agent/conversation", {
@@ -174,7 +281,11 @@ export function ShoppingAssistant({
               ) : null}
               <ResultArea
                 isLoading={isLoading}
+                cartCommandError={cartCommandError}
+                onDiscoverProducts={() => void sendMessage("Show me Products")}
+                onRemoveCartItem={(productId) => void removeCartItem(productId)}
                 onViewProduct={setSelectedProduct}
+                pendingCartProductId={pendingCartProductId}
                 turns={turns}
               />
             </>

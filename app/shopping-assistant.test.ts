@@ -908,7 +908,7 @@ test("Customer sees a structured Cart panel within the Conversation", async (t) 
   assert.equal(view.getByRole("button", { name: "Cart · 3" }).textContent, " Cart · 3");
 });
 
-test("Customer sees an empty Cart summary without an empty panel", async (t) => {
+test("Customer sees an empty Cart summary with zero totals and Product discovery", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
@@ -967,9 +967,482 @@ test("Customer sees an empty Cart summary without an empty panel", async (t) => 
   );
   await user.click(view.getByRole("button", { name: "Send" }));
 
-  assert.ok(await view.findByText("Your Cart is empty."));
+  assert.equal((await view.findAllByText("Your Cart is empty.")).length, 2);
   assert.equal(view.getByRole("button", { name: "Cart · 0" }).textContent, " Cart · 0");
-  assert.equal(view.queryByRole("region", { name: "Your Cart" }), null);
+  const emptyCart = view.getByRole("region", { name: "Your Cart" });
+  assert.ok(emptyCart.textContent?.includes("₹0"));
+  assert.ok(view.getByRole("button", { name: "Discover Products" }));
+});
+
+test("after reload only the newest Cart Summary offers Cart Item Removal while earlier summaries remain visible as history", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+
+  const cartItem = {
+    productId: "21000000-0000-4000-8000-000000000001",
+    productName: "Road Two",
+    quantity: 1,
+    cartPriceMinor: 390000,
+    subtotalMinor: 390000,
+  };
+  const result = (cartId: string) => ({
+    status: "COMPLETED" as const,
+    conversationId: "41000000-0000-4000-8000-000000000001",
+    message: "Here’s what’s in your Cart.",
+    intentBrief: {
+      goal: "Inspect the Cart",
+      constraints: createEmptyConversationContext().productConstraints,
+      knownEntities: [],
+      missingInformation: [],
+      confidence: 1,
+      requestedEffects: ["INSPECT_CART" as const],
+    },
+    products: [],
+    cart: {
+      id: cartId,
+      items: [cartItem],
+      totalQuantity: 1,
+      subtotalMinor: 390000,
+      currency: "INR",
+    },
+  });
+  const [{ render, cleanup, within }, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(
+    React.createElement(ShoppingAssistant, {
+      brandName: "Arc",
+      initialConversation: {
+        conversationId: "41000000-0000-4000-8000-000000000001",
+        transcript: [
+          {
+            id: "51000000-0000-4000-8000-000000000001",
+            customerMessage: "What is in my Cart?",
+            result: result("31000000-0000-4000-8000-000000000001"),
+            error: null,
+          },
+          {
+            id: "51000000-0000-4000-8000-000000000002",
+            customerMessage: "Show my Cart again",
+            result: result("31000000-0000-4000-8000-000000000001"),
+            error: null,
+          },
+        ],
+        contextSummary: createEmptyConversationContext().productConstraints,
+        revision: 0,
+      },
+    }),
+  );
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+
+  const summaries = view.getAllByRole("region", { name: "Your Cart" });
+  assert.equal(summaries.length, 2);
+  assert.ok(within(summaries[0]).getByText("Historical Cart Summary"));
+  assert.equal(
+    within(summaries[0]).queryByRole("button", { name: "Remove Road Two" }),
+    null,
+  );
+  assert.ok(within(summaries[1]).getByText("Current Cart Summary"));
+  assert.ok(within(summaries[1]).getByRole("button", { name: "Remove Road Two" }));
+  assert.equal(view.getByRole("button", { name: "Cart · 1" }).textContent, " Cart · 1");
+});
+
+test("activating Remove disables the affected Cart Item and sends a structured deterministic command", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+
+  let requestedUrl: RequestInfo | URL | undefined;
+  let requestedInit: RequestInit | undefined;
+  globalThis.fetch = async (input, init) => {
+    requestedUrl = input;
+    requestedInit = init;
+    return new Promise<Response>(() => undefined);
+  };
+  const constraints = createEmptyConversationContext().productConstraints;
+  const [{ render, cleanup }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(
+    React.createElement(ShoppingAssistant, {
+      brandName: "Arc",
+      initialConversation: {
+        conversationId: "41000000-0000-4000-8000-000000000001",
+        transcript: [{
+          id: "51000000-0000-4000-8000-000000000001",
+          customerMessage: "Show my Cart",
+          result: {
+            status: "COMPLETED",
+            conversationId: "41000000-0000-4000-8000-000000000001",
+            message: "Here’s what’s in your Cart.",
+            intentBrief: {
+              goal: "Inspect the Cart",
+              constraints,
+              knownEntities: [],
+              missingInformation: [],
+              confidence: 1,
+              requestedEffects: ["INSPECT_CART"],
+            },
+            products: [],
+            cart: {
+              id: "31000000-0000-4000-8000-000000000001",
+              items: [{
+                productId: "21000000-0000-4000-8000-000000000001",
+                productName: "Road Two",
+                quantity: 1,
+                cartPriceMinor: 390000,
+                subtotalMinor: 390000,
+              }],
+              totalQuantity: 1,
+              subtotalMinor: 390000,
+              currency: "INR",
+            },
+          },
+          error: null,
+        }],
+        contextSummary: constraints,
+        revision: 0,
+      },
+    }),
+  );
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  const remove = view.getByRole("button", { name: "Remove Road Two" });
+  await user.click(remove);
+
+  assert.equal(remove.hasAttribute("disabled"), true);
+  assert.equal(requestedUrl, "/api/agent/cart-command");
+  const body = JSON.parse(String(requestedInit?.body));
+  assert.match(body.idempotencyKey, /^[0-9a-f-]{36}$/);
+  assert.deepEqual({ ...body, idempotencyKey: undefined }, {
+    conversationId: "41000000-0000-4000-8000-000000000001",
+    idempotencyKey: undefined,
+    command: {
+      type: "REMOVE_CART_ITEM",
+      productId: "21000000-0000-4000-8000-000000000001",
+    },
+  });
+});
+
+test("removing the final Cart Item shows the authoritative empty Cart and a Product discovery route", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+  const constraints = createEmptyConversationContext().productConstraints;
+  const requestUrls: Array<RequestInfo | URL> = [];
+  globalThis.fetch = async (input) => {
+    requestUrls.push(input);
+    if (input === "/api/agent/message") {
+      return new Response(JSON.stringify({ data: {
+        status: "COMPLETED",
+        conversationId: "41000000-0000-4000-8000-000000000001",
+        message: "Let’s discover another Product.",
+        intentBrief: {
+          goal: "Discover Products",
+          constraints,
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 1,
+          requestedEffects: ["DISCOVER_PRODUCTS"],
+        },
+        products: [],
+      } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      data: {
+      status: "COMPLETED",
+      conversationId: "41000000-0000-4000-8000-000000000001",
+      message: "Removed Road Two from your Cart.",
+      intentBrief: {
+        goal: "Remove Road Two from the Cart",
+        constraints,
+        knownEntities: [],
+        missingInformation: [],
+        confidence: 1,
+        requestedEffects: ["REMOVE_FROM_CART"],
+      },
+      products: [],
+      cart: {
+        id: "31000000-0000-4000-8000-000000000001",
+        items: [],
+        totalQuantity: 0,
+        subtotalMinor: 0,
+        currency: "INR",
+      },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const [{ render, cleanup, within }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(React.createElement(ShoppingAssistant, {
+    brandName: "Arc",
+    initialConversation: {
+      conversationId: "41000000-0000-4000-8000-000000000001",
+      transcript: [{
+        id: "51000000-0000-4000-8000-000000000001",
+        customerMessage: "Show my Cart",
+        result: {
+          status: "COMPLETED",
+          conversationId: "41000000-0000-4000-8000-000000000001",
+          message: "Here’s what’s in your Cart.",
+          intentBrief: {
+            goal: "Inspect the Cart",
+            constraints,
+            knownEntities: [],
+            missingInformation: [],
+            confidence: 1,
+            requestedEffects: ["INSPECT_CART"],
+          },
+          products: [],
+          cart: {
+            id: "31000000-0000-4000-8000-000000000001",
+            items: [{
+              productId: "21000000-0000-4000-8000-000000000001",
+              productName: "Road Two",
+              quantity: 1,
+              cartPriceMinor: 390000,
+              subtotalMinor: 390000,
+            }],
+            totalQuantity: 1,
+            subtotalMinor: 390000,
+            currency: "INR",
+          },
+        },
+        error: null,
+      }],
+      contextSummary: constraints,
+      revision: 0,
+    },
+  }));
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  await user.click(view.getByRole("button", { name: "Remove Road Two" }));
+
+  assert.ok(await view.findByText("Removed Road Two from your Cart."));
+  assert.equal(view.getByRole("button", { name: "Cart · 0" }).textContent, " Cart · 0");
+  const summaries = view.getAllByRole("region", { name: "Your Cart" });
+  assert.equal(summaries.length, 2);
+  assert.ok(within(summaries[0]).getByText("Historical Cart Summary"));
+  const emptySummary = within(summaries[1]);
+  assert.ok(emptySummary.getByText("Your Cart is empty."));
+  assert.ok(emptySummary.getByText("₹0"));
+  await user.click(emptySummary.getByRole("button", { name: "Discover Products" }));
+  assert.ok(await view.findByText("Let’s discover another Product."));
+  assert.deepEqual(requestUrls, [
+    "/api/agent/cart-command",
+    "/api/agent/message",
+  ]);
+});
+
+test("failed Cart Item Removal shows the authoritative reason beside the restored Cart Item", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+  const constraints = createEmptyConversationContext().productConstraints;
+  const cart = {
+    id: "31000000-0000-4000-8000-000000000001",
+    items: [{
+      productId: "21000000-0000-4000-8000-000000000001",
+      productName: "Road Two",
+      quantity: 1,
+      cartPriceMinor: 390000,
+      subtotalMinor: 390000,
+    }],
+    totalQuantity: 1,
+    subtotalMinor: 390000,
+    currency: "INR",
+  };
+  let removalAttempts = 0;
+  let conversationLoads = 0;
+  globalThis.fetch = async (input) => {
+    if (input === "/api/agent/conversation") {
+      conversationLoads += 1;
+      return new Response(JSON.stringify({ data: {
+        conversationId: "41000000-0000-4000-8000-000000000001",
+        transcript: [{
+          id: "51000000-0000-4000-8000-000000000001",
+          customerMessage: "Show my Cart",
+          result: {
+            status: "COMPLETED",
+            conversationId: "41000000-0000-4000-8000-000000000001",
+            message: "Here’s what’s in your Cart.",
+            intentBrief: {
+              goal: "Inspect the Cart",
+              constraints,
+              knownEntities: [],
+              missingInformation: [],
+              confidence: 1,
+              requestedEffects: ["INSPECT_CART"],
+            },
+            products: [],
+            cart,
+          },
+          error: null,
+        }],
+        contextSummary: constraints,
+        revision: 0,
+      } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    removalAttempts += 1;
+    if (removalAttempts === 2) {
+      return new Response(JSON.stringify({ error: {
+        code: "CART_UNAVAILABLE",
+        message: "The Cart service is temporarily unavailable.",
+        details: {},
+      } }), { status: 503, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ data: {
+      status: "NEEDS_INPUT",
+    conversationId: "41000000-0000-4000-8000-000000000001",
+    message: "Road Two could not be removed because the Cart changed. Please try again.",
+    question: "Would you like to try removing Road Two again?",
+    missingInformation: [],
+    intentBrief: {
+      goal: "Remove Road Two from the Cart",
+      constraints,
+      knownEntities: [],
+      missingInformation: [],
+      confidence: 1,
+      requestedEffects: ["REMOVE_FROM_CART"],
+    },
+    products: [],
+    cart,
+    cartItemError: {
+      productId: "21000000-0000-4000-8000-000000000001",
+      message: "Road Two could not be removed because the Cart changed. Please try again.",
+    },
+    } }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const [{ render, cleanup, within }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(React.createElement(ShoppingAssistant, {
+    brandName: "Arc",
+    initialConversation: {
+      conversationId: "41000000-0000-4000-8000-000000000001",
+      transcript: [{
+        id: "51000000-0000-4000-8000-000000000001",
+        customerMessage: "Show my Cart",
+        result: {
+          status: "COMPLETED",
+          conversationId: "41000000-0000-4000-8000-000000000001",
+          message: "Here’s what’s in your Cart.",
+          intentBrief: {
+            goal: "Inspect the Cart",
+            constraints,
+            knownEntities: [],
+            missingInformation: [],
+            confidence: 1,
+            requestedEffects: ["INSPECT_CART"],
+          },
+          products: [],
+          cart,
+        },
+        error: null,
+      }],
+      contextSummary: constraints,
+      revision: 0,
+    },
+  }));
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  await user.click(view.getByRole("button", { name: "Remove Road Two" }));
+
+  const summaries = await view.findAllByRole("region", { name: "Your Cart" });
+  const current = within(summaries.at(-1)!);
+  assert.equal(current.getByRole("alert").textContent,
+    "Road Two could not be removed because the Cart changed. Please try again.");
+  assert.equal(current.getByRole("button", { name: "Remove Road Two" }).hasAttribute("disabled"), false);
+  assert.equal(view.getByRole("button", { name: "Cart · 1" }).textContent, " Cart · 1");
+
+  await user.click(current.getByRole("button", { name: "Remove Road Two" }));
+  assert.equal(conversationLoads, 1);
+  const restoredSummaries = await view.findAllByRole("region", { name: "Your Cart" });
+  const restoredCurrent = within(restoredSummaries.at(-1)!);
+  assert.equal(
+    restoredCurrent.getByRole("alert").textContent,
+    "The Cart service is temporarily unavailable.",
+  );
+  assert.equal(restoredCurrent.getByRole("button", { name: "Remove Road Two" }).hasAttribute("disabled"), false);
+
+  await user.click(restoredCurrent.getByRole("button", { name: "Remove Road Two" }));
+  const retriedSummaries = await view.findAllByRole("region", { name: "Your Cart" });
+  assert.equal(
+    within(retriedSummaries.at(-1)!).getByRole("alert").textContent,
+    "Road Two could not be removed because the Cart changed. Please try again.",
+  );
 });
 
 test("Storefront reuses the server conversation identifier on later turns", async (t) => {

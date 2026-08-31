@@ -22,6 +22,7 @@ export type NeedsInputAgentOutcome = {
   products: CatalogProduct[];
   intent?: never;
   cart?: CartView;
+  cartItemError?: { productId: string; message: string };
 };
 
 export type TemporarilyUnavailableAgentOutcome = {

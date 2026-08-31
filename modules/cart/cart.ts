@@ -73,6 +73,10 @@ export interface CartModule {
     reference: string,
     complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
   ): Promise<CartView>;
+  removeItemByProductId?(
+    productId: string,
+    complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
+  ): Promise<CartView>;
   changeItemQuantity?(
     reference: string | undefined,
     change: CartQuantityChange,
@@ -239,6 +243,73 @@ export function createCartModule(
         ...(await readCart(transaction, activeCart)),
         ...(priceChanges.length > 0 ? { priceChanges } : {}),
       };
+      await complete(cart, transaction);
+      return cart;
+    });
+  };
+
+  const removeMatchingItem = async (
+    target: { reference: string } | { productId: string },
+    complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
+  ): Promise<CartView> => {
+    const normalizedReference = "reference" in target
+      ? target.reference.trim().toLocaleLowerCase()
+      : undefined;
+    if (normalizedReference === "") {
+      throw new CartError("Which Cart Item would you like to remove?");
+    }
+
+    return db.transaction(async (transaction) => {
+      await transaction.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${userId}))`,
+      );
+      const [activeCart] = await transaction
+        .select({ id: carts.id, currency: carts.currency })
+        .from(carts)
+        .where(and(eq(carts.userId, userId), eq(carts.status, "ACTIVE")))
+        .limit(1);
+      if (!activeCart) throw new CartError("Your Cart is empty.");
+
+      const candidates = await transaction
+        .select({ productId: cartItems.productId, productName: products.name })
+        .from(cartItems)
+        .innerJoin(products, eq(products.id, cartItems.productId))
+        .where(eq(cartItems.cartId, activeCart.id));
+      const matches = "productId" in target
+        ? candidates.filter(({ productId }) => productId === target.productId)
+        : candidates.filter(
+            ({ productName }) =>
+              productName.trim().toLocaleLowerCase() === normalizedReference,
+          );
+      if (matches.length === 0) {
+        throw new CartError(
+          "reference" in target
+            ? `${target.reference} is not in your Cart.`
+            : "That Cart Item is no longer in your Cart.",
+        );
+      }
+      if (matches.length > 1) {
+        throw new CartError(
+          "reference" in target
+            ? `More than one Cart Item matches ${target.reference}.`
+            : "More than one Cart Item has the requested Product ID.",
+        );
+      }
+
+      await transaction
+        .delete(cartItems)
+        .where(
+          and(
+            eq(cartItems.cartId, activeCart.id),
+            eq(cartItems.productId, matches[0].productId),
+          ),
+        );
+      await transaction
+        .update(carts)
+        .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
+        .where(eq(carts.id, activeCart.id));
+      await invalidateCheckoutState(transaction, activeCart.id);
+      const cart = await readCart(transaction, activeCart);
       await complete(cart, transaction);
       return cart;
     });
@@ -574,57 +645,10 @@ export function createCartModule(
       });
     },
     async removeItem(reference, complete) {
-      const normalizedReference = reference.trim().toLocaleLowerCase();
-      if (!normalizedReference) {
-        throw new CartError("Which Cart Item would you like to remove?");
-      }
-
-      return db.transaction(async (transaction) => {
-        await transaction.execute(
-          sql`select pg_advisory_xact_lock(hashtext(${userId}))`,
-        );
-        const [activeCart] = await transaction
-          .select({ id: carts.id, currency: carts.currency })
-          .from(carts)
-          .where(and(eq(carts.userId, userId), eq(carts.status, "ACTIVE")))
-          .limit(1);
-        if (!activeCart) throw new CartError("Your Cart is empty.");
-
-        const candidates = await transaction
-          .select({ productId: cartItems.productId, productName: products.name })
-          .from(cartItems)
-          .innerJoin(products, eq(products.id, cartItems.productId))
-          .where(eq(cartItems.cartId, activeCart.id));
-        const matches = candidates.filter(
-          ({ productName }) =>
-            productName.trim().toLocaleLowerCase() === normalizedReference,
-        );
-        if (matches.length === 0) {
-          throw new CartError(`${reference} is not in your Cart.`);
-        }
-        if (matches.length > 1) {
-          throw new CartError(
-            `More than one Cart Item matches ${reference}.`,
-          );
-        }
-
-        await transaction
-          .delete(cartItems)
-          .where(
-            and(
-              eq(cartItems.cartId, activeCart.id),
-              eq(cartItems.productId, matches[0].productId),
-            ),
-          );
-        await transaction
-          .update(carts)
-          .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
-          .where(eq(carts.id, activeCart.id));
-        await invalidateCheckoutState(transaction, activeCart.id);
-        const cart = await readCart(transaction, activeCart);
-        await complete(cart, transaction);
-        return cart;
-      });
+      return removeMatchingItem({ reference }, complete);
+    },
+    async removeItemByProductId(productId, complete) {
+      return removeMatchingItem({ productId }, complete);
     },
     async changeItemQuantity(reference, change, complete) {
       const normalizedReference = reference?.trim().toLocaleLowerCase();
