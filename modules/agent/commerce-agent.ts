@@ -197,7 +197,10 @@ export function createCommerceAgent(
               limit: 2,
             });
             directlyMatchedProducts = result.products;
-            if (result.products.length === 1) {
+            if (
+              result.products.length === 1 &&
+              result.nextCursor === undefined
+            ) {
               directlyMatchedProduct = result.products[0];
             }
           } catch {
@@ -212,7 +215,26 @@ export function createCommerceAgent(
             });
           }
         }
-        if (directlyMatchedProducts.length > 1) {
+        if (
+          directlyMatchedProducts.length > 0 &&
+          !directlyMatchedProduct
+        ) {
+          try {
+            await turn.recordRecommendationSet?.(
+              directlyMatchedProducts,
+              resolvedContext,
+            );
+          } catch {
+            return completeTurn(turn, {
+              status: "TEMPORARILY_UNAVAILABLE",
+              conversationId: turn.conversationId,
+              message:
+                "I couldn't save those Recommendations right now. Please try again.",
+              retryable: true,
+              intentBrief,
+              products: [],
+            });
+          }
           return needsInputWithCurrentCart({
             turn,
             cart: options.cart,

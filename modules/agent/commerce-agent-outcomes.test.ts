@@ -67,6 +67,48 @@ const brief: IntentBrief = {
   confidence: 0.94,
   requestedEffects: ["DISCOVER_PRODUCTS"],
 };
+const blackShirt = {
+  ...product,
+  id: "21000000-0000-4000-8000-000000000002",
+  slug: "everyday-black-shirt",
+  name: "Everyday Black Shirt",
+  description: "A black cotton shirt for everyday wear.",
+  category: "Apparel",
+  priceMinor: 149900,
+  attributes: { color: "Black", sizes: ["M"] },
+};
+const formalBlackShirt = {
+  ...blackShirt,
+  id: "21000000-0000-4000-8000-000000000003",
+  slug: "formal-black-shirt",
+  name: "Formal Black Shirt",
+  description: "A tailored black shirt for formal occasions.",
+  priceMinor: 249900,
+};
+const directAddBrief: IntentBrief = {
+  ...brief,
+  goal: "Add a black shirt to the Cart",
+  constraints: {
+    ...brief.constraints,
+    productTypes: ["shirt"],
+    useCases: [],
+    features: [],
+    category: "Apparel",
+    minPriceMinor: null,
+    maxPriceMinor: null,
+    size: null,
+    attributes: { color: "Black" },
+  },
+  knownEntities: [{ type: "PRODUCT_TYPE", value: "shirt" }],
+  requestedEffects: ["DISCOVER_PRODUCTS", "ADD_TO_CART"],
+};
+const emptyCart = {
+  id: null,
+  items: [],
+  totalQuantity: 0,
+  subtotalMinor: 0,
+  currency: "INR",
+};
 
 function intentAnalysisFor(intentBrief: IntentBrief): IntentAnalysis {
   const { constraints, ...analysis } = intentBrief;
@@ -295,33 +337,6 @@ test("revalidates a referenced Product before a non-discovery follow-up action",
 });
 
 test("adds the only Catalog Product matching a direct Cart request", async () => {
-  const blackShirt = {
-    ...product,
-    id: "21000000-0000-4000-8000-000000000002",
-    slug: "everyday-black-shirt",
-    name: "Everyday Black Shirt",
-    description: "A black cotton shirt for everyday wear.",
-    category: "Apparel",
-    priceMinor: 149900,
-    attributes: { color: "Black", sizes: ["M"] },
-  };
-  const directAddBrief: IntentBrief = {
-    ...brief,
-    goal: "Add a black shirt to the Cart",
-    constraints: {
-      ...brief.constraints,
-      productTypes: ["shirt"],
-      useCases: [],
-      features: [],
-      category: "Apparel",
-      minPriceMinor: null,
-      maxPriceMinor: null,
-      size: null,
-      attributes: { color: "Black" },
-    },
-    knownEntities: [{ type: "PRODUCT_TYPE", value: "shirt" }],
-    requestedEffects: ["DISCOVER_PRODUCTS", "ADD_TO_CART"],
-  };
   const updatedCart = {
     id: "31000000-0000-4000-8000-000000000001",
     items: [{
@@ -399,53 +414,9 @@ test("adds the only Catalog Product matching a direct Cart request", async () =>
 });
 
 test("shows matching Products without changing the Cart when a direct addition is ambiguous", async () => {
-  const blackShirts = [
-    {
-      ...product,
-      id: "21000000-0000-4000-8000-000000000002",
-      slug: "everyday-black-shirt",
-      name: "Everyday Black Shirt",
-      description: "A black cotton shirt for everyday wear.",
-      category: "Apparel",
-      priceMinor: 149900,
-      attributes: { color: "Black", sizes: ["M"] },
-    },
-    {
-      ...product,
-      id: "21000000-0000-4000-8000-000000000003",
-      slug: "formal-black-shirt",
-      name: "Formal Black Shirt",
-      description: "A tailored black shirt for formal occasions.",
-      category: "Apparel",
-      priceMinor: 249900,
-      attributes: { color: "Black", sizes: ["M"] },
-    },
-  ];
-  const directAddBrief: IntentBrief = {
-    ...brief,
-    goal: "Add a black shirt to the Cart",
-    constraints: {
-      ...brief.constraints,
-      productTypes: ["shirt"],
-      useCases: [],
-      features: [],
-      category: "Apparel",
-      minPriceMinor: null,
-      maxPriceMinor: null,
-      size: null,
-      attributes: { color: "Black" },
-    },
-    knownEntities: [{ type: "PRODUCT_TYPE", value: "shirt" }],
-    requestedEffects: ["DISCOVER_PRODUCTS", "ADD_TO_CART"],
-  };
-  const currentCart = {
-    id: null,
-    items: [],
-    totalQuantity: 0,
-    subtotalMinor: 0,
-    currency: "INR",
-  };
+  const blackShirts = [blackShirt, formalBlackShirt];
   let inspected = 0;
+  let recordedRecommendationSet: CatalogProduct[] | undefined;
   const agent = createCommerceAgent(
     {
       async search() { return { products: blackShirts }; },
@@ -457,6 +428,9 @@ test("shows matching Products without changing the Cart when a direct addition i
         return {
           conversationId,
           async recordIntentBrief() {},
+          async recordRecommendationSet(products) {
+            recordedRecommendationSet = products;
+          },
           async complete() {},
         };
       },
@@ -469,7 +443,7 @@ test("shows matching Products without changing the Cart when a direct addition i
         async addItem() { throw new Error("Ambiguous additions must not mutate"); },
         async inspect() {
           inspected += 1;
-          return currentCart;
+          return emptyCart;
         },
       },
     },
@@ -478,6 +452,7 @@ test("shows matching Products without changing the Cart when a direct addition i
   const outcome = await agent.respond({ message: "add a black shirt" });
 
   assert.equal(inspected, 1);
+  assert.deepEqual(recordedRecommendationSet, blackShirts);
   assert.deepEqual(outcome, {
     status: "NEEDS_INPUT",
     conversationId,
@@ -486,35 +461,11 @@ test("shows matching Products without changing the Cart when a direct addition i
     missingInformation: ["Unambiguous Product"],
     intentBrief: directAddBrief,
     products: blackShirts,
-    cart: currentCart,
+    cart: emptyCart,
   });
 });
 
 test("explains that no Product matches a direct addition and leaves the Cart unchanged", async () => {
-  const directAddBrief: IntentBrief = {
-    ...brief,
-    goal: "Add a black shirt to the Cart",
-    constraints: {
-      ...brief.constraints,
-      productTypes: ["shirt"],
-      useCases: [],
-      features: [],
-      category: "Apparel",
-      minPriceMinor: null,
-      maxPriceMinor: null,
-      size: null,
-      attributes: { color: "Black" },
-    },
-    knownEntities: [{ type: "PRODUCT_TYPE", value: "shirt" }],
-    requestedEffects: ["DISCOVER_PRODUCTS", "ADD_TO_CART"],
-  };
-  const currentCart = {
-    id: null,
-    items: [],
-    totalQuantity: 0,
-    subtotalMinor: 0,
-    currency: "INR",
-  };
   let inspected = 0;
   const agent = createCommerceAgent(
     {
@@ -539,7 +490,7 @@ test("explains that no Product matches a direct addition and leaves the Cart unc
         async addItem() { throw new Error("Missing Products must not mutate"); },
         async inspect() {
           inspected += 1;
-          return currentCart;
+          return emptyCart;
         },
       },
     },
@@ -554,8 +505,45 @@ test("explains that no Product matches a direct addition and leaves the Cart unc
     message: "I couldn't find a Product matching that Cart request.",
     intentBrief: directAddBrief,
     products: [],
-    cart: currentCart,
+    cart: emptyCart,
   });
+});
+
+test("does not add a Product when the Catalog reports more matching pages", async () => {
+  const agent = createCommerceAgent(
+    {
+      async search() {
+        return { products: [blackShirt], nextCursor: blackShirt.id };
+      },
+      async getProduct() { throw new Error("Paginated matches do not look up"); },
+    },
+    { async analyze() { return intentAnalysisFor(directAddBrief); } },
+    {
+      async startTurn() {
+        return {
+          conversationId,
+          async recordIntentBrief() {},
+          async recordRecommendationSet() {},
+          async complete() {},
+        };
+      },
+    },
+    {
+      agentLoop: {
+        async run() { throw new Error("The model must not choose a paginated match"); },
+      },
+      cart: {
+        async addItem() { throw new Error("Paginated matches must not mutate"); },
+        async inspect() { return emptyCart; },
+      },
+    },
+  );
+
+  const outcome = await agent.respond({ message: "add a black shirt" });
+
+  assert.equal(outcome.status, "NEEDS_INPUT");
+  assert.deepEqual(outcome.products, [blackShirt]);
+  assert.deepEqual(outcome.cart, emptyCart);
 });
 
 test("bounds Catalog search inputs and results exposed to the Commerce Agent", async () => {
