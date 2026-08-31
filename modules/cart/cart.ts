@@ -64,7 +64,7 @@ export interface CartModule {
     complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
   ): Promise<CartView>;
   changeItemQuantity?(
-    reference: string,
+    reference: string | undefined,
     change: CartQuantityChange,
     complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
   ): Promise<CartView>;
@@ -308,10 +308,7 @@ export function createCartModule(
       });
     },
     async changeItemQuantity(reference, change, complete) {
-      const normalizedReference = reference.trim().toLocaleLowerCase();
-      if (!normalizedReference) {
-        throw new CartError("Which Cart Item would you like to change?");
-      }
+      const normalizedReference = reference?.trim().toLocaleLowerCase();
       if (
         !["RELATIVE", "EXACT"].includes(change.mode) ||
         !Number.isInteger(change.quantity) ||
@@ -345,15 +342,23 @@ export function createCartModule(
           .from(cartItems)
           .innerJoin(products, eq(products.id, cartItems.productId))
           .where(eq(cartItems.cartId, activeCart.id));
-        const matches = candidates.filter(
-          ({ productName }) =>
-            productName.trim().toLocaleLowerCase() === normalizedReference,
-        );
+        const matches = normalizedReference
+          ? candidates.filter(
+              ({ productName }) =>
+                productName.trim().toLocaleLowerCase() === normalizedReference,
+            )
+          : candidates;
         if (matches.length === 0) {
-          throw new CartError(`${reference} is not in your Cart.`);
+          throw new CartError(
+            reference ? `${reference} is not in your Cart.` : "Your Cart is empty.",
+          );
         }
         if (matches.length > 1) {
-          throw new CartError(`More than one Cart Item matches ${reference}.`);
+          throw new CartError(
+            reference
+              ? `More than one Cart Item matches ${reference}.`
+              : "Which Cart Item would you like to change?",
+          );
         }
 
         const item = matches[0];
@@ -372,7 +377,7 @@ export function createCartModule(
         if (increasing && !item.active) {
           throw new CartError(`${reference} is inactive and cannot be increased.`);
         }
-        if (increasing && nextQuantity > item.stock) {
+        if (nextQuantity > item.stock && (increasing || item.active)) {
           throw new CartError(
             `${reference} only has ${item.stock} ${item.stock === 1 ? "unit" : "units"} in stock.`,
           );

@@ -960,6 +960,49 @@ test("adds one more unit to a named Cart Item through the authoritative Cart", a
   assert.deepEqual(outcome.cart, updatedCart);
 });
 
+test("adds one more to the sole authoritative Cart Item without a named reference", async () => {
+  const updatedCart = {
+    id: "31000000-0000-4000-8000-000000000019",
+    items: [{
+      productId: "21000000-0000-4000-8000-000000000019",
+      productName: "Trail One",
+      quantity: 3,
+      cartPriceMinor: 350000,
+      subtotalMinor: 1050000,
+    }],
+    totalQuantity: 3,
+    subtotalMinor: 1050000,
+    currency: "INR",
+  };
+  const references: Array<string | undefined> = [];
+  const POST = createConversationPost({
+    repository: createInMemoryConversationRepository(),
+    analyzer: quantityChangeAnalyzer(undefined, {
+      mode: "RELATIVE",
+      quantity: 1,
+    }),
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() { throw new Error("not used"); },
+      async addItems() { throw new Error("not used"); },
+      async changeItemQuantity(reference, _change, complete) {
+        references.push(reference);
+        await complete(updatedCart, {} as never);
+        return updatedCart;
+      },
+      async inspect() { throw new Error("not used"); },
+    },
+  });
+
+  const outcome = (await (await postAgentMessage(POST, {
+    message: "Add one more",
+  })).json()).data;
+
+  assert.deepEqual(references, [undefined]);
+  assert.equal(outcome.status, "COMPLETED");
+  assert.equal(outcome.message, "Changed Trail One quantity to 3.");
+});
+
 test("replaces a named Cart Item quantity with an exact quantity", async () => {
   const updatedCart = {
     id: "31000000-0000-4000-8000-000000000017",
@@ -1050,6 +1093,85 @@ test("asks for clarification without changing the Cart when quantity intent is u
 
   assert.equal(outcome.status, "NEEDS_INPUT");
   assert.equal(outcome.question, "Which Cart Item and quantity would you like?");
+  assert.deepEqual(outcome.cart, unchangedCart);
+});
+
+test("asks for clarification when a Cart Quantity Change reference is ambiguous", async () => {
+  const unchangedCart = {
+    id: "31000000-0000-4000-8000-000000000020",
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  const POST = createConversationPost({
+    repository: createInMemoryConversationRepository(),
+    analyzer: quantityChangeAnalyzer("Everyday Runner", {
+      mode: "EXACT",
+      quantity: 3,
+    }),
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() { throw new Error("not used"); },
+      async addItems() { throw new Error("not used"); },
+      async changeItemQuantity() {
+        throw new CartError("More than one Cart Item matches Everyday Runner.");
+      },
+      async inspect() { return unchangedCart; },
+    },
+  });
+
+  const outcome = (await (await postAgentMessage(POST, {
+    message: "Make Everyday Runner three",
+  })).json()).data;
+
+  assert.equal(outcome.status, "NEEDS_INPUT");
+  assert.match(outcome.message, /More than one Cart Item/);
+  assert.deepEqual(outcome.cart, unchangedCart);
+});
+
+test("leaves the Cart unchanged when a turn mixes a Quantity Change with another Cart Mutation", async () => {
+  const unchangedCart = {
+    id: "31000000-0000-4000-8000-000000000021",
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  const POST = createConversationPost({
+    repository: createInMemoryConversationRepository(),
+    analyzer: {
+      async analyze() {
+        return {
+          goal: "Change and remove Cart Items",
+          constraintDelta: { set: {}, clear: [] },
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 0.99,
+          requestedEffects: [
+            "CHANGE_CART_QUANTITY" as const,
+            "REMOVE_FROM_CART" as const,
+          ],
+          requestedCartItemReference: "Trail One",
+          requestedCartQuantityChange: { mode: "EXACT" as const, quantity: 3 },
+        };
+      },
+    },
+    agentLoop: { async run() { throw new Error("not used"); } },
+    cart: {
+      async addItem() { throw new Error("must not mutate"); },
+      async addItems() { throw new Error("must not mutate"); },
+      async changeItemQuantity() { throw new Error("must not mutate"); },
+      async removeItem() { throw new Error("must not mutate"); },
+      async inspect() { return unchangedCart; },
+    },
+  });
+
+  const outcome = (await (await postAgentMessage(POST, {
+    message: "Make Trail One three and remove Road Two",
+  })).json()).data;
+
+  assert.equal(outcome.status, "NEEDS_INPUT");
   assert.deepEqual(outcome.cart, unchangedCart);
 });
 
@@ -1200,7 +1322,7 @@ function removalAnalyzer(reference: string): IntentAnalyzer {
 }
 
 function quantityChangeAnalyzer(
-  reference: string,
+  reference: string | undefined,
   change: { mode: "RELATIVE" | "EXACT"; quantity: number },
 ): IntentAnalyzer {
   return {
@@ -1208,11 +1330,13 @@ function quantityChangeAnalyzer(
       return {
         goal: "Change a Cart Item quantity",
         constraintDelta: { set: {}, clear: [] },
-        knownEntities: [{ type: "PRODUCT", value: reference }],
+        knownEntities: reference
+          ? [{ type: "PRODUCT" as const, value: reference }]
+          : [],
         missingInformation: [],
         confidence: 0.99,
         requestedEffects: ["CHANGE_CART_QUANTITY"],
-        requestedCartItemReference: reference,
+        ...(reference ? { requestedCartItemReference: reference } : {}),
         requestedCartQuantityChange: change,
       };
     },

@@ -403,22 +403,29 @@ test("POST decreases an inactive Cart Item without repricing or removing it", as
 
 test("POST returns the unchanged authoritative Cart for quantity, stock, and inactivity failures", async () => {
   const { cart, product } = await prepareCart();
-  await cart.addItem(product, 2, async () => {});
+  await cart.addItem(product, 5, async () => {});
   const post = createQuantityChangePost(product.name, cart);
   const invalidLimit = await post({
     message: "exact 11",
     idempotencyKey: crypto.randomUUID(),
   });
   assert.equal((await invalidLimit.json()).data.status, "NEEDS_INPUT");
-  assert.equal((await cart.inspect()).items[0].quantity, 2);
+  assert.equal((await cart.inspect()).items[0].quantity, 5);
 
   await db.update(products).set({ stock: 2 }).where(eq(products.id, product.id));
+  const aboveStockDecrease = await post({
+    message: "relative -1",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  assert.match((await aboveStockDecrease.json()).data.message, /2 units in stock/);
+  assert.equal((await cart.inspect()).items[0].quantity, 5);
+
   const insufficientStock = await post({
     message: "relative 1",
     idempotencyKey: crypto.randomUUID(),
   });
   assert.match((await insufficientStock.json()).data.message, /2 units in stock/);
-  assert.equal((await cart.inspect()).items[0].quantity, 2);
+  assert.equal((await cart.inspect()).items[0].quantity, 5);
 
   await db
     .update(products)
@@ -429,14 +436,14 @@ test("POST returns the unchanged authoritative Cart for quantity, stock, and ina
     idempotencyKey: crypto.randomUUID(),
   });
   assert.match((await inactive.json()).data.message, /inactive/);
-  assert.equal((await cart.inspect()).items[0].quantity, 2);
+  assert.equal((await cart.inspect()).items[0].quantity, 5);
 
   const implicitRemoval = await post({
-    message: "relative -2",
+    message: "relative -5",
     idempotencyKey: crypto.randomUUID(),
   });
   assert.match((await implicitRemoval.json()).data.message, /Remove the Cart Item explicitly/);
-  assert.equal((await cart.inspect()).items[0].quantity, 2);
+  assert.equal((await cart.inspect()).items[0].quantity, 5);
 });
 
 test("POST applies a retried relative Cart Quantity Change only once", async () => {

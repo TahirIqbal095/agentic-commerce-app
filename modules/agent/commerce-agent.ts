@@ -183,6 +183,21 @@ export function createCommerceAgent(
       if (intentBrief.requestedEffects.includes("CHANGE_CART_QUANTITY")) {
         const reference = intentBrief.requestedCartItemReference?.trim();
         const change = intentBrief.requestedCartQuantityChange;
+        if (
+          intentBrief.requestedEffects.some((effect) =>
+            ["ADD_TO_CART", "REMOVE_FROM_CART"].includes(effect),
+          )
+        ) {
+          return needsInputWithCurrentCart({
+            turn,
+            cart: options.cart,
+            intentBrief,
+            message:
+              "I couldn't safely apply multiple kinds of Cart Mutation together.",
+            question: "Which Cart Mutation would you like me to apply first?",
+            missingInformation: ["One Cart Mutation kind"],
+          });
+        }
         if (intentBrief.requestedQuantity === 0 ||
           (change?.mode === "EXACT" && change.quantity === 0)) {
           return needsInputWithCurrentCart({
@@ -195,7 +210,7 @@ export function createCommerceAgent(
             missingInformation: ["Explicit Cart Item Removal"],
           });
         }
-        if (!reference || !change) {
+        if (!change) {
           return needsInputWithCurrentCart({
             turn,
             cart: options.cart,
@@ -216,14 +231,15 @@ export function createCommerceAgent(
             async (updatedCart, transaction) => {
               const item = updatedCart.items.find(
                 ({ productName }) =>
+                  reference !== undefined &&
                   productName.trim().toLocaleLowerCase() ===
-                  reference.toLocaleLowerCase(),
-              );
+                    reference.toLocaleLowerCase(),
+              ) ?? (reference === undefined ? updatedCart.items[0] : undefined);
               const outcome: AgentOutcome = {
                 status: "COMPLETED",
                 conversationId: turn.conversationId,
                 message: cartQuantityChangeMessage(
-                  reference,
+                  item?.productName ?? reference ?? "Cart Item",
                   item?.quantity ?? change.quantity,
                   updatedCart,
                 ),

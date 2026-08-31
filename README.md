@@ -69,6 +69,7 @@ The same endpoint accepts explicit Cart requests:
 }
 ```
 
-Customers can inspect the Cart, add identified Products, and explicitly remove
-a named Cart Item through the same endpoint. Checkout preparation, Order, Brand
-Payment Account, and captured-payment capabilities remain planned.
+Customers can inspect the Cart, add identified Products, change Cart Item
+quantities relatively or exactly, and explicitly remove a named Cart Item
+through the same endpoint. Checkout preparation, Order, Brand Payment Account,
+and captured-payment capabilities remain planned.
