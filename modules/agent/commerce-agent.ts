@@ -1,5 +1,8 @@
 import type { CatalogModule } from "@/modules/catalog/catalog";
-import { CartError, type CartModule } from "@/modules/cart/cart";
+import {
+  CartError,
+  type CartModule,
+} from "@/modules/cart/cart";
 import type {
   CatalogProduct,
   CatalogSearch,
@@ -539,8 +542,9 @@ function cartAdditionMessage(
   cart: Awaited<ReturnType<CartModule["addItem"]>>,
 ): string {
   const confirmation = `Added ${quantity} × ${productName} to your Cart.`;
-  if (!cart.priceChange) return confirmation;
-  return `${confirmation} Its Cart Price changed from ${formatCartPrice(cart.priceChange.previousCartPriceMinor, cart.currency)} to ${formatCartPrice(cart.priceChange.currentCartPriceMinor, cart.currency)}.`;
+  const priceChange = cart.priceChanges?.[0];
+  if (!priceChange) return confirmation;
+  return `${confirmation} Its Cart Price ${priceChange.direction.toLowerCase()} from ${formatCartPrice(priceChange.previousCartPriceMinor, cart.currency)} to ${formatCartPrice(priceChange.currentCartPriceMinor, cart.currency)}.`;
 }
 
 function cartAdditionsMessage(
@@ -560,11 +564,7 @@ function cartAdditionsMessage(
     additions.map(({ product }) => [product.id, product.name]),
   );
   const changes = cart.priceChanges.map((change) => {
-    const direction =
-      change.currentCartPriceMinor > change.previousCartPriceMinor
-        ? "increased"
-        : "decreased";
-    return `${productNames.get(change.productId) ?? "Product"} ${direction} from ${formatCartPrice(change.previousCartPriceMinor, cart.currency)} to ${formatCartPrice(change.currentCartPriceMinor, cart.currency)}`;
+    return `${productNames.get(change.productId) ?? "Product"} ${change.direction.toLowerCase()} from ${formatCartPrice(change.previousCartPriceMinor, cart.currency)} to ${formatCartPrice(change.currentCartPriceMinor, cart.currency)}`;
   });
   return `${confirmation} Cart Price changes: ${changes.join("; ")}.`;
 }

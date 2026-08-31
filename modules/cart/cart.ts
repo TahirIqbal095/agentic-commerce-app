@@ -16,6 +16,7 @@ export type CartPriceChange = {
   productId: string;
   previousCartPriceMinor: number;
   currentCartPriceMinor: number;
+  direction: "INCREASED" | "DECREASED";
 };
 
 export type CartView = Omit<CartSummary, "id"> & {
@@ -34,7 +35,6 @@ export type CartView = Omit<CartSummary, "id"> & {
       | { reason: "INACTIVE" }
       | { reason: "INSUFFICIENT_STOCK"; availableQuantity: number };
   }>;
-  priceChange?: CartPriceChange;
   priceChanges?: CartPriceChange[];
 };
 
@@ -199,18 +199,16 @@ export function createCartModule(
               productId: product.id,
               previousCartPriceMinor: existing.cartPriceMinor,
               currentCartPriceMinor: product.priceMinor,
+              direction:
+                product.priceMinor > existing.cartPriceMinor
+                  ? ("INCREASED" as const)
+                  : ("DECREASED" as const),
             }]
           : [],
       );
-      const [firstPriceChange] = priceChanges;
       const cart: CartView = {
         ...(await readCart(transaction, activeCart)),
-        ...(firstPriceChange
-          ? {
-              priceChange: firstPriceChange,
-              priceChanges,
-            }
-          : {}),
+        ...(priceChanges.length > 0 ? { priceChanges } : {}),
       };
       await complete(cart, transaction);
       return cart;

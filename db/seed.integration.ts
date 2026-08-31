@@ -257,10 +257,9 @@ test("POST adds multiple identified Products through one real atomic Cart mutati
   assert.equal(outcome.cart.totalQuantity, 3);
 });
 
-test("concurrent Customer turns retain every authoritative Cart addition", async () => {
+async function prepareCart() {
   await runSeedCommand();
   await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
-
   const catalog = createCatalogModule();
   const result = await catalog.search({
     query: "StrideFlow Daily Running Shoes",
@@ -268,26 +267,31 @@ test("concurrent Customer turns retain every authoritative Cart addition", async
   });
   const product = result.products[0];
   assert.ok(product);
+  return { cart: createCartModule(DEMO_CUSTOMER_ID), product };
+}
+
+test("Cart additions do not reserve Product stock", async () => {
+  const { cart, product } = await prepareCart();
   const [stockBeforeAddition] = await db
     .select({ stock: products.stock })
     .from(products)
     .where(eq(products.id, product.id));
-
-  const cart = createCartModule(DEMO_CUSTOMER_ID);
   await Promise.all([
     cart.addItem(product, 1, async () => {}),
     cart.addItem(product, 1, async () => {}),
   ]);
-  const summary = await cart.inspect();
-
-  assert.equal(summary.totalQuantity, 2);
-  assert.equal(summary.subtotalMinor, 799800);
-  assert.equal(summary.currency, "INR");
   const [stockAfterAddition] = await db
     .select({ stock: products.stock })
     .from(products)
     .where(eq(products.id, product.id));
+
   assert.equal(stockAfterAddition.stock, stockBeforeAddition.stock);
+  assert.equal((await cart.inspect()).totalQuantity, 2);
+});
+
+test("Cart inspection discloses base price changes without repricing", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 2, async () => {});
 
   await db
     .update(products)
@@ -303,16 +307,46 @@ test("concurrent Customer turns retain every authoritative Cart addition", async
     direction: "INCREASED",
   });
 
+  await db
+    .update(products)
+    .set({ priceMinor: 379900 })
+    .where(eq(products.id, product.id));
+  const decreased = await cart.inspect();
+
+  assert.equal(decreased.items[0].cartPriceMinor, 399900);
+  assert.equal(decreased.subtotalMinor, 799800);
+  assert.deepEqual(decreased.items[0].priceComparison, {
+    currentBasePriceMinor: 379900,
+    direction: "DECREASED",
+  });
+});
+
+test("adding a Product again reprices its entire Cart Item", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 2, async () => {});
+  await db
+    .update(products)
+    .set({ priceMinor: 429900 })
+    .where(eq(products.id, product.id));
+
   const repriced = await cart.addItem(product, 1, async () => {});
 
   assert.equal(repriced.items[0].quantity, 3);
   assert.equal(repriced.items[0].cartPriceMinor, 429900);
   assert.equal(repriced.items[0].subtotalMinor, 1289700);
-  assert.deepEqual(repriced.priceChange, {
-    productId: product.id,
-    previousCartPriceMinor: 399900,
-    currentCartPriceMinor: 429900,
-  });
+  assert.deepEqual(repriced.priceChanges, [
+    {
+      productId: product.id,
+      previousCartPriceMinor: 399900,
+      currentCartPriceMinor: 429900,
+      direction: "INCREASED",
+    },
+  ]);
+});
+
+test("Cart inspection warns about current Product availability", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 3, async () => {});
 
   await db
     .update(products)

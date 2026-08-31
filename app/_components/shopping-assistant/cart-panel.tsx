@@ -15,7 +15,11 @@ export function CartPanel({ cart }: { cart: CartView }) {
       </div>
 
       <ol className="divide-y divide-[#1d2a24]/10">
-        {cart.items.map((item) => (
+        {cart.items.map((item) => {
+          const priceChange = cart.priceChanges?.find(
+            (change) => change.productId === item.productId,
+          );
+          return (
           <li
             key={item.productId}
             className="grid gap-2 px-5 py-4 sm:grid-cols-[1fr_auto] sm:items-center sm:px-6"
@@ -28,7 +32,7 @@ export function CartPanel({ cart }: { cart: CartView }) {
               </p>
               {item.priceComparison ? (
                 <p className="mt-1 text-sm font-medium text-amber-700">
-                  Current price{" "}
+                  Current base price{" "}
                   {formatMoney(
                     item.priceComparison.currentBasePriceMinor,
                     cart.currency,
@@ -36,21 +40,18 @@ export function CartPanel({ cart }: { cart: CartView }) {
                   — {item.priceComparison.direction.toLowerCase()}
                 </p>
               ) : null}
-              {cart.priceChange?.productId === item.productId ? (
+              {priceChange ? (
                 <p className="mt-1 text-sm font-medium text-amber-700">
                   Cart Price{" "}
-                  {cart.priceChange.currentCartPriceMinor >
-                  cart.priceChange.previousCartPriceMinor
-                    ? "increased"
-                    : "decreased"}{" "}
+                  {priceChange.direction.toLowerCase()} {" "}
                   from{" "}
                   {formatMoney(
-                    cart.priceChange.previousCartPriceMinor,
+                    priceChange.previousCartPriceMinor,
                     cart.currency,
                   )}{" "}
                   to{" "}
                   {formatMoney(
-                    cart.priceChange.currentCartPriceMinor,
+                    priceChange.currentCartPriceMinor,
                     cart.currency,
                   )}
                   .
@@ -74,7 +75,8 @@ export function CartPanel({ cart }: { cart: CartView }) {
               {formatMoney(item.subtotalMinor, cart.currency)}
             </p>
           </li>
-        ))}
+          );
+        })}
       </ol>
 
       <div className="flex items-center justify-between bg-[#eef1eb] px-5 py-4 sm:px-6">
