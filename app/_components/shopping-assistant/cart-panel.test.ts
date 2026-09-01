@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { JSDOM } from "jsdom";
 import React from "react";
-import type { CartPriceChange, CartView } from "@/modules/cart/cart";
+import type {
+  CartItemRemovalUndo,
+  CartPriceChange,
+  CartView,
+} from "@/modules/cart/cart";
 
 const PRODUCT_ID = "21000000-0000-4000-8000-000000000001";
 
@@ -20,7 +24,15 @@ function roadTwoCart(
   };
 }
 
-async function renderCart(t: TestContext, cart: CartView) {
+async function renderCart(
+  t: TestContext,
+  cart: CartView,
+  props: {
+    current?: boolean;
+    undo?: CartItemRemovalUndo;
+    onUndo?: (undo: CartItemRemovalUndo) => void;
+  } = {},
+) {
   const dom = new JSDOM("<!doctype html><html><body></body></html>");
   Object.assign(globalThis, {
     window: dom.window,
@@ -41,10 +53,40 @@ async function renderCart(t: TestContext, cart: CartView) {
   });
 
   return {
-    view: render(React.createElement(CartPanel, { cart })),
+    view: render(React.createElement(CartPanel, { cart, ...props })),
     within,
   };
 }
+
+test("expired Cart Item Removal Undo is no longer interactive", async (t) => {
+  const { view } = await renderCart(
+    t,
+    {
+      id: "31000000-0000-4000-8000-000000000001",
+      items: [],
+      totalQuantity: 0,
+      subtotalMinor: 0,
+      currency: "INR",
+    },
+    {
+      current: true,
+      undo: {
+        removalId: "61000000-0000-4000-8000-000000000001",
+        productId: PRODUCT_ID,
+        productName: "Road Two",
+        expiresAt: new Date(Date.now() - 1).toISOString(),
+      },
+      onUndo() {
+        throw new Error("expired Undo must not be available");
+      },
+    },
+  );
+
+  assert.equal(
+    view.queryByRole("button", { name: "Undo removal of Road Two" }),
+    null,
+  );
+});
 
 test("Customer sees when a Product's current base price increased above its retained Cart Price", async (t) => {
   const { view, within } = await renderCart(

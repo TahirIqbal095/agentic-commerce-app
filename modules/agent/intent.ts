@@ -64,6 +64,7 @@ export type IntentAnalysis = {
     | "INSPECT_CART"
     | "CHANGE_CART_QUANTITY"
     | "REMOVE_FROM_CART"
+    | "RESTORE_CART_ITEM"
     | "CLEAR_CART"
   >;
   referencedProductIds?: string[];
@@ -115,6 +116,7 @@ export type IntentBrief = {
     | "INSPECT_CART"
     | "CHANGE_CART_QUANTITY"
     | "REMOVE_FROM_CART"
+    | "RESTORE_CART_ITEM"
     | "CLEAR_CART"
   >;
   referencedProductIds?: string[];

@@ -1,5 +1,11 @@
 import type { CatalogModule } from "@/modules/catalog/catalog";
-import { CartError, type CartModule } from "@/modules/cart/cart";
+import type { DbExecutor } from "@/db";
+import {
+  CartError,
+  type CartModule,
+  type CartMutationDetails,
+  type CartView,
+} from "@/modules/cart/cart";
 import type {
   CatalogProduct,
   CatalogSearch,
@@ -431,7 +437,7 @@ export function createCommerceAgent(
             throw new Error("Cart Item Removal capability unavailable");
           }
           let completedOutcome: AgentOutcome | undefined;
-          await options.cart.removeItem(reference, async (updatedCart, transaction) => {
+          const completeRemoval = async (updatedCart: CartView, transaction: DbExecutor, details?: CartMutationDetails) => {
             const outcome: AgentOutcome = {
               status: "COMPLETED",
               conversationId: turn.conversationId,
@@ -442,10 +448,18 @@ export function createCommerceAgent(
               intentBrief,
               products: [],
               cart: updatedCart,
+              ...(details?.cartItemRemovalUndo
+                ? { cartItemRemovalUndo: details.cartItemRemovalUndo }
+                : {}),
             };
             await turn.complete(outcome.message, outcome, transaction);
             completedOutcome = outcome;
-          });
+          };
+          await options.cart.removeItem(
+            reference,
+            completeRemoval,
+            turn.idempotencyKey,
+          );
           if (completedOutcome) return completedOutcome;
           throw new Error("Atomic Cart completion was not invoked");
         } catch (error) {

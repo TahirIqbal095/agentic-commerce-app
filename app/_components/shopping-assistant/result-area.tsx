@@ -9,13 +9,17 @@ import { CustomerMessage } from "./customer-message";
 import { IntentSummary } from "./intent-summary";
 import { RecommendationCarousel } from "./recommendation-carousel";
 import type { ConversationTurn } from "./types";
-import type { CartQuantityChange } from "@/modules/cart/cart";
+import type {
+  CartItemRemovalUndo,
+  CartQuantityChange,
+} from "@/modules/cart/cart";
 
 export function ResultArea({
   cartCommandError,
   isLoading,
   onDiscoverProducts,
   onRemoveCartItem,
+  onUndoCartItemRemoval,
   onChangeCartItemQuantity,
   onClearCart,
   onViewProduct,
@@ -27,6 +31,7 @@ export function ResultArea({
   isLoading: boolean;
   onDiscoverProducts: () => void;
   onRemoveCartItem: (productId: string) => void;
+  onUndoCartItemRemoval: (undo: CartItemRemovalUndo) => void;
   onChangeCartItemQuantity: (
     productId: string,
     change: CartQuantityChange,
@@ -137,10 +142,16 @@ export function ResultArea({
                         }
                         onDiscoverProducts={onDiscoverProducts}
                         onRemove={onRemoveCartItem}
+                        onUndo={onUndoCartItemRemoval}
                         onChangeQuantity={onChangeCartItemQuantity}
                         onClear={onClearCart}
                         pendingProductId={pendingCartProductId}
                         cartPending={cartCommandPending}
+                        undo={
+                          "cartItemRemovalUndo" in turn.result
+                            ? turn.result.cartItemRemovalUndo
+                            : undefined
+                        }
                       />
                     ) : null}
                   </AgentMessage>

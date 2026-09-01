@@ -26,6 +26,7 @@ export type AgentMessage = {
 
 export type AgentTurn = {
   conversationId: string;
+  idempotencyKey?: string;
   duplicateOutcome?: AgentOutcome;
   /** Persists a bounded Recommendation Set for use by later turns. */
   recordRecommendationSet?(
@@ -156,6 +157,7 @@ export function createConversationModule(
 
       return {
         conversationId,
+        idempotencyKey: input.idempotencyKey,
         context,
         /**
          * Reloads the latest persisted context after a concurrent update.

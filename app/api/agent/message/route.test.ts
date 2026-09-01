@@ -1148,6 +1148,7 @@ test("returns actionable clarification and the unchanged Cart for an invalid mix
 });
 
 test("removes a named Cart Item and returns the authoritative empty Cart Summary", async () => {
+  const idempotencyKey = "61000000-0000-4000-8000-000000000014";
   const emptyCart = {
     id: "31000000-0000-4000-8000-000000000001",
     items: [],
@@ -1183,9 +1184,16 @@ test("removes a named Cart Item and returns the authoritative empty Cart Summary
       async addItems() {
         throw new Error("Cart Item Removal must not add to the Cart");
       },
-      async removeItem(reference, complete) {
+      async removeItem(reference, complete, removalId) {
         removedReferences.push(reference);
-        await complete(emptyCart, {} as never);
+        await complete(emptyCart, {} as never, {
+          cartItemRemovalUndo: {
+            removalId: removalId!,
+            productId: "21000000-0000-4000-8000-000000000014",
+            productName: "Trail One",
+            expiresAt: "2026-09-01T06:30:10.000Z",
+          },
+        });
         return emptyCart;
       },
       async inspect() {
@@ -1195,6 +1203,7 @@ test("removes a named Cart Item and returns the authoritative empty Cart Summary
   });
 
   const response = await postAgentMessage(POST, {
+    idempotencyKey,
     message: "Remove Trail One from my Cart",
   });
 
@@ -1214,6 +1223,12 @@ test("removes a named Cart Item and returns the authoritative empty Cart Summary
     },
     products: [],
     cart: emptyCart,
+    cartItemRemovalUndo: {
+      removalId: idempotencyKey,
+      productId: "21000000-0000-4000-8000-000000000014",
+      productName: "Trail One",
+      expiresAt: "2026-09-01T06:30:10.000Z",
+    },
   });
 });
 

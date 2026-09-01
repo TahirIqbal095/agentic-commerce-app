@@ -19,7 +19,11 @@ import type {
   ProductConstraintKey,
   ShoppingIntent,
 } from "@/modules/agent/intent";
-import type { CartQuantityChange, CartView } from "@/modules/cart/cart";
+import type {
+  CartItemRemovalUndo,
+  CartQuantityChange,
+  CartView,
+} from "@/modules/cart/cart";
 import type { CartControlCommand } from "@/modules/cart/cart-control-command";
 
 type AgentApiResponse = { data: AgentResult } | { error: { message: string } };
@@ -163,6 +167,15 @@ export function ShoppingAssistant({
       customerMessage: `Remove ${item.productName} from my Cart`,
       fallbackMessage: "The Cart Item could not be removed.",
       productId,
+    });
+  }
+
+  async function undoCartItemRemoval(undo: CartItemRemovalUndo) {
+    if (!conversationId || pendingCartCommand) return;
+    await submitCartCommand({
+      command: { type: "UNDO_CART_ITEM_REMOVAL", removalId: undo.removalId },
+      customerMessage: "Undo the recent Cart Item Removal",
+      fallbackMessage: `${undo.productName} could not be restored.`,
     });
   }
 
@@ -338,6 +351,8 @@ export function ShoppingAssistant({
                 cartCommandError={cartCommandError}
                 onDiscoverProducts={() => void sendMessage("Show me Products")}
                 onRemoveCartItem={(productId) => void removeCartItem(productId)}
+                onUndoCartItemRemoval={(undo) =>
+                  void undoCartItemRemoval(undo)}
                 onChangeCartItemQuantity={(productId, change) =>
                   void changeCartItemQuantity(productId, change)}
                 onClearCart={() => void clearCart()}

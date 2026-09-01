@@ -1,27 +1,35 @@
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import { formatMoney } from "@/lib/format-money";
-import type { CartQuantityChange, CartView } from "@/modules/cart/cart";
+import type {
+  CartItemRemovalUndo,
+  CartQuantityChange,
+  CartView,
+} from "@/modules/cart/cart";
 
 export function CartPanel({
   cart,
   current = false,
   onDiscoverProducts,
   onRemove,
+  onUndo,
   onChangeQuantity,
   onClear,
   pendingProductId,
   cartPending = false,
   itemError,
+  undo,
 }: {
   cart: CartView;
   current?: boolean;
   onDiscoverProducts?: () => void;
   onRemove?: (productId: string) => void;
+  onUndo?: (undo: CartItemRemovalUndo) => void;
   onChangeQuantity?: (productId: string, change: CartQuantityChange) => void;
   onClear?: () => void;
   pendingProductId?: string | null;
   cartPending?: boolean;
   itemError?: { productId: string; message: string };
+  undo?: CartItemRemovalUndo;
 }) {
   return (
     <section
@@ -156,6 +164,15 @@ export function CartPanel({
         </div>
       )}
 
+      {current && undo && onUndo ? (
+        <CartItemRemovalUndoAction
+          key={undo.removalId}
+          undo={undo}
+          pending={cartPending || Boolean(pendingProductId)}
+          onUndo={onUndo}
+        />
+      ) : null}
+
       <div className="flex items-center justify-between gap-4 bg-[#eef1eb] px-5 py-4 sm:px-6">
         {current && cart.items.length > 0 && onClear ? (
           <button
@@ -175,6 +192,50 @@ export function CartPanel({
         </div>
       </div>
     </section>
+  );
+}
+
+function CartItemRemovalUndoAction({
+  undo,
+  pending,
+  onUndo,
+}: {
+  undo: CartItemRemovalUndo;
+  pending: boolean;
+  onUndo: (undo: CartItemRemovalUndo) => void;
+}) {
+  const expiresAt = Date.parse(undo.expiresAt);
+  const [remainingMs, setRemainingMs] = useState(() =>
+    Math.max(0, expiresAt - Date.now()),
+  );
+
+  useEffect(() => {
+    const updateRemaining = () => {
+      setRemainingMs(Math.max(0, expiresAt - Date.now()));
+    };
+    updateRemaining();
+    const interval = window.setInterval(updateRemaining, 250);
+    return () => window.clearInterval(interval);
+  }, [expiresAt]);
+
+  if (remainingMs <= 0) return null;
+  const remainingSeconds = Math.max(1, Math.ceil(remainingMs / 1_000));
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#1d2a24]/10 bg-emerald-50/70 px-5 py-3 sm:px-6">
+      <p aria-live="polite" className="text-sm font-medium text-emerald-900">
+        Undo available for {remainingSeconds} {remainingSeconds === 1 ? "second" : "seconds"}.
+      </p>
+      <button
+        type="button"
+        aria-label={`Undo removal of ${undo.productName}`}
+        disabled={pending}
+        onClick={() => onUndo(undo)}
+        className="rounded-full bg-[#1d2a24] px-4 py-2 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-50"
+      >
+        Undo
+      </button>
+    </div>
   );
 }
 

@@ -15,6 +15,7 @@ import {
 import {
   CartError,
   type CartModule,
+  type CartMutationDetails,
   type CartQuantityChange,
   type CartView,
 } from "@/modules/cart/cart";
@@ -30,7 +31,44 @@ type CommandFactory = () => Promise<CommandModules>;
 type CompleteCartCommand = (
   cart: CartView,
   transaction: DbExecutor,
+  details?: CartMutationDetails,
 ) => Promise<void>;
+type FailureAction = "remove" | "restore" | "change" | "clear";
+
+const failureActionLanguage: Record<
+  FailureAction,
+  {
+    progressive: string;
+    imperative: string;
+    namedGoalSuffix: string;
+    genericGoal: string;
+  }
+> = {
+  remove: {
+    progressive: "removing",
+    imperative: "Remove",
+    namedGoalSuffix: "from the Cart",
+    genericGoal: "Remove a Cart Item",
+  },
+  restore: {
+    progressive: "restoring",
+    imperative: "Restore",
+    namedGoalSuffix: "to the Cart",
+    genericGoal: "Restore a removed Cart Item",
+  },
+  change: {
+    progressive: "changing",
+    imperative: "Change",
+    namedGoalSuffix: "quantity",
+    genericGoal: "Change a Cart Item",
+  },
+  clear: {
+    progressive: "clearing",
+    imperative: "Clear",
+    namedGoalSuffix: "from the Cart",
+    genericGoal: "Clear the Cart",
+  },
+};
 
 export function createPostHandler(createModules: CommandFactory) {
   return async function POST(request: Request): Promise<Response> {
@@ -60,19 +98,28 @@ export function createPostHandler(createModules: CommandFactory) {
     try {
       const { cart, conversation } = await createModules();
       const currentCart = await cart.inspect();
-      const item = command.type === "CLEAR_CART"
-        ? undefined
-        : currentCart.items.find(
+      const item = command.type === "REMOVE_CART_ITEM" ||
+          command.type === "CHANGE_CART_ITEM_QUANTITY"
+        ? currentCart.items.find(
             ({ productId }) => productId === command.productId,
-          );
-      const descriptor = describeCommand(command, item?.productName);
+          )
+        : undefined;
+      const descriptor = describeCommand(
+        command,
+        item?.productName,
+        idempotencyKey,
+      );
       const turn = await conversation.startTurn({
         conversationId,
         idempotencyKey,
         message: descriptor.customerMessage,
       });
       if (turn.duplicateOutcome) return dataResponse(turn.duplicateOutcome);
-      if (command.type !== "CLEAR_CART" && !item) {
+      if (
+        (command.type === "REMOVE_CART_ITEM" ||
+          command.type === "CHANGE_CART_ITEM_QUANTITY") &&
+        !item
+      ) {
         const failure = commandFailureOutcome({
           conversationId: turn.conversationId,
           constraints: turn.context!.productConstraints,
@@ -90,8 +137,9 @@ export function createPostHandler(createModules: CommandFactory) {
         const complete = async (
           authoritativeCart: CartView,
           transaction: DbExecutor,
+          details?: CartMutationDetails,
         ) => {
-            const message = descriptor.successMessage(authoritativeCart);
+            const message = descriptor.successMessage(authoritativeCart, details);
             outcome = {
               status: "COMPLETED",
               conversationId: turn.conversationId,
@@ -106,6 +154,9 @@ export function createPostHandler(createModules: CommandFactory) {
               },
               products: [],
               cart: authoritativeCart,
+              ...(details?.cartItemRemovalUndo
+                ? { cartItemRemovalUndo: details.cartItemRemovalUndo }
+                : {}),
             };
             await turn.complete(message, outcome, transaction);
         };
@@ -167,20 +218,21 @@ function commandFailureOutcome({
   productId?: string;
   productName?: string;
   effect: NeedsInputAgentOutcome["intentBrief"]["requestedEffects"][number];
-  action: "remove" | "change" | "clear";
+  action: FailureAction;
 }): NeedsInputAgentOutcome {
+  const language = failureActionLanguage[action];
   return {
     status: "NEEDS_INPUT",
     conversationId,
     message,
     question: productName
-      ? `Would you like to try ${action === "remove" ? "removing" : "changing"} ${productName} again?`
+      ? `Would you like to try ${language.progressive} ${productName} again?`
       : "Would you like to inspect your Cart again?",
     missingInformation: [],
     intentBrief: {
       goal: productName
-        ? `${action === "remove" ? "Remove" : "Change"} ${productName} ${action === "remove" ? "from the Cart" : "quantity"}`
-        : action === "clear" ? "Clear the Cart" : `${action === "remove" ? "Remove" : "Change"} a Cart Item`,
+        ? `${language.imperative} ${productName} ${language.namedGoalSuffix}`
+        : language.genericGoal,
       constraints,
       knownEntities: [],
       missingInformation: [],
@@ -203,6 +255,16 @@ function parseCommand(value: unknown): CartControlCommand | string {
       return "command must identify one Cart Item to remove.";
     }
     return { type: value.type, productId: value.productId };
+  }
+  if (value.type === "UNDO_CART_ITEM_REMOVAL") {
+    if (!(
+      "removalId" in value &&
+      typeof value.removalId === "string" &&
+      isUuid(value.removalId)
+    )) {
+      return "command must identify one Cart Item Removal to undo.";
+    }
+    return { type: value.type, removalId: value.removalId };
   }
   if (value.type === "CHANGE_CART_ITEM_QUANTITY") {
     if (
@@ -231,12 +293,13 @@ function parseCommand(value: unknown): CartControlCommand | string {
 function describeCommand(
   command: CartControlCommand,
   productName?: string,
+  commandTurnId?: string,
 ): {
   effect: NeedsInputAgentOutcome["intentBrief"]["requestedEffects"][number];
-  action: "remove" | "change" | "clear";
+  action: FailureAction;
   customerMessage: string;
   goal: string;
-  successMessage: (cart: CartView) => string;
+  successMessage: (cart: CartView, details?: CartMutationDetails) => string;
   execute: (cart: CartModule, complete: CompleteCartCommand) => Promise<CartView>;
 } {
   switch (command.type) {
@@ -254,7 +317,26 @@ function describeCommand(
           if (!cart.removeItemByProductId) {
             throw new Error("Cart Item Removal is unavailable.");
           }
-          return cart.removeItemByProductId(command.productId, complete);
+          return cart.removeItemByProductId(
+            command.productId,
+            complete,
+            commandTurnId,
+          );
+        },
+      };
+    case "UNDO_CART_ITEM_REMOVAL":
+      return {
+        effect: "RESTORE_CART_ITEM",
+        action: "restore",
+        customerMessage: "Undo the recent Cart Item Removal",
+        goal: "Restore the recently removed Cart Item",
+        successMessage: (_cart, details) =>
+          `Restored ${details?.restoredItem?.productName ?? "the Cart Item"} to your Cart.`,
+        execute(cart, complete) {
+          if (!cart.restoreItemRemoval) {
+            throw new Error("Cart Item Removal Undo is unavailable.");
+          }
+          return cart.restoreItemRemoval(command.removalId, complete);
         },
       };
     case "CLEAR_CART":

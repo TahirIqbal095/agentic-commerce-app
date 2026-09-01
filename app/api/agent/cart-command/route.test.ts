@@ -63,9 +63,16 @@ test("structured Cart Item Removal creates a readable persisted turn with the au
     async addItem() { throw new Error("not used"); },
     async addItems() { throw new Error("not used"); },
     async removeItem() { throw new Error("must remove by stable Product ID"); },
-    async removeItemByProductId(removedProductId, complete) {
+    async removeItemByProductId(removedProductId, complete, removalId) {
       removedProductIds.push(removedProductId);
-      await complete(emptyCart, transaction);
+      await complete(emptyCart, transaction, {
+        cartItemRemovalUndo: {
+          removalId: removalId!,
+          productId,
+          productName: "Road Two",
+          expiresAt: "2026-09-01T06:30:10.000Z",
+        },
+      });
       return emptyCart;
     },
   };
@@ -93,6 +100,206 @@ test("structured Cart Item Removal creates a readable persisted turn with the au
   assert.deepEqual(completedTurns[0].outcome, payload.data);
   assert.equal(payload.data.message, "Removed Road Two from your Cart.");
   assert.deepEqual(payload.data.cart, emptyCart);
+  assert.deepEqual(payload.data.cartItemRemovalUndo, {
+    removalId: "61000000-0000-4000-8000-000000000001",
+    productId,
+    productName: "Road Two",
+    expiresAt: "2026-09-01T06:30:10.000Z",
+  });
+});
+
+test("Undo restores the exact removed Cart Item through its own persisted Conversation Turn", async () => {
+  const removalId = "61000000-0000-4000-8000-000000000001";
+  const restoredCart: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    items: [{
+      productId,
+      productName: "Road Two",
+      quantity: 2,
+      cartPriceMinor: 390000,
+      subtotalMinor: 780000,
+    }],
+    totalQuantity: 2,
+    subtotalMinor: 780000,
+    currency: "INR",
+  };
+  const customerMessages: string[] = [];
+  const completedTurns: AgentOutcome[] = [];
+  const transaction = {} as DbExecutor;
+  const repository: ConversationRepository = {
+    async findDuplicate() { return null; },
+    async create() { throw new Error("not used"); },
+    async findOwnedContext() {
+      return { userId, context: createEmptyConversationContext() };
+    },
+    async saveContextAndMetadata() {},
+    async append(_conversationId, role, content) {
+      if (role === "USER") customerMessages.push(content);
+      return "51000000-0000-4000-8000-000000000002";
+    },
+    async finalizeTurn(_conversationId, _messageId, _message, outcome, executor) {
+      assert.equal(executor, transaction);
+      completedTurns.push(outcome);
+    },
+  };
+  const restoredRemovalIds: string[] = [];
+  const cart: CartModule = {
+    async inspect() {
+      return { ...restoredCart, items: [], totalQuantity: 0, subtotalMinor: 0 };
+    },
+    async addItem() { throw new Error("not used"); },
+    async addItems() { throw new Error("not used"); },
+    async restoreItemRemoval(restoredRemovalId, complete) {
+      restoredRemovalIds.push(restoredRemovalId);
+      await complete(restoredCart, transaction, {
+        restoredItem: { productId, productName: "Road Two" },
+      });
+      return restoredCart;
+    },
+  };
+  const POST = createPostHandler(async () => ({
+    cart,
+    conversation: createConversationModule(userId, repository),
+  }));
+
+  const response = await POST(new Request("http://localhost/api/agent/cart-command", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      conversationId,
+      idempotencyKey: "61000000-0000-4000-8000-000000000002",
+      command: { type: "UNDO_CART_ITEM_REMOVAL", removalId },
+    }),
+  }));
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(restoredRemovalIds, [removalId]);
+  assert.deepEqual(customerMessages, ["Undo the recent Cart Item Removal"]);
+  assert.equal(completedTurns.length, 1);
+  assert.deepEqual(completedTurns[0], payload.data);
+  assert.equal(payload.data.message, "Restored Road Two to your Cart.");
+  assert.deepEqual(payload.data.cart, restoredCart);
+});
+
+test("expired Undo persists the specific reason and leaves the authoritative Cart unchanged", async () => {
+  const emptyCart: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  let completedOutcome: AgentOutcome | undefined;
+  const repository: ConversationRepository = {
+    async findDuplicate() { return null; },
+    async create() { throw new Error("not used"); },
+    async findOwnedContext() {
+      return { userId, context: createEmptyConversationContext() };
+    },
+    async saveContextAndMetadata() {},
+    async append() { return "51000000-0000-4000-8000-000000000003"; },
+    async finalizeTurn(_conversationId, _messageId, _message, outcome) {
+      completedOutcome = outcome;
+    },
+  };
+  const cart: CartModule = {
+    async inspect() { return emptyCart; },
+    async addItem() { throw new Error("not used"); },
+    async addItems() { throw new Error("not used"); },
+    async restoreItemRemoval() {
+      throw new CartError("Undo expired after ten seconds.");
+    },
+  };
+  const POST = createPostHandler(async () => ({
+    cart,
+    conversation: createConversationModule(userId, repository),
+  }));
+
+  const response = await POST(new Request("http://localhost/api/agent/cart-command", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      conversationId,
+      idempotencyKey: "61000000-0000-4000-8000-000000000003",
+      command: {
+        type: "UNDO_CART_ITEM_REMOVAL",
+        removalId: "61000000-0000-4000-8000-000000000001",
+      },
+    }),
+  }));
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(completedOutcome, payload.data);
+  assert.equal(payload.data.status, "NEEDS_INPUT");
+  assert.equal(payload.data.message, "Undo expired after ten seconds.");
+  assert.deepEqual(payload.data.cart, emptyCart);
+});
+
+test("retrying a completed Undo returns its persisted result without restoring twice", async () => {
+  const duplicateOutcome: AgentOutcome = {
+    status: "COMPLETED",
+    conversationId,
+    message: "Restored Road Two to your Cart.",
+    intentBrief: {
+      goal: "Restore the recently removed Cart Item",
+      constraints: createEmptyConversationContext().productConstraints,
+      knownEntities: [],
+      missingInformation: [],
+      confidence: 1,
+      requestedEffects: ["RESTORE_CART_ITEM"],
+    },
+    products: [],
+    cart: {
+      id: "31000000-0000-4000-8000-000000000001",
+      items: [{
+        productId,
+        productName: "Road Two",
+        quantity: 2,
+        cartPriceMinor: 390000,
+        subtotalMinor: 780000,
+      }],
+      totalQuantity: 2,
+      subtotalMinor: 780000,
+      currency: "INR",
+    },
+  };
+  const repository: ConversationRepository = {
+    async findDuplicate() { return duplicateOutcome; },
+    async create() { throw new Error("must replay"); },
+    async findOwnedContext() {
+      return { userId, context: createEmptyConversationContext() };
+    },
+    async saveContextAndMetadata() { throw new Error("must replay"); },
+    async append() { throw new Error("must replay"); },
+  };
+  const cart: CartModule = {
+    async inspect() { return duplicateOutcome.cart!; },
+    async addItem() { throw new Error("not used"); },
+    async addItems() { throw new Error("not used"); },
+    async restoreItemRemoval() { throw new Error("must not restore twice"); },
+  };
+  const POST = createPostHandler(async () => ({
+    cart,
+    conversation: createConversationModule(userId, repository),
+  }));
+
+  const response = await POST(new Request("http://localhost/api/agent/cart-command", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      conversationId,
+      idempotencyKey: "61000000-0000-4000-8000-000000000004",
+      command: {
+        type: "UNDO_CART_ITEM_REMOVAL",
+        removalId: "61000000-0000-4000-8000-000000000001",
+      },
+    }),
+  }));
+
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).data, duplicateOutcome);
 });
 
 test("structured relative quantity change persists the latest authoritative Cart result", async () => {

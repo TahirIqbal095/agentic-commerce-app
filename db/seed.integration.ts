@@ -1054,6 +1054,100 @@ test("structured Cart Item Removal targets the stable Product ID", async () => {
   assert.equal(removed.subtotalMinor, 0);
 });
 
+test("Undo restores the removed Product with its exact prior quantity and Cart Price", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 2, async () => {});
+  const removalId = crypto.randomUUID();
+  let offeredUndo:
+    | { removalId: string; productId: string; productName: string; expiresAt: string }
+    | undefined;
+
+  await cart.removeItemByProductId!(
+    product.id,
+    async (_removedCart, _transaction, details) => {
+      offeredUndo = details?.cartItemRemovalUndo;
+    },
+    removalId,
+  );
+  await db
+    .update(products)
+    .set({ priceMinor: product.priceMinor + 50_000 })
+    .where(eq(products.id, product.id));
+  const restored = await cart.restoreItemRemoval!(removalId, async () => {});
+
+  assert.equal(offeredUndo?.removalId, removalId);
+  assert.equal(offeredUndo?.productId, product.id);
+  assert.equal(offeredUndo?.productName, product.name);
+  assert.ok(Date.parse(offeredUndo?.expiresAt ?? "") > Date.now());
+  assert.equal(restored.items[0].productId, product.id);
+  assert.equal(restored.items[0].quantity, 2);
+  assert.equal(restored.items[0].cartPriceMinor, product.priceMinor);
+  assert.equal(restored.items[0].subtotalMinor, product.priceMinor * 2);
+});
+
+test("Undo expires ten seconds after Cart Item Removal without changing the Cart", async () => {
+  const { cart: setupCart, product } = await prepareCart();
+  await setupCart.addItem(product, 1, async () => {});
+  let currentTime = new Date("2026-09-01T06:30:00.000Z");
+  const cart = createCartModule(DEMO_CUSTOMER_ID, "INR", () => currentTime);
+  const removalId = crypto.randomUUID();
+  await cart.removeItemByProductId!(
+    product.id,
+    async () => {},
+    removalId,
+  );
+
+  currentTime = new Date("2026-09-01T06:30:10.000Z");
+
+  await assert.rejects(
+    cart.restoreItemRemoval!(removalId, async () => {}),
+    /Undo expired after ten seconds\./,
+  );
+  assert.deepEqual((await cart.inspect()).items, []);
+});
+
+test("Undo leaves the Cart unchanged when the removed Product is no longer available", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 1, async () => {});
+  const removalId = crypto.randomUUID();
+  await cart.removeItemByProductId!(
+    product.id,
+    async () => {},
+    removalId,
+  );
+  await db
+    .update(products)
+    .set({ active: false })
+    .where(eq(products.id, product.id));
+
+  await assert.rejects(
+    cart.restoreItemRemoval!(removalId, async () => {}),
+    new RegExp(`${product.name} is no longer available\\.`),
+  );
+  assert.deepEqual((await cart.inspect()).items, []);
+});
+
+test("Undo leaves the Cart unchanged when stock no longer covers the removed quantity", async () => {
+  const { cart, product } = await prepareCart();
+  await cart.addItem(product, 2, async () => {});
+  const removalId = crypto.randomUUID();
+  await cart.removeItemByProductId!(
+    product.id,
+    async () => {},
+    removalId,
+  );
+  await db
+    .update(products)
+    .set({ stock: 1 })
+    .where(eq(products.id, product.id));
+
+  await assert.rejects(
+    cart.restoreItemRemoval!(removalId, async () => {}),
+    new RegExp(`${product.name} only has 1 unit in stock\\.`),
+  );
+  assert.deepEqual((await cart.inspect()).items, []);
+});
+
 test("Cart Item Removal rolls back when Conversation Turn completion fails", async () => {
   const { cart, product } = await prepareCart();
   await cart.addItem(product, 1, async () => {});

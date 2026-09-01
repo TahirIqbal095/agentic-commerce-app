@@ -16,6 +16,8 @@ export function minimizeIntentBrief(intentBrief: IntentBrief): IntentBrief {
       ? "Inspect Cart"
       : intentBrief.requestedEffects.includes("CLEAR_CART")
         ? "Change Cart"
+        : intentBrief.requestedEffects.includes("RESTORE_CART_ITEM")
+          ? "Change Cart"
         : intentBrief.requestedEffects.includes("REMOVE_FROM_CART")
         ? "Change Cart"
         : intentBrief.requestedEffects.includes("CHANGE_CART_QUANTITY")

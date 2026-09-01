@@ -1158,6 +1158,126 @@ test("activating Remove disables the affected Cart Item and sends a structured d
   });
 });
 
+test("after transcript reload the current Cart Item Removal offers accessible Undo through a structured command", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+  const conversationId = "41000000-0000-4000-8000-000000000001";
+  const removalId = "61000000-0000-4000-8000-000000000001";
+  const productId = "21000000-0000-4000-8000-000000000001";
+  const constraints = createEmptyConversationContext().productConstraints;
+  let requestedBody: Record<string, unknown> | undefined;
+  globalThis.fetch = async (_input, init) => {
+    requestedBody = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ data: {
+      status: "COMPLETED",
+      conversationId,
+      message: "Restored Road Two to your Cart.",
+      intentBrief: {
+        goal: "Restore the recently removed Cart Item",
+        constraints,
+        knownEntities: [],
+        missingInformation: [],
+        confidence: 1,
+        requestedEffects: ["RESTORE_CART_ITEM"],
+      },
+      products: [],
+      cart: {
+        id: "31000000-0000-4000-8000-000000000001",
+        items: [{
+          productId,
+          productName: "Road Two",
+          quantity: 2,
+          cartPriceMinor: 390000,
+          subtotalMinor: 780000,
+        }],
+        totalQuantity: 2,
+        subtotalMinor: 780000,
+        currency: "INR",
+      },
+    } }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const [{ render, cleanup, within }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(React.createElement(ShoppingAssistant, {
+    brandName: "Arc",
+    initialConversation: {
+      conversationId,
+      transcript: [{
+        id: "51000000-0000-4000-8000-000000000001",
+        customerMessage: "Remove Road Two from my Cart",
+        result: {
+          status: "COMPLETED",
+          conversationId,
+          message: "Removed Road Two from your Cart.",
+          intentBrief: {
+            goal: "Remove Road Two from the Cart",
+            constraints,
+            knownEntities: [],
+            missingInformation: [],
+            confidence: 1,
+            requestedEffects: ["REMOVE_FROM_CART"],
+          },
+          products: [],
+          cart: {
+            id: "31000000-0000-4000-8000-000000000001",
+            items: [],
+            totalQuantity: 0,
+            subtotalMinor: 0,
+            currency: "INR",
+          },
+          cartItemRemovalUndo: {
+            removalId,
+            productId,
+            productName: "Road Two",
+            expiresAt: new Date(Date.now() + 10_000).toISOString(),
+          },
+        },
+        error: null,
+      }],
+      contextSummary: constraints,
+      revision: 0,
+    },
+  }));
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  const undo = view.getByRole("button", { name: "Undo removal of Road Two" });
+  assert.ok(view.getByText(/Undo available for 10 seconds/));
+  await user.click(undo);
+
+  assert.match(String(requestedBody?.idempotencyKey), /^[0-9a-f-]{36}$/);
+  assert.deepEqual({ ...requestedBody, idempotencyKey: undefined }, {
+    conversationId,
+    idempotencyKey: undefined,
+    command: { type: "UNDO_CART_ITEM_REMOVAL", removalId },
+  });
+  assert.ok(await view.findByText("Restored Road Two to your Cart."));
+  assert.equal(view.queryByRole("button", { name: "Undo removal of Road Two" }), null);
+  const summaries = view.getAllByRole("region", { name: "Your Cart" });
+  assert.ok(within(summaries[0]).getByText("Historical Cart Summary"));
+  assert.ok(within(summaries[1]).getByText("Current Cart Summary"));
+});
+
 test("removing the final Cart Item shows the authoritative empty Cart and a Product discovery route", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",

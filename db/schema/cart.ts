@@ -4,6 +4,7 @@ import {
   index,
   integer,
   pgTable,
+  timestamp,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
@@ -61,6 +62,35 @@ export const cartItems = pgTable(
     ),
     check(
       "cart_items_snapshot_nonnegative",
+      sql`${table.unitPriceSnapshotMinor} >= 0`,
+    ),
+  ],
+);
+
+export const cartItemRemovals = pgTable(
+  "cart_item_removals",
+  {
+    id: uuid("id").primaryKey(),
+    cartId: uuid("cart_id")
+      .notNull()
+      .references(() => carts.id, { onDelete: "cascade" }),
+    productId: uuid("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "restrict" }),
+    quantity: integer("quantity").notNull(),
+    unitPriceSnapshotMinor: money("unit_price_snapshot_minor"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    restoredAt: timestamp("restored_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    index("cart_item_removals_cart_idx").on(table.cartId),
+    check(
+      "cart_item_removals_quantity_range",
+      sql`${table.quantity} between 1 and 10`,
+    ),
+    check(
+      "cart_item_removals_snapshot_nonnegative",
       sql`${table.unitPriceSnapshotMinor} >= 0`,
     ),
   ],

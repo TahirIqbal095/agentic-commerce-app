@@ -1,5 +1,5 @@
 import type { CatalogProduct } from "../catalog/types";
-import type { CartView } from "../cart/cart";
+import type { CartItemRemovalUndo, CartView } from "../cart/cart";
 import type { IntentBrief, ShoppingIntent } from "./intent";
 
 export type CompletedAgentOutcome = {
@@ -10,6 +10,7 @@ export type CompletedAgentOutcome = {
   products: CatalogProduct[];
   intent?: never;
   cart?: CartView;
+  cartItemRemovalUndo?: CartItemRemovalUndo;
 };
 
 export type NeedsInputAgentOutcome = {

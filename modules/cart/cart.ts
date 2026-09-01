@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import type { DbExecutor } from "@/db";
-import { cartItems, carts } from "@/db/schema/cart";
+import { cartItemRemovals, cartItems, carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
 import { approvals, checkoutProposals } from "@/db/schema/checkout";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
@@ -51,6 +51,18 @@ export type CartQuantityChange = {
   quantity: number;
 };
 
+export type CartItemRemovalUndo = {
+  removalId: string;
+  productId: string;
+  productName: string;
+  expiresAt: string;
+};
+
+export type CartMutationDetails = {
+  cartItemRemovalUndo?: CartItemRemovalUndo;
+  restoredItem?: { productId: string; productName: string };
+};
+
 export type CartMutation =
   | { type: "ADD"; product: CatalogProduct; quantity: number }
   | { type: "REMOVE"; reference: string }
@@ -74,11 +86,29 @@ export interface CartModule {
   ): Promise<CartView>;
   removeItem?(
     reference: string,
-    complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
+    complete: (
+      cart: CartView,
+      transaction: DbExecutor,
+      details?: CartMutationDetails,
+    ) => Promise<void>,
+    undoRemovalId?: string,
   ): Promise<CartView>;
   removeItemByProductId?(
     productId: string,
-    complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
+    complete: (
+      cart: CartView,
+      transaction: DbExecutor,
+      details?: CartMutationDetails,
+    ) => Promise<void>,
+    undoRemovalId?: string,
+  ): Promise<CartView>;
+  restoreItemRemoval?(
+    removalId: string,
+    complete: (
+      cart: CartView,
+      transaction: DbExecutor,
+      details?: CartMutationDetails,
+    ) => Promise<void>,
   ): Promise<CartView>;
   changeItemQuantity?(
     reference: string | undefined,
@@ -102,6 +132,7 @@ export class CartError extends Error {
 export function createCartModule(
   userId: string,
   defaultCurrency = "INR",
+  now: () => Date = () => new Date(),
 ): CartModule {
   const addItems: CartModule["addItems"] = async (
     additions,
@@ -253,7 +284,12 @@ export function createCartModule(
 
   const removeMatchingItem = async (
     target: { reference: string } | { productId: string },
-    complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
+    complete: (
+      cart: CartView,
+      transaction: DbExecutor,
+      details?: CartMutationDetails,
+    ) => Promise<void>,
+    undoRemovalId?: string,
   ): Promise<CartView> => {
     const normalizedReference = "reference" in target
       ? target.reference.trim().toLocaleLowerCase()
@@ -274,7 +310,12 @@ export function createCartModule(
       if (!activeCart) throw new CartError("Your Cart is empty.");
 
       const candidates = await transaction
-        .select({ productId: cartItems.productId, productName: products.name })
+        .select({
+          productId: cartItems.productId,
+          productName: products.name,
+          quantity: cartItems.quantity,
+          cartPriceMinor: cartItems.unitPriceSnapshotMinor,
+        })
         .from(cartItems)
         .innerJoin(products, eq(products.id, cartItems.productId))
         .where(eq(cartItems.cartId, activeCart.id));
@@ -299,12 +340,25 @@ export function createCartModule(
         );
       }
 
+      const removedItem = matches[0];
+      const expiresAt = new Date(now().getTime() + 10_000);
+      if (undoRemovalId) {
+        await transaction.insert(cartItemRemovals).values({
+          id: undoRemovalId,
+          cartId: activeCart.id,
+          productId: removedItem.productId,
+          quantity: removedItem.quantity,
+          unitPriceSnapshotMinor: removedItem.cartPriceMinor,
+          expiresAt,
+        });
+      }
+
       await transaction
         .delete(cartItems)
         .where(
           and(
             eq(cartItems.cartId, activeCart.id),
-            eq(cartItems.productId, matches[0].productId),
+            eq(cartItems.productId, removedItem.productId),
           ),
         );
       await transaction
@@ -313,7 +367,18 @@ export function createCartModule(
         .where(eq(carts.id, activeCart.id));
       await invalidateCheckoutState(transaction, activeCart.id);
       const cart = await readCart(transaction, activeCart);
-      await complete(cart, transaction);
+      if (undoRemovalId) {
+        await complete(cart, transaction, {
+          cartItemRemovalUndo: {
+            removalId: undoRemovalId,
+            productId: removedItem.productId,
+            productName: removedItem.productName,
+            expiresAt: expiresAt.toISOString(),
+          },
+        });
+      } else {
+        await complete(cart, transaction);
+      }
       return cart;
     });
   };
@@ -659,11 +724,110 @@ export function createCartModule(
         return cart;
       });
     },
-    async removeItem(reference, complete) {
-      return removeMatchingItem({ reference }, complete);
+    async removeItem(reference, complete, undoRemovalId) {
+      return removeMatchingItem({ reference }, complete, undoRemovalId);
     },
-    async removeItemByProductId(productId, complete) {
-      return removeMatchingItem({ productId }, complete);
+    async removeItemByProductId(productId, complete, undoRemovalId) {
+      return removeMatchingItem({ productId }, complete, undoRemovalId);
+    },
+    async restoreItemRemoval(removalId, complete) {
+      return db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${userId}))`,
+        );
+        const [removal] = await transaction
+          .select({
+            cartId: cartItemRemovals.cartId,
+            productId: cartItemRemovals.productId,
+            productName: products.name,
+            quantity: cartItemRemovals.quantity,
+            cartPriceMinor: cartItemRemovals.unitPriceSnapshotMinor,
+            expiresAt: cartItemRemovals.expiresAt,
+            restoredAt: cartItemRemovals.restoredAt,
+            cartCurrency: carts.currency,
+            cartStatus: carts.status,
+            productCurrency: products.currency,
+            stock: products.stock,
+            active: products.active,
+          })
+          .from(cartItemRemovals)
+          .innerJoin(carts, eq(carts.id, cartItemRemovals.cartId))
+          .innerJoin(products, eq(products.id, cartItemRemovals.productId))
+          .where(
+            and(
+              eq(cartItemRemovals.id, removalId),
+              eq(carts.userId, userId),
+            ),
+          )
+          .limit(1);
+        if (!removal) {
+          throw new CartError("That Cart Item Removal is unavailable.");
+        }
+        if (removal.restoredAt) {
+          throw new CartError("That Cart Item Removal has already been undone.");
+        }
+        if (removal.expiresAt.getTime() <= now().getTime()) {
+          throw new CartError("Undo expired after ten seconds.");
+        }
+        if (removal.cartStatus !== "ACTIVE") {
+          throw new CartError("That Cart is no longer active.");
+        }
+        if (!removal.active) {
+          throw new CartError(`${removal.productName} is no longer available.`);
+        }
+        if (removal.productCurrency !== removal.cartCurrency) {
+          throw new CartError(
+            `${removal.productName} no longer uses the Cart currency.`,
+          );
+        }
+        if (removal.stock < removal.quantity) {
+          throw new CartError(
+            `${removal.productName} only has ${removal.stock} ${removal.stock === 1 ? "unit" : "units"} in stock.`,
+          );
+        }
+        const [existingItem] = await transaction
+          .select({ id: cartItems.id })
+          .from(cartItems)
+          .where(
+            and(
+              eq(cartItems.cartId, removal.cartId),
+              eq(cartItems.productId, removal.productId),
+            ),
+          )
+          .limit(1);
+        if (existingItem) {
+          throw new CartError(
+            `${removal.productName} is already in your Cart.`,
+          );
+        }
+
+        await transaction.insert(cartItems).values({
+          cartId: removal.cartId,
+          productId: removal.productId,
+          quantity: removal.quantity,
+          unitPriceSnapshotMinor: removal.cartPriceMinor,
+        });
+        await transaction
+          .update(cartItemRemovals)
+          .set({ restoredAt: now() })
+          .where(eq(cartItemRemovals.id, removalId));
+        await transaction
+          .update(carts)
+          .set({ version: sql`${carts.version} + 1`, updatedAt: now() })
+          .where(eq(carts.id, removal.cartId));
+        await invalidateCheckoutState(transaction, removal.cartId);
+        const cart = await readCart(transaction, {
+          id: removal.cartId,
+          currency: removal.cartCurrency,
+        });
+        await complete(cart, transaction, {
+          restoredItem: {
+            productId: removal.productId,
+            productName: removal.productName,
+          },
+        });
+        return cart;
+      });
     },
     async changeItemQuantity(reference, change, complete) {
       const normalizedReference = reference?.trim().toLocaleLowerCase();
