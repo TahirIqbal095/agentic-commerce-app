@@ -8,6 +8,7 @@ import { DELETE as deleteConversation } from "@/app/api/agent/conversation/route
 import { db } from "@/db";
 import { conversations, messages } from "@/db/schema/agent";
 import { recommendationEvents } from "@/db/schema/analytics";
+import { auditEvents } from "@/db/schema/audit";
 import { cartItems, carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
 import { brands, guestSessions } from "@/db/schema/identity";
@@ -372,6 +373,42 @@ test("cleanup can be retried after expired Guest Sessions are removed", async ()
   assert.deepEqual(firstResult, { deletedGuestSessions: 1 });
   assert.deepEqual(retryResult, { deletedGuestSessions: 0 });
   assert.deepEqual(await db.select().from(guestSessions), []);
+});
+
+test("cleanup preserves an immutable Audit Event without retaining its expired Guest Session", async () => {
+  const expiredGuestSessionId = "13000000-0000-4000-8000-000000000005";
+  const auditEventId = "61000000-0000-4000-8000-000000000001";
+  await db.delete(auditEvents).where(eq(auditEvents.id, auditEventId));
+  await db.delete(guestSessions);
+  await db.insert(guestSessions).values({
+    id: expiredGuestSessionId,
+    tokenHash: "d".repeat(64),
+    expiresAt: new Date("2026-09-01T00:00:00.000Z"),
+  });
+  await db.insert(auditEvents).values({
+    id: auditEventId,
+    guestSessionId: expiredGuestSessionId,
+    entityType: "Guest Session",
+    entityId: expiredGuestSessionId,
+    actorType: "SYSTEM",
+    eventType: "GUEST_SESSION_ACTIVITY_RECORDED",
+    message: "Protected historical fact",
+  });
+
+  const result = await cleanupExpiredGuestSessions(
+    db,
+    new Date("2026-09-01T00:00:00.000Z"),
+  );
+
+  assert.deepEqual(result, { deletedGuestSessions: 1 });
+  assert.deepEqual(await db.select().from(guestSessions), []);
+  assert.deepEqual(
+    await db
+      .select({ id: auditEvents.id, guestSessionId: auditEvents.guestSessionId })
+      .from(auditEvents)
+      .where(eq(auditEvents.id, auditEventId)),
+    [{ id: auditEventId, guestSessionId: expiredGuestSessionId }],
+  );
 });
 
 test("database rejects a Product priced outside INR", async () => {

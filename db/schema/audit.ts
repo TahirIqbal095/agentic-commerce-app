@@ -1,17 +1,13 @@
 import { index, jsonb, pgTable, text, uuid, varchar } from "drizzle-orm/pg-core";
 import { createdAt, id } from "./columns";
 import { actorTypeEnum } from "./enums";
-import { guestSessions } from "./identity";
 import type { JsonObject } from "./types";
 
 export const auditEvents = pgTable(
   "audit_events",
   {
     id: id(),
-    guestSessionId: uuid("guest_session_id").references(
-      () => guestSessions.id,
-      { onDelete: "restrict" },
-    ),
+    guestSessionId: uuid("guest_session_id"),
     sessionId: varchar("session_id", { length: 200 }),
     entityType: varchar("entity_type", { length: 120 }).notNull(),
     entityId: varchar("entity_id", { length: 240 }).notNull(),
