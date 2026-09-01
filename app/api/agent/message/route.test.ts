@@ -2457,7 +2457,17 @@ test("rejects legacy Customer identity fields before creating an agent", async (
     throw new Error("The agent should not be created");
   });
 
-  for (const field of ["userId", "customerId", "adminId"] as const) {
+  for (const field of [
+    "userId",
+    "customerId",
+    "adminId",
+    "user_id",
+    "customer_id",
+    "admin_id",
+    "userIdentifier",
+    "customerIdentifier",
+    "adminIdentifier",
+  ] as const) {
     const response = await POST(
       new Request("http://localhost/api/agent/message", {
         method: "POST",
