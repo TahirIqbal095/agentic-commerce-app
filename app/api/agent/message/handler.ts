@@ -42,6 +42,20 @@ export function createPostHandler(createAgent: AgentFactory) {
       );
     }
 
+    const identityField = ["userId", "customerId", "adminId"].find(
+      (field) => field in body,
+    );
+    if (identityField) {
+      return errorResponse(
+        {
+          code: "INVALID_IDENTITY_FIELD",
+          message: "Customer identity comes from the Guest Session.",
+          details: { field: identityField },
+        },
+        400,
+      );
+    }
+
     const conversationId =
       "conversationId" in body ? body.conversationId : undefined;
     if (

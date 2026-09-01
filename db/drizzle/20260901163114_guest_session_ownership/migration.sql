@@ -20,8 +20,8 @@ ALTER TABLE "conversations" DROP COLUMN "user_id";--> statement-breakpoint
 ALTER TABLE "recommendation_events" DROP COLUMN "user_id";--> statement-breakpoint
 ALTER TABLE "recommendation_events" DROP COLUMN "reason";--> statement-breakpoint
 ALTER TABLE "audit_events" DROP COLUMN "user_id";--> statement-breakpoint
-ALTER TABLE "carts" DROP COLUMN "user_id";--> statement-breakpoint
 DROP INDEX "carts_one_active_per_customer";--> statement-breakpoint
+ALTER TABLE "carts" DROP COLUMN "user_id";--> statement-breakpoint
 CREATE UNIQUE INDEX "carts_one_active_per_customer" ON "carts" ("guest_session_id") WHERE "status" = 'ACTIVE';--> statement-breakpoint
 CREATE INDEX "conversations_guest_session_idx" ON "conversations" ("guest_session_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "conversations_one_current_per_guest_session_unique" ON "conversations" ("guest_session_id") WHERE "closed_at" is null;--> statement-breakpoint

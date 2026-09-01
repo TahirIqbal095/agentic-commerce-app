@@ -1393,7 +1393,7 @@ test("persists the Intent Brief and Agent Outcome as inspectable turn metadata",
     async create() {
       return {
         conversationId,
-        userMessageId: "51000000-0000-4000-8000-000000000001",
+        customerMessageId: "51000000-0000-4000-8000-000000000001",
         context: createEmptyConversationContext(),
       };
     },
@@ -1493,7 +1493,7 @@ test("redacts sensitive Customer text before durable Transcript persistence", as
       persistedMessages.push(message);
       return {
         conversationId,
-        userMessageId: "51000000-0000-4000-8000-000000000001",
+        customerMessageId: "51000000-0000-4000-8000-000000000001",
         context: createEmptyConversationContext(),
       };
     },
@@ -1505,7 +1505,7 @@ test("redacts sensitive Customer text before durable Transcript persistence", as
     },
     async saveContextAndMetadata() {},
     async append(_conversationId, role, content) {
-      if (role === "USER") persistedMessages.push(content);
+      if (role === "CUSTOMER") persistedMessages.push(content);
       return "51000000-0000-4000-8000-000000000002";
     },
   };
@@ -1560,7 +1560,7 @@ test("excludes credentials and unnecessary personal data from persisted intent a
     async create() {
       return {
         conversationId,
-        userMessageId: "51000000-0000-4000-8000-000000000001",
+        customerMessageId: "51000000-0000-4000-8000-000000000001",
         context: createEmptyConversationContext(),
       };
     },

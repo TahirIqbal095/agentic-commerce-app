@@ -85,7 +85,7 @@ export function createConversationModule(
      * Starts a new Agent turn or restores the result of a duplicate request.
      *
      * For a continuing Conversation, ownership is verified before the redacted
-     * USER message is appended. For a first turn, an open Conversation is
+     * Customer message is appended. For a first turn, an open Conversation is
      * created or reused. The returned turn exposes the persistence operations
      * used while the Commerce Agent processes the Customer message.
      *
@@ -107,7 +107,7 @@ export function createConversationModule(
       }
 
       let conversationId: string;
-      let userMessageId: string;
+      let customerMessageId: string;
       let context: ConversationContext;
       if (input.conversationId) {
         const persisted = await repository.findOwnedContext(
@@ -122,9 +122,9 @@ export function createConversationModule(
         conversationId = input.conversationId;
         context = parseConversationContext(persisted.context);
         try {
-          userMessageId = await repository.append(
+          customerMessageId = await repository.append(
             conversationId,
-            "USER",
+            "CUSTOMER",
             redactSensitiveText(input.message),
             {},
             input.idempotencyKey,
@@ -140,7 +140,7 @@ export function createConversationModule(
         }
       } else {
         try {
-          ({ conversationId, userMessageId, context } = await repository.create(
+          ({ conversationId, customerMessageId, context } = await repository.create(
             owner,
             redactSensitiveText(input.message),
             input.idempotencyKey,
@@ -189,7 +189,7 @@ export function createConversationModule(
           return repository.saveContextAndMetadata(
             conversationId,
             nextContext,
-            userMessageId,
+            customerMessageId,
             sanitizeRecord({
               intentBrief: minimizeIntentBrief(intentBrief),
             }),
@@ -229,7 +229,7 @@ export function createConversationModule(
           if (repository.finalizeTurn) {
             await repository.finalizeTurn(
               conversationId,
-              userMessageId,
+              customerMessageId,
               message,
               outcome,
               executor,

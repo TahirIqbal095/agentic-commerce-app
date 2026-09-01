@@ -232,7 +232,7 @@ function createInMemoryConversationRepository(): ConversationRepository {
       persistedContext = emptyConversationContext();
       return {
         conversationId,
-        userMessageId: "51000000-0000-4000-8000-000000000001",
+        customerMessageId: "51000000-0000-4000-8000-000000000001",
         context: persistedContext,
       };
     },
@@ -466,16 +466,16 @@ test("does not duplicate a multi-Product addition when a Conversation Turn is de
   let storedOutcome: AgentOutcome | null = null;
   let analyses = 0;
   let additions = 0;
-  let userMessages = 0;
+  let customerMessages = 0;
   const repository: ConversationRepository = {
     async findDuplicate(_owner, _conversationId, key) {
       return key === idempotencyKey ? storedOutcome : null;
     },
     async create() {
-      userMessages += 1;
+      customerMessages += 1;
       return {
         conversationId,
-        userMessageId: "51000000-0000-4000-8000-000000000001",
+        customerMessageId: "51000000-0000-4000-8000-000000000001",
         context,
       };
     },
@@ -484,7 +484,7 @@ test("does not duplicate a multi-Product addition when a Conversation Turn is de
     },
     async saveContextAndMetadata() {},
     async append() {
-      userMessages += 1;
+      customerMessages += 1;
       return "51000000-0000-4000-8000-000000000002";
     },
     async finalizeTurn(_conversationId, _messageId, _message, outcome) {
@@ -547,7 +547,7 @@ test("does not duplicate a multi-Product addition when a Conversation Turn is de
   assert.deepEqual(await second.json(), await first.json());
   assert.equal(additions, 1);
   assert.equal(analyses, 1);
-  assert.equal(userMessages, 1);
+  assert.equal(customerMessages, 1);
 });
 
 test("retains every addition from distinct concurrent multi-Product turns", async () => {
@@ -1158,7 +1158,7 @@ test("adds different quantities of multiple identified Products in one Conversat
       async create() {
         return {
           conversationId,
-          userMessageId: "51000000-0000-4000-8000-000000000021",
+          customerMessageId: "51000000-0000-4000-8000-000000000021",
           context,
         };
       },
@@ -1321,7 +1321,7 @@ test("returns the unchanged Cart when any Product in a multi-Product addition fa
       async create() {
         return {
           conversationId,
-          userMessageId: "51000000-0000-4000-8000-000000000031",
+          customerMessageId: "51000000-0000-4000-8000-000000000031",
           context,
         };
       },
@@ -1394,7 +1394,7 @@ test("rolls back a Cart addition when its successful Conversation outcome cannot
       async create() {
         return {
           conversationId,
-          userMessageId: "51000000-0000-4000-8000-000000000019",
+          customerMessageId: "51000000-0000-4000-8000-000000000019",
           context,
         };
       },
@@ -1494,7 +1494,7 @@ test("adds an explicit positive whole-unit quantity", async () => {
       async create() {
         return {
           conversationId,
-          userMessageId: "51000000-0000-4000-8000-000000000013",
+          customerMessageId: "51000000-0000-4000-8000-000000000013",
           context,
         };
       },
@@ -1585,7 +1585,7 @@ test("asks for a positive whole-unit quantity and leaves the Cart unchanged", as
       async create() {
         return {
           conversationId,
-          userMessageId: "51000000-0000-4000-8000-000000000015",
+          customerMessageId: "51000000-0000-4000-8000-000000000015",
           context,
         };
       },
@@ -1741,7 +1741,7 @@ test("returns a correctable Cart rule failure with the unchanged Cart", async ()
       async create() {
         return {
           conversationId,
-          userMessageId: "51000000-0000-4000-8000-000000000017",
+          customerMessageId: "51000000-0000-4000-8000-000000000017",
           context,
         };
       },
@@ -2173,7 +2173,7 @@ test("reinterprets once when a concurrent turn changes Conversation Context", as
     async create() {
       return {
         conversationId,
-        userMessageId: "51000000-0000-4000-8000-000000000001",
+        customerMessageId: "51000000-0000-4000-8000-000000000001",
         context: initialContext,
       };
     },
@@ -2255,7 +2255,7 @@ test("returns a retryable response after a second Conversation Context conflict"
     async create() {
       return {
         conversationId,
-        userMessageId: "51000000-0000-4000-8000-000000000001",
+        customerMessageId: "51000000-0000-4000-8000-000000000001",
         context: persistedContext,
       };
     },
@@ -2323,7 +2323,7 @@ test("returns a retryable response after a second Conversation Context conflict"
   assert.equal(discoveryStarted, false);
 });
 
-test("accepts a user prompt without exposing client Brand selection to the agent", async () => {
+test("accepts a Customer prompt without exposing client Brand selection to the agent", async () => {
   const messages: string[] = [];
   const agent: CommerceAgent = {
     async respond(input) {
@@ -2398,7 +2398,7 @@ test("accepts a user prompt without exposing client Brand selection to the agent
   });
 });
 
-test("rejects an empty user prompt before creating an agent", async () => {
+test("rejects an empty Customer prompt before creating an agent", async () => {
   let agentCreated = false;
   const POST = createPostHandler(async () => {
     agentCreated = true;
@@ -2448,6 +2448,38 @@ test("requires a client-generated Conversation Turn idempotency key", async () =
       details: { field: "idempotencyKey" },
     },
   });
+});
+
+test("rejects legacy Customer identity fields before creating an agent", async () => {
+  let agentCreated = false;
+  const POST = createPostHandler(async () => {
+    agentCreated = true;
+    throw new Error("The agent should not be created");
+  });
+
+  for (const field of ["userId", "customerId", "adminId"] as const) {
+    const response = await POST(
+      new Request("http://localhost/api/agent/message", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          idempotencyKey: crypto.randomUUID(),
+          message: "show me shoes",
+          [field]: crypto.randomUUID(),
+        }),
+      }),
+    );
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), {
+      error: {
+        code: "INVALID_IDENTITY_FIELD",
+        message: "Customer identity comes from the Guest Session.",
+        details: { field },
+      },
+    });
+  }
+  assert.equal(agentCreated, false);
 });
 
 test("passes a conversation identifier to the Commerce Agent", async () => {

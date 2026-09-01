@@ -73,7 +73,7 @@ const shoppingIntentSchema = jsonSchema<CommerceIntent>(
             type: ["integer", "null"],
             minimum: 0,
             description:
-              "Inclusive maximum price in paise, or null. A bare user amount such as 2000 means ₹2,000 INR and therefore 200000 paise.",
+              "Inclusive maximum price in paise, or null. A bare Customer amount such as 2000 means ₹2,000 INR and therefore 200000 paise.",
           },
           size: {
             type: ["string", "null"],

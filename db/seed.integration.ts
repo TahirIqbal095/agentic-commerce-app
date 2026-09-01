@@ -345,6 +345,57 @@ test("recommendation analytics are pseudonymous and expose no personal-informati
   assert.equal(columns.includes("name"), false);
 });
 
+test("database exposes no authenticated Customer or Brand Admin identity contract", async () => {
+  const tables = await db.$client.query<{ table_name: string }>(
+    `select table_name
+       from information_schema.tables
+      where table_schema = 'public'
+        and table_name = any($1::text[])
+      order by table_name`,
+    [["brand_admins", "users"]],
+  );
+  const identityColumns = await db.$client.query<{
+    column_name: string;
+    table_name: string;
+  }>(
+    `select table_name, column_name
+       from information_schema.columns
+      where table_schema = 'public'
+        and column_name = any($1::text[])
+      order by table_name, column_name`,
+    [["admin_id", "customer_id", "user_id"]],
+  );
+  const actorTypes = await db.$client.query<{ enumlabel: string }>(
+    `select enumlabel
+       from pg_enum
+       join pg_type on pg_type.oid = pg_enum.enumtypid
+      where pg_type.typname = 'actor_type'
+      order by enumsortorder`,
+  );
+  const messageRoles = await db.$client.query<{ enumlabel: string }>(
+    `select enumlabel
+       from pg_enum
+       join pg_type on pg_type.oid = pg_enum.enumtypid
+      where pg_type.typname = 'message_role'
+      order by enumsortorder`,
+  );
+
+  assert.deepEqual(
+    {
+      tables: tables.rows,
+      identityColumns: identityColumns.rows,
+      actorTypes: actorTypes.rows.map(({ enumlabel }) => enumlabel),
+      messageRoles: messageRoles.rows.map(({ enumlabel }) => enumlabel),
+    },
+    {
+      tables: [],
+      identityColumns: [],
+      actorTypes: ["AGENT", "SYSTEM", "RAZORPAY"],
+      messageRoles: ["CUSTOMER", "ASSISTANT", "TOOL", "SYSTEM"],
+    },
+  );
+});
+
 test("catalog search matches related footwear product types", async () => {
   await runSeedCommand();
   const catalog = createCatalogModule();

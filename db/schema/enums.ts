@@ -16,15 +16,13 @@ export const cartStatusEnum = pgEnum("cart_status", [
 ]);
 
 export const actorTypeEnum = pgEnum("actor_type", [
-  "USER",
   "AGENT",
   "SYSTEM",
-  "BRAND_ADMIN",
   "RAZORPAY",
 ]);
 
 export const messageRoleEnum = pgEnum("message_role", [
-  "USER",
+  "CUSTOMER",
   "ASSISTANT",
   "TOOL",
   "SYSTEM",

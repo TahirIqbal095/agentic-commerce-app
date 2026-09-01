@@ -55,7 +55,7 @@ export function createConversationState(
         .where(
           and(
             eq(messages.conversationId, current.id),
-            eq(messages.role, "USER"),
+            eq(messages.role, "CUSTOMER"),
           ),
         )
         .orderBy(asc(messages.createdAt), asc(messages.id));
