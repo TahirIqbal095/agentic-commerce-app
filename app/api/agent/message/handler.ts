@@ -51,7 +51,7 @@ export function createPostHandler(createAgent: AgentFactory) {
       return errorResponse(
         {
           code: "INVALID_IDENTITY_FIELD",
-          message: "Customer identity comes from the Guest Session.",
+          message: "Runtime identity fields are not accepted.",
           details: { field: identityField },
         },
         400,

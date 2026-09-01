@@ -2450,7 +2450,7 @@ test("requires a client-generated Conversation Turn idempotency key", async () =
   });
 });
 
-test("rejects legacy Customer identity fields before creating an agent", async () => {
+test("rejects legacy runtime identity fields before creating an agent", async () => {
   let agentCreated = false;
   const POST = createPostHandler(async () => {
     agentCreated = true;
@@ -2487,7 +2487,7 @@ test("rejects legacy Customer identity fields before creating an agent", async (
     assert.deepEqual(await response.json(), {
       error: {
         code: "INVALID_IDENTITY_FIELD",
-        message: "Customer identity comes from the Guest Session.",
+        message: "Runtime identity fields are not accepted.",
         details: { field },
       },
     });
