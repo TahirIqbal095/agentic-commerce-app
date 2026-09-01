@@ -16,7 +16,7 @@ import {
   type RecommendationReference,
 } from "./intent";
 
-type ConversationOwner = { userId: string };
+type ConversationOwner = { guestSessionId: string };
 export interface ConversationRepository {
   /**
    * Returns the completed outcome for a turn with the same idempotency key, if
@@ -107,7 +107,7 @@ export const postgresConversationRepository: ConversationRepository = {
         .innerJoin(conversations, eq(messages.conversationId, conversations.id))
         .where(
           and(
-            eq(conversations.userId, owner.userId),
+            eq(conversations.guestSessionId, owner.guestSessionId),
             isNull(conversations.closedAt),
             eq(messages.idempotencyKey, idempotencyKey),
             ...(conversationId ? [eq(conversations.id, conversationId)] : []),
@@ -143,7 +143,7 @@ export const postgresConversationRepository: ConversationRepository = {
         .from(conversations)
         .where(
           and(
-            eq(conversations.userId, owner.userId),
+            eq(conversations.guestSessionId, owner.guestSessionId),
             isNull(conversations.closedAt),
           ),
         )
@@ -166,7 +166,7 @@ export const postgresConversationRepository: ConversationRepository = {
               .from(conversations)
               .where(
                 and(
-                  eq(conversations.userId, owner.userId),
+                  eq(conversations.guestSessionId, owner.guestSessionId),
                   isNull(conversations.closedAt),
                 ),
               )
@@ -201,7 +201,7 @@ export const postgresConversationRepository: ConversationRepository = {
   async findOwnedContext(conversationId) {
     const [ownedContext] = await db
       .select({
-        userId: conversations.userId,
+        guestSessionId: conversations.guestSessionId,
         context: conversations.context,
       })
       .from(conversations)

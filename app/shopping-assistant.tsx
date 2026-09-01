@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 import { Composer } from "./_components/shopping-assistant/composer";
 import { ContextSummary } from "./_components/shopping-assistant/context-summary";
@@ -25,9 +25,11 @@ type AgentApiResponse = { data: AgentResult } | { error: { message: string } };
 export function ShoppingAssistant({
   brandName,
   initialConversation = null,
+  resumeConversation = false,
 }: {
   brandName: string;
   initialConversation?: CurrentConversation | null;
+  resumeConversation?: boolean;
 }) {
   const [prompt, setPrompt] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(
@@ -44,6 +46,42 @@ export function ShoppingAssistant({
     null,
   );
   const [cartQuantity, setCartQuantity] = useState(0);
+
+  useEffect(() => {
+    if (!resumeConversation) return;
+    let active = true;
+    void fetch("/api/agent/conversation")
+      .then(async (response) => {
+        if (!response.ok) return null;
+        const payload = (await response.json()) as {
+          data: CurrentConversation | null;
+        };
+        return payload.data;
+      })
+      .then((conversation) => {
+        if (!active || !conversation) return;
+        setConversationId(conversation.conversationId);
+        setTurns(conversation.transcript);
+        setContextSummary(conversation.contextSummary);
+      })
+      .catch(() => {});
+    void fetch("/api/cart")
+      .then(async (response) => {
+        if (!response.ok) return null;
+        const payload = (await response.json()) as {
+          data: { totalQuantity: number };
+        };
+        return payload.data;
+      })
+      .then((cart) => {
+        if (!active || !cart) return;
+        setCartQuantity(cart.totalQuantity);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [resumeConversation]);
 
   async function submitPrompt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

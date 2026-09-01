@@ -28,14 +28,19 @@ export interface ConversationState {
   resetCurrent(): Promise<void>;
 }
 
-export function createConversationState(userId: string): ConversationState {
+export function createConversationState(
+  guestSessionId: string,
+): ConversationState {
   return {
     async loadCurrent() {
       const [current] = await db
         .select({ id: conversations.id, context: conversations.context })
         .from(conversations)
         .where(
-          and(eq(conversations.userId, userId), isNull(conversations.closedAt)),
+          and(
+            eq(conversations.guestSessionId, guestSessionId),
+            isNull(conversations.closedAt),
+          ),
         )
         .limit(1);
       if (!current) return null;
@@ -83,7 +88,7 @@ export function createConversationState(userId: string): ConversationState {
           .from(conversations)
           .where(
             and(
-              eq(conversations.userId, userId),
+              eq(conversations.guestSessionId, guestSessionId),
               isNull(conversations.closedAt),
             ),
           )

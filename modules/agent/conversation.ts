@@ -70,16 +70,16 @@ export class ConversationAccessError extends Error {
  * The returned module owns turn creation, idempotency, access checks, context
  * persistence, recommendation memory, completion, and privacy-safe storage.
  *
- * @param userId - Authenticated Customer who may access the Conversation.
+ * @param guestSessionId - Browser-scoped Guest Session that owns the Conversation.
  * @param repository - Persistence adapter; defaults to PostgreSQL and may be
  * replaced by an in-memory adapter in tests.
  * @returns A Conversation module bound to the Customer.
  */
 export function createConversationModule(
-  userId: string,
+  guestSessionId: string,
   repository: ConversationRepository = postgresConversationRepository,
 ): ConversationModule {
-  const owner = { userId };
+  const owner = { guestSessionId };
   return {
     /**
      * Starts a new Agent turn or restores the result of a duplicate request.
@@ -94,7 +94,7 @@ export function createConversationModule(
      * @returns A new in-progress turn, or a no-op turn containing the previous
      * outcome when the request is a duplicate.
      * @throws {ConversationAccessError} When the Conversation is unavailable to
-     * the authenticated Customer.
+     * the current Guest Session.
      */
     async startTurn(input) {
       const duplicateOutcome = await repository.findDuplicate(
@@ -113,7 +113,10 @@ export function createConversationModule(
         const persisted = await repository.findOwnedContext(
           input.conversationId,
         );
-        if (!persisted || persisted.userId !== userId) {
+        if (
+          !persisted ||
+          persisted.guestSessionId !== guestSessionId
+        ) {
           throw new ConversationAccessError();
         }
         conversationId = input.conversationId;
@@ -166,7 +169,10 @@ export function createConversationModule(
          */
         async reloadContext() {
           const persisted = await repository.findOwnedContext(conversationId);
-          if (!persisted || persisted.userId !== userId) {
+          if (
+            !persisted ||
+            persisted.guestSessionId !== guestSessionId
+          ) {
             throw new ConversationAccessError();
           }
           return parseConversationContext(persisted.context);

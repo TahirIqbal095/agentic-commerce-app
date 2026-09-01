@@ -4,6 +4,78 @@ import { JSDOM } from "jsdom";
 import React from "react";
 import { createEmptyConversationContext } from "@/modules/agent/intent";
 
+test("returning in the same browser resumes the current Conversation and Cart", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+  const requests: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push(`${init?.method ?? "GET"} ${String(input)}`);
+    if (input === "/api/cart") {
+      return Response.json({
+        data: {
+          id: "31000000-0000-4000-8000-000000000001",
+          items: [],
+          totalQuantity: 3,
+          subtotalMinor: 1299700,
+          currency: "INR",
+        },
+      });
+    }
+    return Response.json({
+      data: {
+        conversationId: "41000000-0000-4000-8000-000000000001",
+        transcript: [
+          {
+            id: "51000000-0000-4000-8000-000000000001",
+            customerMessage: "Show me running shoes",
+            result: null,
+            error: null,
+          },
+        ],
+        contextSummary: createEmptyConversationContext().productConstraints,
+        revision: 1,
+      },
+    });
+  };
+  const [{ render, cleanup }, { ShoppingAssistant }] = await Promise.all([
+    import("@testing-library/react"),
+    import("./shopping-assistant"),
+  ]);
+  const view = render(
+    React.createElement(ShoppingAssistant, {
+      brandName: "Arc",
+      resumeConversation: true,
+    }),
+  );
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+
+  assert.equal(
+    (await view.findByText("Show me running shoes")).textContent,
+    "Show me running shoes",
+  );
+  assert.ok(await view.findByRole("button", { name: "Cart · 3" }));
+  assert.deepEqual(requests, [
+    "GET /api/agent/conversation",
+    "GET /api/cart",
+  ]);
+});
+
 test("customer sees the configured Brand in the Storefront", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",

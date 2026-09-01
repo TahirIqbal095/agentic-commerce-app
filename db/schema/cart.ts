@@ -10,15 +10,15 @@ import {
 import { products } from "./catalog";
 import { createdAt, currency, id, money, updatedAt } from "./columns";
 import { cartStatusEnum } from "./enums";
-import { users } from "./identity";
+import { guestSessions } from "./identity";
 
 export const carts = pgTable(
   "carts",
   {
     id: id(),
-    userId: uuid("user_id")
+    guestSessionId: uuid("guest_session_id")
       .notNull()
-      .references(() => users.id, { onDelete: "restrict" }),
+      .references(() => guestSessions.id, { onDelete: "cascade" }),
     status: cartStatusEnum("status").notNull().default("ACTIVE"),
     currency: currency(),
     version: integer("version").notNull().default(1),
@@ -27,9 +27,9 @@ export const carts = pgTable(
   },
   (table) => [
     uniqueIndex("carts_one_active_per_customer")
-      .on(table.userId)
+      .on(table.guestSessionId)
       .where(sql`${table.status} = 'ACTIVE'`),
-    index("carts_user_idx").on(table.userId),
+    index("carts_guest_session_idx").on(table.guestSessionId),
     check("carts_currency_inr", sql`${table.currency} = 'INR'`),
     check("carts_version_positive", sql`${table.version} > 0`),
   ],

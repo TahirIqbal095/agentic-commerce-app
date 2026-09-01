@@ -1,28 +1,12 @@
-import { resolveUserContext } from "@/modules/identity/user-context";
+import { db } from "@/db";
 import { createConversationState } from "@/modules/agent/conversation-state";
-import { createConversationHandler } from "./handler";
-import {
-  createStorefrontBrowsingRoute,
-  createStorefrontGuestSessionRoute,
-} from "@/modules/identity/guest-session";
+import { createDatabaseGuestSessionStore } from "@/modules/identity/guest-session";
+import { createConversationRoutes } from "./route-factory";
 
-async function stateForCustomer() {
-  const { userId } = await resolveUserContext();
-  return createConversationState(userId);
-}
+const routes = createConversationRoutes({
+  store: createDatabaseGuestSessionStore(db),
+  createState: (guestSession) => createConversationState(guestSession.id),
+});
 
-async function getConversation(): Promise<Response> {
-  const state = await stateForCustomer();
-  return createConversationHandler(state).GET();
-}
-
-export const GET = createStorefrontBrowsingRoute(() => getConversation());
-
-async function deleteConversation(): Promise<Response> {
-  const state = await stateForCustomer();
-  return createConversationHandler(state).DELETE();
-}
-
-export const DELETE = createStorefrontGuestSessionRoute(() =>
-  deleteConversation(),
-);
+export const GET = routes.GET;
+export const DELETE = routes.DELETE;

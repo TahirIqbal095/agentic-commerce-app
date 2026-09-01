@@ -3,16 +3,12 @@ import type { recommendationEvents } from "./analytics";
 import type { auditEvents } from "./audit";
 import type { cartItems, carts } from "./cart";
 import type { productRelations, products } from "./catalog";
-import type { brandAdmins, brands, guestSessions, users } from "./identity";
+import type { brands, guestSessions } from "./identity";
 
 export type JsonObject = Record<string, unknown>;
 
 export type Brand = typeof brands.$inferSelect;
 export type NewBrand = typeof brands.$inferInsert;
-export type User = typeof users.$inferSelect;
-export type NewUser = typeof users.$inferInsert;
-export type BrandAdmin = typeof brandAdmins.$inferSelect;
-export type NewBrandAdmin = typeof brandAdmins.$inferInsert;
 export type GuestSession = typeof guestSessions.$inferSelect;
 export type NewGuestSession = typeof guestSessions.$inferInsert;
 

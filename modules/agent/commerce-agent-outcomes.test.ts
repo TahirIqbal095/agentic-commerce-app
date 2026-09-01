@@ -1452,7 +1452,7 @@ test("persists the Intent Brief and Agent Outcome as inspectable turn metadata",
   ]);
 });
 
-test("continues a conversation only for its owning User", async () => {
+test("continues a Conversation only for its owning Guest Session", async () => {
   const appendedMessages: string[] = [];
   const repository: ConversationRepository = {
     async findDuplicate() { return null; },
@@ -1461,7 +1461,7 @@ test("continues a conversation only for its owning User", async () => {
     },
     async findOwnedContext() {
       return {
-        userId: "11000000-0000-4000-8000-000000000001",
+        guestSessionId: "11000000-0000-4000-8000-000000000001",
         context: createEmptyConversationContext(),
       };
     },
@@ -1499,7 +1499,7 @@ test("redacts sensitive Customer text before durable Transcript persistence", as
     },
     async findOwnedContext() {
       return {
-        userId: "11000000-0000-4000-8000-000000000001",
+        guestSessionId: "11000000-0000-4000-8000-000000000001",
         context: createEmptyConversationContext(),
       };
     },

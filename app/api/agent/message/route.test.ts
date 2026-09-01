@@ -26,9 +26,203 @@ import type { AgentOutcome } from "@/modules/agent/agent-outcome";
 import type { ConversationRepository } from "@/modules/agent/conversation-repository";
 import type { CatalogSearch } from "@/modules/catalog/types";
 import { createPostHandler } from "./handler";
+import { createMessageRoute } from "./route-factory";
+import type {
+  GuestSession,
+  GuestSessionStore,
+} from "@/modules/identity/guest-session";
 
 const conversationId = "41000000-0000-4000-8000-000000000001";
-const userId = "11000000-0000-4000-8000-000000000001";
+const guestSessionId = "11000000-0000-4000-8000-000000000001";
+
+test("a Guest Session cannot continue another Guest Session's Conversation", async () => {
+  const sessionsByTokenHash = new Map<string, GuestSession>();
+  const conversationOwners = new Map<string, string>();
+  let nextSession = 0;
+  const store: GuestSessionStore = {
+    async findActive(tokenHash) {
+      return sessionsByTokenHash.get(tokenHash) ?? null;
+    },
+    async create({ tokenHash }) {
+      nextSession += 1;
+      const session = { id: `guest-session-${nextSession}` };
+      sessionsByTokenHash.set(tokenHash, session);
+      return session;
+    },
+    async refresh() {},
+  };
+  const route = createMessageRoute({
+    store,
+    issueToken: () => `opaque-token-${nextSession + 1}`,
+    async createAgent(guestSession) {
+      return {
+        async respond(input) {
+          if (input.conversationId) {
+            if (conversationOwners.get(input.conversationId) !== guestSession.id) {
+              throw new ConversationAccessError();
+            }
+            return {
+              status: "COMPLETED",
+              conversationId: input.conversationId,
+              message: "Conversation continued.",
+              intentBrief: {
+                goal: "Continue Conversation",
+                constraints: emptyConversationContext().productConstraints,
+                knownEntities: [],
+                missingInformation: [],
+                confidence: 1,
+                requestedEffects: [],
+              },
+              products: [],
+            } satisfies AgentOutcome;
+          }
+
+          const newConversationId = crypto.randomUUID();
+          conversationOwners.set(newConversationId, guestSession.id);
+          return {
+            status: "COMPLETED",
+            conversationId: newConversationId,
+            message: "Conversation started.",
+            intentBrief: {
+              goal: "Start Conversation",
+              constraints: emptyConversationContext().productConstraints,
+              knownEntities: [],
+              missingInformation: [],
+              confidence: 1,
+              requestedEffects: [],
+            },
+            products: [],
+          } satisfies AgentOutcome;
+        },
+      };
+    },
+  });
+
+  const firstConversation = await postRouteMessage(route, {
+    message: "show me shoes",
+  });
+  const secondConversation = await postRouteMessage(route, {
+    message: "show me jackets",
+  });
+  const firstBody = await firstConversation.json();
+
+  const crossSessionResponse = await postRouteMessage(
+    route,
+    {
+      conversationId: firstBody.data.conversationId,
+      message: "continue that Conversation",
+    },
+    cookiePair(secondConversation),
+  );
+
+  assert.equal(crossSessionResponse.status, 404);
+  assert.deepEqual(await crossSessionResponse.json(), {
+    error: {
+      code: "CONVERSATION_NOT_FOUND",
+      message: "The conversation was not found.",
+      details: {},
+    },
+  });
+});
+
+test("the first Customer message creates a Guest Session and the first Add creates its Cart", async () => {
+  const sessionsByTokenHash = new Map<string, GuestSession>();
+  let cartsCreated = 0;
+  const store: GuestSessionStore = {
+    async findActive(tokenHash) {
+      return sessionsByTokenHash.get(tokenHash) ?? null;
+    },
+    async create({ tokenHash }) {
+      const session = { id: "guest-session-1" };
+      sessionsByTokenHash.set(tokenHash, session);
+      return session;
+    },
+    async refresh() {},
+  };
+  const route = createMessageRoute({
+    store,
+    issueToken: () => "lazy-cart-browser-token",
+    async createAgent() {
+      return {
+        async respond(input) {
+          const adding = input.message === "add the first Product";
+          if (adding) cartsCreated += 1;
+          return {
+            status: "COMPLETED",
+            conversationId,
+            message: adding ? "Product added." : "Here are Products.",
+            intentBrief: {
+              goal: adding ? "Add Product" : "Discover Products",
+              constraints: emptyConversationContext().productConstraints,
+              knownEntities: [],
+              missingInformation: [],
+              confidence: 1,
+              requestedEffects: adding
+                ? ["ADD_TO_CART"]
+                : ["DISCOVER_PRODUCTS"],
+            },
+            products: [],
+            ...(adding
+              ? {
+                  cart: {
+                    id: "31000000-0000-4000-8000-000000000001",
+                    items: [],
+                    totalQuantity: 1,
+                    subtotalMinor: 399900,
+                    currency: "INR",
+                  },
+                }
+              : {}),
+          } satisfies AgentOutcome;
+        },
+      };
+    },
+  });
+
+  const firstMessage = await postRouteMessage(route, {
+    message: "show me Products",
+  });
+
+  assert.equal(firstMessage.status, 200);
+  assert.equal(sessionsByTokenHash.size, 1);
+  assert.equal(cartsCreated, 0);
+
+  const add = await postRouteMessage(
+    route,
+    {
+      conversationId,
+      message: "add the first Product",
+    },
+    cookiePair(firstMessage),
+  );
+
+  assert.equal(add.status, 200);
+  assert.equal(sessionsByTokenHash.size, 1);
+  assert.equal(cartsCreated, 1);
+});
+
+function cookiePair(response: Response): string {
+  const setCookie = response.headers.get("set-cookie");
+  assert.ok(setCookie);
+  return setCookie.split(";", 1)[0];
+}
+
+async function postRouteMessage(
+  route: (request: Request) => Promise<Response>,
+  body: { conversationId?: string; message: string },
+  cookie?: string,
+) {
+  return route(
+    new Request("https://storefront.example/api/agent/message", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(cookie ? { cookie } : {}),
+      },
+      body: JSON.stringify({ ...body, idempotencyKey: crypto.randomUUID() }),
+    }),
+  );
+}
 
 function createInMemoryConversationRepository(): ConversationRepository {
   let persistedContext: ConversationContext | undefined;
@@ -43,7 +237,7 @@ function createInMemoryConversationRepository(): ConversationRepository {
       };
     },
     async findOwnedContext() {
-      return persistedContext ? { userId, context: persistedContext } : null;
+      return persistedContext ? { guestSessionId, context: persistedContext } : null;
     },
     async saveContextAndMetadata(_conversationId, context) {
       persistedContext = context;
@@ -286,7 +480,7 @@ test("does not duplicate a multi-Product addition when a Conversation Turn is de
       };
     },
     async findOwnedContext() {
-      return { userId, context };
+      return { guestSessionId, context };
     },
     async saveContextAndMetadata() {},
     async append() {
@@ -396,7 +590,7 @@ test("retains every addition from distinct concurrent multi-Product turns", asyn
     async create() {
       throw new Error("Concurrent turns continue an existing Conversation");
     },
-    async findOwnedContext() { return { userId, context }; },
+    async findOwnedContext() { return { guestSessionId, context }; },
     async saveContextAndMetadata() {},
     async append() {
       messageNumber += 1;
@@ -638,7 +832,7 @@ function createConversationPost({
   const agent = createCommerceAgent(
     catalog,
     analyzer,
-    createConversationModule(userId, repository),
+    createConversationModule(guestSessionId, repository),
     { agentLoop, cart },
   );
   return createPostHandler(async () => agent);
@@ -968,7 +1162,7 @@ test("adds different quantities of multiple identified Products in one Conversat
           context,
         };
       },
-      async findOwnedContext() { return { userId, context }; },
+      async findOwnedContext() { return { guestSessionId, context }; },
       async saveContextAndMetadata() {},
       async append() { return "51000000-0000-4000-8000-000000000022"; },
     },
@@ -1131,7 +1325,7 @@ test("returns the unchanged Cart when any Product in a multi-Product addition fa
           context,
         };
       },
-      async findOwnedContext() { return { userId, context }; },
+      async findOwnedContext() { return { guestSessionId, context }; },
       async saveContextAndMetadata() {},
       async append() { return "51000000-0000-4000-8000-000000000032"; },
     },
@@ -1204,7 +1398,7 @@ test("rolls back a Cart addition when its successful Conversation outcome cannot
           context,
         };
       },
-      async findOwnedContext() { return { userId, context }; },
+      async findOwnedContext() { return { guestSessionId, context }; },
       async saveContextAndMetadata() {},
       async append() { return "51000000-0000-4000-8000-000000000020"; },
       async finalizeTurn() {
@@ -1304,7 +1498,7 @@ test("adds an explicit positive whole-unit quantity", async () => {
           context,
         };
       },
-      async findOwnedContext() { return { userId, context }; },
+      async findOwnedContext() { return { guestSessionId, context }; },
       async saveContextAndMetadata() {},
       async append() { return "51000000-0000-4000-8000-000000000014"; },
     },
@@ -1395,7 +1589,7 @@ test("asks for a positive whole-unit quantity and leaves the Cart unchanged", as
           context,
         };
       },
-      async findOwnedContext() { return { userId, context }; },
+      async findOwnedContext() { return { guestSessionId, context }; },
       async saveContextAndMetadata() {},
       async append() { return "51000000-0000-4000-8000-000000000016"; },
     },
@@ -1551,7 +1745,7 @@ test("returns a correctable Cart rule failure with the unchanged Cart", async ()
           context,
         };
       },
-      async findOwnedContext() { return { userId, context }; },
+      async findOwnedContext() { return { guestSessionId, context }; },
       async saveContextAndMetadata() {},
       async append() { return "51000000-0000-4000-8000-000000000018"; },
     },
@@ -1652,7 +1846,7 @@ test("carries Product constraints across Conversation Turns", async () => {
       },
     },
     analyzer,
-    createConversationModule(userId, repository),
+    createConversationModule(guestSessionId, repository),
     {
       agentLoop: {
         async run({ capabilities }) {
@@ -1984,7 +2178,7 @@ test("reinterprets once when a concurrent turn changes Conversation Context", as
       };
     },
     async findOwnedContext() {
-      return { userId, context: persistedContext };
+      return { guestSessionId, context: persistedContext };
     },
     async saveContextAndMetadata(_id, context) {
       saves += 1;
@@ -2066,7 +2260,7 @@ test("returns a retryable response after a second Conversation Context conflict"
       };
     },
     async findOwnedContext() {
-      return { userId, context: persistedContext };
+      return { guestSessionId, context: persistedContext };
     },
     async saveContextAndMetadata() {
       saves += 1;
@@ -2315,7 +2509,7 @@ test("passes a conversation identifier to the Commerce Agent", async () => {
   ]);
 });
 
-test("rejects a conversation outside the current User's ownership", async () => {
+test("rejects a Conversation outside the current Guest Session's ownership", async () => {
   const agent: CommerceAgent = {
     async respond() {
       throw new ConversationAccessError();

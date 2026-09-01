@@ -1,10 +1,9 @@
 import { db } from "@/db";
 import { products } from "@/db/schema/catalog";
-import { brands, users } from "@/db/schema/identity";
+import { brands } from "@/db/schema/identity";
 import type { NewProduct } from "@/db/schema/types";
 
 export const DEMO_BRAND_ID = "11111111-1111-4111-8111-111111111111";
-export const DEMO_CUSTOMER_ID = "12000000-0000-4000-8000-000000000001";
 
 const DEMO_PRODUCTS = [
   {
@@ -289,22 +288,6 @@ export async function seedDemoCatalog(): Promise<void> {
             "Everyday footwear and accessories, discovered with the Arc Commerce Agent.",
           logoUrl: null,
           currency: "INR",
-          updatedAt: now,
-        },
-      });
-
-    await transaction
-      .insert(users)
-      .values({
-        id: DEMO_CUSTOMER_ID,
-        email: "customer@agentic-commerce.demo",
-        name: "Demo Customer",
-      })
-      .onConflictDoUpdate({
-        target: users.id,
-        set: {
-          email: "customer@agentic-commerce.demo",
-          name: "Demo Customer",
           updatedAt: now,
         },
       });

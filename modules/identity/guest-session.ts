@@ -32,6 +32,12 @@ type GuestSessionHandler<Arguments extends unknown[] = []> = (
   ...arguments_: Arguments
 ) => Promise<Response>;
 
+type GuestSessionBrowsingHandler<Arguments extends unknown[] = []> = (
+  request: Request,
+  guestSession: GuestSession | null,
+  ...arguments_: Arguments
+) => Promise<Response>;
+
 export function createGuestSessionRoute<Arguments extends unknown[]>(
   handler: GuestSessionHandler<Arguments>,
   options: GuestSessionRouteOptions,
@@ -46,6 +52,13 @@ export function createGuestSessionRoute<Arguments extends unknown[]>(
     options,
     true,
   );
+}
+
+export function createGuestSessionBrowsingRoute<Arguments extends unknown[]>(
+  handler: GuestSessionBrowsingHandler<Arguments>,
+  options: GuestSessionRouteOptions,
+): (request: Request, ...arguments_: Arguments) => Promise<Response> {
+  return createGuestSessionBoundary(handler, options, false);
 }
 
 function createGuestSessionBoundary<Arguments extends unknown[]>(
@@ -130,11 +143,10 @@ export function createStorefrontGuestSessionRoute(
 export function createStorefrontBrowsingRoute<Arguments extends unknown[]>(
   handler: (request: Request, ...arguments_: Arguments) => Promise<Response>,
 ): (request: Request, ...arguments_: Arguments) => Promise<Response> {
-  return createGuestSessionBoundary(
+  return createGuestSessionBrowsingRoute(
     (request, _guestSession, ...arguments_) =>
       handler(request, ...arguments_),
     { store: createDatabaseGuestSessionStore(storefrontDatabase) },
-    false,
   );
 }
 

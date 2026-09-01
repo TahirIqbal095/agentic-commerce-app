@@ -15,9 +15,9 @@ import {
   createDatabaseGuestSessionStore,
   createGuestSessionRoute,
 } from "@/modules/identity/guest-session";
-import { DEMO_CUSTOMER_ID } from "@/db/seed";
 
 const execFileAsync = promisify(execFile);
+const TEST_GUEST_SESSION_ID = "13000000-0000-4000-8000-000000000001";
 const EXPECTED_ACTIVE_PRODUCTS = [
   { slug: "strideflow-daily-running-shoes", inStock: true },
   { slug: "trailcrest-grip-running-shoes", inStock: true },
@@ -41,6 +41,18 @@ async function runSeedCommand(): Promise<void> {
     cwd: process.cwd(),
     env: process.env,
   });
+  await db
+    .insert(guestSessions)
+    .values({
+      id: TEST_GUEST_SESSION_ID,
+      tokenHash:
+        "833e5ef61f9ac3d83d4a3e0b2f17cff970507494cc6be1131bb47f221d08521a",
+      expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+    })
+    .onConflictDoUpdate({
+      target: guestSessions.id,
+      set: { expiresAt: new Date("2099-01-01T00:00:00.000Z") },
+    });
 }
 
 async function getProducts(): Promise<Response> {
@@ -240,11 +252,11 @@ test("database rejects a Product priced outside INR", async () => {
 
 test("database rejects a Cart amount outside INR", async () => {
   await runSeedCommand();
-  await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
+  await db.delete(carts).where(eq(carts.guestSessionId, TEST_GUEST_SESSION_ID));
 
   await assert.rejects(
     db.insert(carts).values({
-      userId: DEMO_CUSTOMER_ID,
+      guestSessionId: TEST_GUEST_SESSION_ID,
       currency: "USD",
     }),
   );
@@ -252,9 +264,9 @@ test("database rejects a Cart amount outside INR", async () => {
 
 test("Cart inspection rejects a non-INR runtime default", async () => {
   await runSeedCommand();
-  await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
+  await db.delete(carts).where(eq(carts.guestSessionId, TEST_GUEST_SESSION_ID));
 
-  assert.throws(() => createCartModule(DEMO_CUSTOMER_ID, "USD"), {
+  assert.throws(() => createCartModule(TEST_GUEST_SESSION_ID, "USD"), {
     name: "CartError",
     message: "Cart currency must be INR.",
   });
@@ -316,6 +328,23 @@ test("database contains no deferred checkout or payment storage", async () => {
   assert.deepEqual(typeResult.rows, []);
 });
 
+test("recommendation analytics are pseudonymous and expose no personal-information fields", async () => {
+  const result = await db.$client.query<{ column_name: string }>(
+    `select column_name
+       from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'recommendation_events'
+      order by column_name`,
+  );
+  const columns = result.rows.map(({ column_name }) => column_name);
+
+  assert.ok(columns.includes("guest_session_id"));
+  assert.equal(columns.includes("user_id"), false);
+  assert.equal(columns.includes("reason"), false);
+  assert.equal(columns.includes("email"), false);
+  assert.equal(columns.includes("name"), false);
+});
+
 test("catalog search matches related footwear product types", async () => {
   await runSeedCommand();
   const catalog = createCatalogModule();
@@ -362,7 +391,7 @@ test("catalog retrieval combines intent, commerce, and availability criteria", a
 
 test("concurrent Customer turns retain every authoritative Cart addition", async () => {
   await runSeedCommand();
-  await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
+  await db.delete(carts).where(eq(carts.guestSessionId, TEST_GUEST_SESSION_ID));
 
   const catalog = createCatalogModule();
   const result = await catalog.search({
@@ -372,7 +401,7 @@ test("concurrent Customer turns retain every authoritative Cart addition", async
   const product = result.products[0];
   assert.ok(product);
 
-  const cart = createCartModule(DEMO_CUSTOMER_ID);
+  const cart = createCartModule(TEST_GUEST_SESSION_ID);
   await Promise.all([
     cart.addItem(product, 1, async () => {}),
     cart.addItem(product, 1, async () => {}),
@@ -386,7 +415,7 @@ test("concurrent Customer turns retain every authoritative Cart addition", async
 
 test("Cart additions retain an existing Cart Price", async () => {
   await runSeedCommand();
-  await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
+  await db.delete(carts).where(eq(carts.guestSessionId, TEST_GUEST_SESSION_ID));
   const catalog = createCatalogModule();
   const result = await catalog.search({
     query: "StrideFlow Daily Running Shoes",
@@ -397,7 +426,7 @@ test("Cart additions retain an existing Cart Price", async () => {
 
   const [activeCart] = await db
     .insert(carts)
-    .values({ userId: DEMO_CUSTOMER_ID, currency: "INR" })
+    .values({ guestSessionId: TEST_GUEST_SESSION_ID, currency: "INR" })
     .returning({ id: carts.id });
   await db.insert(cartItems).values({
     cartId: activeCart.id,
@@ -406,7 +435,7 @@ test("Cart additions retain an existing Cart Price", async () => {
     unitPriceSnapshotMinor: 389900,
   });
 
-  const cart = createCartModule(DEMO_CUSTOMER_ID);
+  const cart = createCartModule(TEST_GUEST_SESSION_ID);
   const updated = await cart.addItem(product, 1, async () => {});
 
   assert.equal(updated.items[0].quantity, 3);
@@ -417,7 +446,7 @@ test("Cart additions retain an existing Cart Price", async () => {
 
 test("database rejects runtime Cart Price changes", async () => {
   await runSeedCommand();
-  await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
+  await db.delete(carts).where(eq(carts.guestSessionId, TEST_GUEST_SESSION_ID));
   const [product] = await db
     .select({ id: products.id, priceMinor: products.priceMinor })
     .from(products)
@@ -425,7 +454,7 @@ test("database rejects runtime Cart Price changes", async () => {
   assert.ok(product);
   const [activeCart] = await db
     .insert(carts)
-    .values({ userId: DEMO_CUSTOMER_ID, currency: "INR" })
+    .values({ guestSessionId: TEST_GUEST_SESSION_ID, currency: "INR" })
     .returning({ id: carts.id });
   await db.insert(cartItems).values({
     cartId: activeCart.id,

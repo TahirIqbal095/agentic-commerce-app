@@ -49,7 +49,7 @@ export class CartError extends Error {
 }
 
 export function createCartModule(
-  userId: string,
+  guestSessionId: string,
   defaultCurrency = "INR",
 ): CartModule {
   if (defaultCurrency !== "INR") {
@@ -78,7 +78,7 @@ export function createCartModule(
 
     return db.transaction(async (transaction) => {
       await transaction.execute(
-        sql`select pg_advisory_xact_lock(hashtext(${userId}))`,
+        sql`select pg_advisory_xact_lock(hashtext(${guestSessionId}))`,
       );
       const productRows = await transaction
         .select({
@@ -105,7 +105,12 @@ export function createCartModule(
       let [activeCart] = await transaction
         .select({ id: carts.id, currency: carts.currency })
         .from(carts)
-        .where(and(eq(carts.userId, userId), eq(carts.status, "ACTIVE")))
+        .where(
+          and(
+            eq(carts.guestSessionId, guestSessionId),
+            eq(carts.status, "ACTIVE"),
+          ),
+        )
         .limit(1);
       const cartCurrency =
         activeCart?.currency ?? authoritativeAdditions[0].product.currency;
@@ -120,7 +125,7 @@ export function createCartModule(
       if (!activeCart) {
         [activeCart] = await transaction
           .insert(carts)
-          .values({ userId, currency: cartCurrency })
+          .values({ guestSessionId, currency: cartCurrency })
           .returning({ id: carts.id, currency: carts.currency });
       }
 
@@ -192,7 +197,12 @@ export function createCartModule(
       const [activeCart] = await db
         .select({ id: carts.id, currency: carts.currency })
         .from(carts)
-        .where(and(eq(carts.userId, userId), eq(carts.status, "ACTIVE")))
+        .where(
+          and(
+            eq(carts.guestSessionId, guestSessionId),
+            eq(carts.status, "ACTIVE"),
+          ),
+        )
         .limit(1);
 
       if (!activeCart) {

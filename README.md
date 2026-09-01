@@ -23,16 +23,16 @@ The database must contain exactly one Brand. Storefront APIs fail with a
 configuration error when the Brand record is missing; clients and models cannot
 select a different Brand.
 
-The demo seed creates Arc, its INR-only Product Catalog, and one legacy User.
-Conversation and Cart ownership temporarily continue through that User while
-Guest Session ownership is introduced. The server lazily issues a secure,
-HTTP-only `guest_session` cookie on the first state-changing request; Catalog
-browsing creates no Guest Session.
+The demo seed creates Arc and its INR-only Product Catalog. A browser-scoped
+Guest Session owns each Customer's Conversation and Cart. The server lazily
+issues a secure, HTTP-only `guest_session` cookie on the first state-changing
+request; Catalog browsing creates no Guest Session.
 
 The Catalog endpoints are:
 
 - `GET /api/products`
 - `GET /api/products/:productId`
+- `GET /api/cart`
 
 ## Commerce Agent
 

@@ -4,7 +4,6 @@ import {
   check,
   index,
   pgTable,
-  text,
   timestamp,
   uuid,
 } from "drizzle-orm/pg-core";
@@ -12,15 +11,15 @@ import { carts } from "./cart";
 import { products } from "./catalog";
 import { id, money } from "./columns";
 import { productRelationTypeEnum } from "./enums";
-import { users } from "./identity";
+import { guestSessions } from "./identity";
 
 export const recommendationEvents = pgTable(
   "recommendation_events",
   {
     id: id(),
-    userId: uuid("user_id")
+    guestSessionId: uuid("guest_session_id")
       .notNull()
-      .references(() => users.id, { onDelete: "restrict" }),
+      .references(() => guestSessions.id, { onDelete: "cascade" }),
     cartId: uuid("cart_id")
       .notNull()
       .references(() => carts.id, { onDelete: "restrict" }),
@@ -31,7 +30,6 @@ export const recommendationEvents = pgTable(
       .notNull()
       .references(() => products.id, { onDelete: "restrict" }),
     recommendationType: productRelationTypeEnum("recommendation_type").notNull(),
-    reason: text("reason").notNull(),
     cartValueBeforeMinor: money("cart_value_before_minor"),
     projectedCartValueMinor: money("projected_cart_value_minor"),
     incrementalRevenueMinor: bigint("incremental_revenue_minor", {

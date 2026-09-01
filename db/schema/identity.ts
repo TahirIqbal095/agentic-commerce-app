@@ -6,7 +6,6 @@ import {
   text,
   timestamp,
   uniqueIndex,
-  uuid,
   varchar,
 } from "drizzle-orm/pg-core";
 import { createdAt, currency, id, updatedAt } from "./columns";
@@ -34,18 +33,6 @@ export const brands = pgTable(
   ],
 );
 
-export const users = pgTable(
-  "users",
-  {
-    id: id(),
-    email: varchar("email", { length: 320 }).notNull(),
-    name: varchar("name", { length: 160 }).notNull(),
-    createdAt: createdAt(),
-    updatedAt: updatedAt(),
-  },
-  (table) => [uniqueIndex("users_email_unique").on(table.email)],
-);
-
 export const guestSessions = pgTable(
   "guest_sessions",
   {
@@ -59,15 +46,4 @@ export const guestSessions = pgTable(
     uniqueIndex("guest_sessions_token_hash_unique").on(table.tokenHash),
     index("guest_sessions_expiry_idx").on(table.expiresAt),
   ],
-);
-
-export const brandAdmins = pgTable(
-  "brand_admins",
-  {
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    createdAt: createdAt(),
-  },
-  (table) => [uniqueIndex("brand_admins_user_unique").on(table.userId)],
 );
