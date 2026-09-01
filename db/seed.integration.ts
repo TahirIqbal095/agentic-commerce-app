@@ -244,7 +244,7 @@ test("a state-changing Storefront route creates a Guest Session", async () => {
   assert.equal(storedSessions.length, 1);
 });
 
-test("cleanup removes expired guest shopping state and preserves active Guest Sessions", async () => {
+test("cleanup removes an expired Guest Session's Cart, Conversation, and Recommendation analytics", async () => {
   await runSeedCommand();
   await db.delete(guestSessions);
   const expiredGuestSessionId = "13000000-0000-4000-8000-000000000002";

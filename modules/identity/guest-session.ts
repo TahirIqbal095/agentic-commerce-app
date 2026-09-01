@@ -4,7 +4,6 @@ import type { db } from "@/db";
 import { db as storefrontDatabase } from "@/db";
 import { agentActions } from "@/db/schema/agent";
 import { recommendationEvents } from "@/db/schema/analytics";
-import { auditEvents } from "@/db/schema/audit";
 import { guestSessions } from "@/db/schema/identity";
 
 const GUEST_SESSION_COOKIE = "guest_session";
@@ -156,10 +155,6 @@ export async function cleanupExpiredGuestSessions(
     await transaction
       .delete(recommendationEvents)
       .where(inArray(recommendationEvents.guestSessionId, expiredSessionIds));
-    await transaction
-      .update(auditEvents)
-      .set({ guestSessionId: null })
-      .where(inArray(auditEvents.guestSessionId, expiredSessionIds));
     const deletedSessions = await transaction
       .delete(guestSessions)
       .where(
