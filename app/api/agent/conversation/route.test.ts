@@ -127,6 +127,41 @@ test("starting a new Conversation removes previous access without changing the C
   assert.equal(cartQuantity, 2);
 });
 
+test("an expired Guest Session cannot resume its former Conversation", async () => {
+  const expiredAt = new Date("2026-09-01T00:00:00.000Z");
+  const store: GuestSessionStore = {
+    async findActive(_tokenHash, now) {
+      assert.equal(now.toISOString(), "2026-09-01T00:00:00.001Z");
+      return now < expiredAt ? { id: "expired-guest-session" } : null;
+    },
+    async create() {
+      throw new Error("Reading a Conversation must not create a Guest Session");
+    },
+    async refresh() {
+      throw new Error("An expired Guest Session must not be refreshed");
+    },
+  };
+  const routes = createConversationRoutes({
+    store,
+    now: () => new Date("2026-09-01T00:00:00.001Z"),
+    createState() {
+      throw new Error(
+        "An expired Guest Session must not expose its Conversation",
+      );
+    },
+  });
+
+  const response = await routes.GET(
+    new Request("https://storefront.example/api/agent/conversation", {
+      headers: { cookie: "guest_session=expired-browser-token" },
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.has("set-cookie"), false);
+  assert.deepEqual(await response.json(), { data: null });
+});
+
 test("loads the Customer's current Conversation Transcript and Context Summary", async () => {
   const context = {
     ...createEmptyConversationContext(),

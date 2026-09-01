@@ -115,3 +115,52 @@ test("an existing Guest Session is reused with a sliding 30-day expiry", async (
     /^guest_session=existing-opaque-token;/,
   );
 });
+
+test("the next stateful request after expiry starts a fresh Guest Session", async () => {
+  const createdSessions: Array<{
+    tokenHash: string;
+    expiresAt: Date;
+  }> = [];
+  const store: GuestSessionStore = {
+    async findActive(_tokenHash, now) {
+      assert.equal(now.toISOString(), "2026-09-01T00:00:00.001Z");
+      return null;
+    },
+    async create(input) {
+      createdSessions.push(input);
+      return { id: "fresh-guest-session-id" };
+    },
+    async refresh() {
+      throw new Error("An expired Guest Session must not be refreshed");
+    },
+  };
+  const route = createGuestSessionRoute(
+    async (_request, guestSession) =>
+      Response.json({ guestSessionId: guestSession.id }),
+    {
+      store,
+      now: () => new Date("2026-09-01T00:00:00.001Z"),
+      issueToken: () => "fresh-server-issued-token",
+    },
+  );
+
+  const response = await route(
+    new Request("https://storefront.example/api/stateful", {
+      method: "POST",
+      headers: { cookie: "guest_session=expired-browser-token" },
+    }),
+  );
+
+  assert.deepEqual(await response.json(), {
+    guestSessionId: "fresh-guest-session-id",
+  });
+  assert.equal(createdSessions.length, 1);
+  assert.equal(
+    createdSessions[0].expiresAt.toISOString(),
+    "2026-10-01T00:00:00.001Z",
+  );
+  assert.match(
+    response.headers.get("set-cookie") ?? "",
+    /^guest_session=fresh-server-issued-token;/,
+  );
+});

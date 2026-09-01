@@ -9,6 +9,7 @@ import {
 type CartRouteOptions = {
   store: GuestSessionStore;
   createCart: (guestSession: GuestSession) => CartModule;
+  now?: () => Date;
 };
 
 export function createCartRoute(options: CartRouteOptions) {
@@ -30,6 +31,9 @@ export function createCartRoute(options: CartRouteOptions) {
         return unexpectedErrorResponse();
       }
     },
-    { store: options.store },
+    {
+      store: options.store,
+      ...(options.now ? { now: options.now } : {}),
+    },
   );
 }

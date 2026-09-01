@@ -6,13 +6,17 @@ import { eq } from "drizzle-orm";
 import { GET } from "@/app/api/products/route";
 import { DELETE as deleteConversation } from "@/app/api/agent/conversation/route";
 import { db } from "@/db";
+import { conversations, messages } from "@/db/schema/agent";
+import { recommendationEvents } from "@/db/schema/analytics";
 import { cartItems, carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
 import { brands, guestSessions } from "@/db/schema/identity";
 import { createCatalogModule } from "@/modules/catalog/catalog";
 import { createCartModule } from "@/modules/cart/cart";
 import {
+  cleanupExpiredGuestSessions,
   createDatabaseGuestSessionStore,
+  createGuestSessionBrowsingRoute,
   createGuestSessionRoute,
 } from "@/modules/identity/guest-session";
 
@@ -186,35 +190,41 @@ test("passive Storefront browsing creates no Guest Session", async () => {
   assert.deepEqual(storedSessions, []);
 });
 
-test("passive browsing refreshes an existing Guest Session", async () => {
+test("meaningful browsing renews an existing Guest Session for 30 days", async () => {
   await runSeedCommand();
   await db.delete(guestSessions);
-  const initialExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
   const createRoute = createGuestSessionRoute(
     async () => new Response(null, { status: 204 }),
     {
       store: createDatabaseGuestSessionStore(db),
+      now: () => new Date("2026-08-15T00:00:00.000Z"),
       issueToken: () => "browsing-session-token",
     },
   );
   const creationResponse = await createRoute(
     new Request("https://storefront.example/api/stateful", { method: "POST" }),
   );
-  await db.update(guestSessions).set({ expiresAt: initialExpiry });
   const cookie = creationResponse.headers.get("set-cookie")!.split(";", 1)[0];
+  const browsingRoute = createGuestSessionBrowsingRoute(
+    async () => new Response(null, { status: 204 }),
+    {
+      store: createDatabaseGuestSessionStore(db),
+      now: () => new Date("2026-09-01T00:00:00.000Z"),
+    },
+  );
 
-  const response = await GET(
-    new Request("https://storefront.example/api/products?limit=50", {
+  const response = await browsingRoute(
+    new Request("https://storefront.example/api/products", {
       headers: { cookie },
     }),
   );
   const [storedSession] = await db.select().from(guestSessions);
 
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 204);
   assert.match(response.headers.get("set-cookie") ?? "", /^guest_session=/);
-  assert.ok(
-    storedSession.expiresAt.getTime() >
-      initialExpiry.getTime() + 28 * 24 * 60 * 60 * 1000,
+  assert.equal(
+    storedSession.expiresAt.toISOString(),
+    "2026-10-01T00:00:00.000Z",
   );
 });
 
@@ -232,6 +242,136 @@ test("a state-changing Storefront route creates a Guest Session", async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("set-cookie") ?? "", /^guest_session=/);
   assert.equal(storedSessions.length, 1);
+});
+
+test("cleanup removes expired guest shopping state and preserves active Guest Sessions", async () => {
+  await runSeedCommand();
+  await db.delete(guestSessions);
+  const expiredGuestSessionId = "13000000-0000-4000-8000-000000000002";
+  const activeGuestSessionId = "13000000-0000-4000-8000-000000000003";
+  const expiredCartId = "31000000-0000-4000-8000-000000000002";
+  const activeCartId = "31000000-0000-4000-8000-000000000003";
+  const expiredConversationId = "41000000-0000-4000-8000-000000000002";
+  const activeConversationId = "41000000-0000-4000-8000-000000000003";
+  await db.insert(guestSessions).values([
+    {
+      id: expiredGuestSessionId,
+      tokenHash: "a".repeat(64),
+      expiresAt: new Date("2026-09-01T00:00:00.000Z"),
+    },
+    {
+      id: activeGuestSessionId,
+      tokenHash: "b".repeat(64),
+      expiresAt: new Date("2026-09-01T00:00:00.001Z"),
+    },
+  ]);
+  await db.insert(carts).values([
+    {
+      id: expiredCartId,
+      guestSessionId: expiredGuestSessionId,
+      currency: "INR" as const,
+    },
+    {
+      id: activeCartId,
+      guestSessionId: activeGuestSessionId,
+      currency: "INR" as const,
+    },
+  ]);
+  await db.insert(conversations).values([
+    {
+      id: expiredConversationId,
+      guestSessionId: expiredGuestSessionId,
+      activeCartId: expiredCartId,
+    },
+    {
+      id: activeConversationId,
+      guestSessionId: activeGuestSessionId,
+      activeCartId,
+    },
+  ]);
+  await db.insert(messages).values([
+    {
+      conversationId: expiredConversationId,
+      role: "CUSTOMER",
+      content: "expired Conversation content",
+    },
+    {
+      conversationId: activeConversationId,
+      role: "CUSTOMER",
+      content: "active Conversation content",
+    },
+  ]);
+  await db.insert(recommendationEvents).values([
+    {
+      guestSessionId: expiredGuestSessionId,
+      cartId: expiredCartId,
+      sourceProductId: null,
+      recommendedProductId: "21000000-0000-4000-8000-000000000001",
+      recommendationType: "CROSS_SELL" as const,
+      cartValueBeforeMinor: 399900,
+      projectedCartValueMinor: 469800,
+      incrementalRevenueMinor: 69900,
+      shownAt: new Date("2026-08-01T00:00:00.000Z"),
+      acceptedAt: null,
+      rejectedAt: null,
+    },
+    {
+      guestSessionId: activeGuestSessionId,
+      cartId: activeCartId,
+      sourceProductId: null,
+      recommendedProductId: "21000000-0000-4000-8000-000000000001",
+      recommendationType: "CROSS_SELL" as const,
+      cartValueBeforeMinor: 399900,
+      projectedCartValueMinor: 469800,
+      incrementalRevenueMinor: 69900,
+      shownAt: new Date("2026-08-01T00:00:00.000Z"),
+      acceptedAt: null,
+      rejectedAt: null,
+    },
+  ]);
+
+  const result = await cleanupExpiredGuestSessions(
+    db,
+    new Date("2026-09-01T00:00:00.000Z"),
+  );
+
+  assert.deepEqual(result, { deletedGuestSessions: 1 });
+  assert.deepEqual(
+    await db.select({ id: guestSessions.id }).from(guestSessions),
+    [{ id: activeGuestSessionId }],
+  );
+  assert.deepEqual(await db.select({ id: carts.id }).from(carts), [
+    { id: activeCartId },
+  ]);
+  assert.deepEqual(
+    await db.select({ id: conversations.id }).from(conversations),
+    [{ id: activeConversationId }],
+  );
+  assert.deepEqual(
+    await db.select({ content: messages.content }).from(messages),
+    [{ content: "active Conversation content" }],
+  );
+  assert.equal(
+    (await db.select().from(recommendationEvents)).length,
+    1,
+  );
+});
+
+test("cleanup can be retried after expired Guest Sessions are removed", async () => {
+  await db.delete(guestSessions);
+  await db.insert(guestSessions).values({
+    id: "13000000-0000-4000-8000-000000000004",
+    tokenHash: "c".repeat(64),
+    expiresAt: new Date("2026-09-01T00:00:00.000Z"),
+  });
+  const cleanupTime = new Date("2026-09-01T00:00:00.000Z");
+
+  const firstResult = await cleanupExpiredGuestSessions(db, cleanupTime);
+  const retryResult = await cleanupExpiredGuestSessions(db, cleanupTime);
+
+  assert.deepEqual(firstResult, { deletedGuestSessions: 1 });
+  assert.deepEqual(retryResult, { deletedGuestSessions: 0 });
+  assert.deepEqual(await db.select().from(guestSessions), []);
 });
 
 test("database rejects a Product priced outside INR", async () => {

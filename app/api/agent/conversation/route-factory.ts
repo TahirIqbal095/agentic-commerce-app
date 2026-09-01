@@ -12,12 +12,14 @@ type ConversationRouteOptions = {
   store: GuestSessionStore;
   createState: (guestSession: GuestSession) => ConversationState;
   issueToken?: () => string;
+  now?: () => Date;
 };
 
 export function createConversationRoutes(options: ConversationRouteOptions) {
   const guestSessionOptions = {
     store: options.store,
     ...(options.issueToken ? { issueToken: options.issueToken } : {}),
+    ...(options.now ? { now: options.now } : {}),
   };
   return {
     GET: createGuestSessionBrowsingRoute(

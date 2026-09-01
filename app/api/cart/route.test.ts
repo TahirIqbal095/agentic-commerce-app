@@ -138,3 +138,44 @@ test("a Guest Session cannot read another Guest Session's Cart", async () => {
     },
   });
 });
+
+test("an expired Guest Session cannot resume its former Cart", async () => {
+  const expiredAt = new Date("2026-09-01T00:00:00.000Z");
+  const store: GuestSessionStore = {
+    async findActive(_tokenHash, now) {
+      assert.equal(now.toISOString(), "2026-09-01T00:00:00.001Z");
+      return now < expiredAt ? { id: "expired-guest-session" } : null;
+    },
+    async create() {
+      throw new Error("Reading a Cart must not create a Guest Session");
+    },
+    async refresh() {
+      throw new Error("An expired Guest Session must not be refreshed");
+    },
+  };
+  const route = createCartRoute({
+    store,
+    now: () => new Date("2026-09-01T00:00:00.001Z"),
+    createCart() {
+      throw new Error("An expired Guest Session must not expose its Cart");
+    },
+  });
+
+  const response = await route(
+    new Request("https://storefront.example/api/cart", {
+      headers: { cookie: "guest_session=expired-browser-token" },
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.has("set-cookie"), false);
+  assert.deepEqual(await response.json(), {
+    data: {
+      id: null,
+      items: [],
+      totalQuantity: 0,
+      subtotalMinor: 0,
+      currency: "INR",
+    },
+  });
+});
