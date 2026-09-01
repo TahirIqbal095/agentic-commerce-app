@@ -3,16 +3,7 @@ import type { recommendationEvents } from "./analytics";
 import type { auditEvents } from "./audit";
 import type { cartItems, carts } from "./cart";
 import type { productRelations, products } from "./catalog";
-import type {
-  approvals,
-  checkoutProposalItems,
-  checkoutProposals,
-  policies,
-  policyEvaluations,
-} from "./checkout";
-import type { brandAdmins, brands, users } from "./identity";
-import type { orderItems, orders } from "./ordering";
-import type { paymentAttempts, webhookEvents } from "./payments";
+import type { brandAdmins, brands, guestSessions, users } from "./identity";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -22,6 +13,8 @@ export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type BrandAdmin = typeof brandAdmins.$inferSelect;
 export type NewBrandAdmin = typeof brandAdmins.$inferInsert;
+export type GuestSession = typeof guestSessions.$inferSelect;
+export type NewGuestSession = typeof guestSessions.$inferInsert;
 
 export type Product = typeof products.$inferSelect;
 export type NewProduct = typeof products.$inferInsert;
@@ -32,27 +25,6 @@ export type Cart = typeof carts.$inferSelect;
 export type NewCart = typeof carts.$inferInsert;
 export type CartItem = typeof cartItems.$inferSelect;
 export type NewCartItem = typeof cartItems.$inferInsert;
-
-export type Policy = typeof policies.$inferSelect;
-export type NewPolicy = typeof policies.$inferInsert;
-export type CheckoutProposal = typeof checkoutProposals.$inferSelect;
-export type NewCheckoutProposal = typeof checkoutProposals.$inferInsert;
-export type CheckoutProposalItem = typeof checkoutProposalItems.$inferSelect;
-export type NewCheckoutProposalItem = typeof checkoutProposalItems.$inferInsert;
-export type PolicyEvaluation = typeof policyEvaluations.$inferSelect;
-export type NewPolicyEvaluation = typeof policyEvaluations.$inferInsert;
-export type Approval = typeof approvals.$inferSelect;
-export type NewApproval = typeof approvals.$inferInsert;
-
-export type Order = typeof orders.$inferSelect;
-export type NewOrder = typeof orders.$inferInsert;
-export type OrderItem = typeof orderItems.$inferSelect;
-export type NewOrderItem = typeof orderItems.$inferInsert;
-
-export type PaymentAttempt = typeof paymentAttempts.$inferSelect;
-export type NewPaymentAttempt = typeof paymentAttempts.$inferInsert;
-export type WebhookEvent = typeof webhookEvents.$inferSelect;
-export type NewWebhookEvent = typeof webhookEvents.$inferInsert;
 
 export type Conversation = typeof conversations.$inferSelect;
 export type NewConversation = typeof conversations.$inferInsert;

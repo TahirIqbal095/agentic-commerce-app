@@ -21,11 +21,6 @@ export type CartView = Omit<CartSummary, "id"> & {
     cartPriceMinor: number;
     subtotalMinor: number;
   }>;
-  priceChange?: {
-    productId: string;
-    previousCartPriceMinor: number;
-    currentCartPriceMinor: number;
-  };
 };
 
 export type CartAddition = {
@@ -57,6 +52,10 @@ export function createCartModule(
   userId: string,
   defaultCurrency = "INR",
 ): CartModule {
+  if (defaultCurrency !== "INR") {
+    throw new CartError("Cart currency must be INR.");
+  }
+
   const addItems: NonNullable<CartModule["addItems"]> = async (
     additions,
     complete,
@@ -172,7 +171,6 @@ export function createCartModule(
             target: [cartItems.cartId, cartItems.productId],
             set: {
               quantity: nextQuantity,
-              unitPriceSnapshotMinor: product.priceMinor,
               updatedAt: new Date(),
             },
           });
@@ -183,23 +181,7 @@ export function createCartModule(
         .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
         .where(eq(carts.id, activeCart.id));
 
-      const firstPriceChange = validatedAdditions.find(
-        ({ product, existing }) =>
-          existing && existing.cartPriceMinor !== product.priceMinor,
-      );
-      const cart: CartView = {
-        ...(await readCart(transaction, activeCart)),
-        ...(firstPriceChange?.existing
-          ? {
-              priceChange: {
-                productId: firstPriceChange.product.id,
-                previousCartPriceMinor:
-                  firstPriceChange.existing.cartPriceMinor,
-                currentCartPriceMinor: firstPriceChange.product.priceMinor,
-              },
-            }
-          : {}),
-      };
+      const cart = await readCart(transaction, activeCart);
       await complete(cart, transaction);
       return cart;
     });

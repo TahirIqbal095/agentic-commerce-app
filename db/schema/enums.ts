@@ -15,49 +15,6 @@ export const cartStatusEnum = pgEnum("cart_status", [
   "ABANDONED",
 ]);
 
-export const checkoutProposalStatusEnum = pgEnum("checkout_proposal_status", [
-  "PREPARED",
-  "APPROVAL_PENDING",
-  "APPROVED",
-  "CONSUMED",
-  "INVALIDATED",
-  "EXPIRED",
-]);
-
-export const policyDecisionEnum = pgEnum("policy_decision", [
-  "ALLOW",
-  "REQUIRES_APPROVAL",
-  "BLOCK",
-]);
-
-export const approvalStatusEnum = pgEnum("approval_status", [
-  "PENDING",
-  "APPROVED",
-  "REJECTED",
-  "EXPIRED",
-  "CONSUMED",
-]);
-
-export const orderStatusEnum = pgEnum("order_status", [
-  "PENDING",
-  "PAYMENT_PENDING",
-  "PAID",
-  "PAYMENT_FAILED",
-  "CANCELLED",
-  "FULFILLED",
-]);
-
-export const paymentProviderEnum = pgEnum("payment_provider", ["RAZORPAY"]);
-
-export const paymentStatusEnum = pgEnum("payment_status", [
-  "CREATED",
-  "PENDING",
-  "AUTHORIZED",
-  "CAPTURED",
-  "FAILED",
-  "REFUNDED",
-]);
-
 export const actorTypeEnum = pgEnum("actor_type", [
   "USER",
   "AGENT",

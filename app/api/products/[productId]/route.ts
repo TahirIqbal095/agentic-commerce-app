@@ -6,8 +6,9 @@ import {
 import { isUuid } from "@/lib/validation";
 import { createCatalogModule } from "@/modules/catalog/catalog";
 import { requireBrand } from "@/modules/identity/brand";
+import { createStorefrontBrowsingRoute } from "@/modules/identity/guest-session";
 
-export async function GET(
+async function getProduct(
   _request: Request,
   context: { params: Promise<{ productId: string }> },
 ): Promise<Response> {
@@ -38,3 +39,5 @@ export async function GET(
     return unexpectedErrorResponse();
   }
 }
+
+export const GET = createStorefrontBrowsingRoute(getProduct);

@@ -4,12 +4,17 @@ import test, { after } from "node:test";
 import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
 import { GET } from "@/app/api/products/route";
+import { DELETE as deleteConversation } from "@/app/api/agent/conversation/route";
 import { db } from "@/db";
-import { carts } from "@/db/schema/cart";
+import { cartItems, carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
-import { brands } from "@/db/schema/identity";
+import { brands, guestSessions } from "@/db/schema/identity";
 import { createCatalogModule } from "@/modules/catalog/catalog";
 import { createCartModule } from "@/modules/cart/cart";
+import {
+  createDatabaseGuestSessionStore,
+  createGuestSessionRoute,
+} from "@/modules/identity/guest-session";
 import { DEMO_CUSTOMER_ID } from "@/db/seed";
 
 const execFileAsync = promisify(execFile);
@@ -110,6 +115,207 @@ test("database rejects a second Brand in one deployment", async () => {
   );
 });
 
+test("database rejects a Brand configured outside INR", async () => {
+  await runSeedCommand();
+  await db.delete(brands);
+
+  await assert.rejects(
+    db.insert(brands).values({
+      name: "Unsupported Currency Brand",
+      slug: "unsupported-currency-brand",
+      description: "A Brand whose currency must be rejected.",
+      currency: "USD",
+    }),
+  );
+
+  await runSeedCommand();
+});
+
+test("Guest Sessions persist a token hash instead of the cookie token", async () => {
+  await db.delete(guestSessions);
+  const route = createGuestSessionRoute(
+    async () => new Response(null, { status: 204 }),
+    {
+      store: createDatabaseGuestSessionStore(db),
+      now: () => new Date("2026-09-01T00:00:00.000Z"),
+      issueToken: () => "database-guest-session-token",
+    },
+  );
+
+  const response = await route(
+    new Request("https://storefront.example/api/stateful", {
+      method: "POST",
+    }),
+  );
+  const [storedSession] = await db.select().from(guestSessions);
+
+  assert.equal(response.status, 204);
+  assert.ok(storedSession);
+  assert.equal(
+    storedSession.tokenHash,
+    "9258ab01a459823c10aa99916dcd338d1fcd7a67c4802f927263b88bcc3d99bd",
+  );
+  assert.equal("token" in storedSession, false);
+  assert.equal(
+    storedSession.expiresAt.toISOString(),
+    "2026-10-01T00:00:00.000Z",
+  );
+});
+
+test("passive Storefront browsing creates no Guest Session", async () => {
+  await runSeedCommand();
+  await db.delete(guestSessions);
+
+  const response = await getProducts();
+  const storedSessions = await db.select().from(guestSessions);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.has("set-cookie"), false);
+  assert.deepEqual(storedSessions, []);
+});
+
+test("passive browsing refreshes an existing Guest Session", async () => {
+  await runSeedCommand();
+  await db.delete(guestSessions);
+  const initialExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const createRoute = createGuestSessionRoute(
+    async () => new Response(null, { status: 204 }),
+    {
+      store: createDatabaseGuestSessionStore(db),
+      issueToken: () => "browsing-session-token",
+    },
+  );
+  const creationResponse = await createRoute(
+    new Request("https://storefront.example/api/stateful", { method: "POST" }),
+  );
+  await db.update(guestSessions).set({ expiresAt: initialExpiry });
+  const cookie = creationResponse.headers.get("set-cookie")!.split(";", 1)[0];
+
+  const response = await GET(
+    new Request("https://storefront.example/api/products?limit=50", {
+      headers: { cookie },
+    }),
+  );
+  const [storedSession] = await db.select().from(guestSessions);
+
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("set-cookie") ?? "", /^guest_session=/);
+  assert.ok(
+    storedSession.expiresAt.getTime() >
+      initialExpiry.getTime() + 28 * 24 * 60 * 60 * 1000,
+  );
+});
+
+test("a state-changing Storefront route creates a Guest Session", async () => {
+  await runSeedCommand();
+  await db.delete(guestSessions);
+
+  const response = await deleteConversation(
+    new Request("https://storefront.example/api/agent/conversation", {
+      method: "DELETE",
+    }),
+  );
+  const storedSessions = await db.select().from(guestSessions);
+
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("set-cookie") ?? "", /^guest_session=/);
+  assert.equal(storedSessions.length, 1);
+});
+
+test("database rejects a Product priced outside INR", async () => {
+  await runSeedCommand();
+
+  await assert.rejects(
+    db.insert(products).values({
+      name: "Unsupported Currency Product",
+      slug: "unsupported-currency-product",
+      description: "A Product whose currency must be rejected.",
+      category: "Footwear",
+      priceMinor: 10000,
+      currency: "USD",
+      stock: 1,
+    }),
+  );
+});
+
+test("database rejects a Cart amount outside INR", async () => {
+  await runSeedCommand();
+  await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
+
+  await assert.rejects(
+    db.insert(carts).values({
+      userId: DEMO_CUSTOMER_ID,
+      currency: "USD",
+    }),
+  );
+});
+
+test("Cart inspection rejects a non-INR runtime default", async () => {
+  await runSeedCommand();
+  await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
+
+  assert.throws(() => createCartModule(DEMO_CUSTOMER_ID, "USD"), {
+    name: "CartError",
+    message: "Cart currency must be INR.",
+  });
+});
+
+test("database rejects runtime Product price changes", async () => {
+  await runSeedCommand();
+  const [product] = await db
+    .select({ id: products.id, priceMinor: products.priceMinor })
+    .from(products)
+    .limit(1);
+  assert.ok(product);
+
+  await assert.rejects(
+    db
+      .update(products)
+      .set({ priceMinor: product.priceMinor + 1 })
+      .where(eq(products.id, product.id)),
+  );
+});
+
+test("database contains no deferred checkout or payment storage", async () => {
+  const deferredTables = [
+    "approvals",
+    "checkout_proposal_items",
+    "checkout_proposals",
+    "order_items",
+    "orders",
+    "payment_attempts",
+    "policies",
+    "policy_evaluations",
+    "webhook_events",
+  ];
+  const result = await db.$client.query<{ table_name: string }>(
+    `select table_name
+       from information_schema.tables
+      where table_schema = 'public'
+        and table_name = any($1::text[])
+      order by table_name`,
+    [deferredTables],
+  );
+  const deferredTypes = [
+    "approval_status",
+    "checkout_proposal_status",
+    "order_status",
+    "payment_provider",
+    "payment_status",
+    "policy_decision",
+  ];
+  const typeResult = await db.$client.query<{ typname: string }>(
+    `select typname
+       from pg_type
+      where typname = any($1::text[])
+      order by typname`,
+    [deferredTypes],
+  );
+
+  assert.deepEqual(result.rows, []);
+  assert.deepEqual(typeResult.rows, []);
+});
+
 test("catalog search matches related footwear product types", async () => {
   await runSeedCommand();
   const catalog = createCatalogModule();
@@ -176,19 +382,62 @@ test("concurrent Customer turns retain every authoritative Cart addition", async
   assert.equal(summary.totalQuantity, 2);
   assert.equal(summary.subtotalMinor, 799800);
   assert.equal(summary.currency, "INR");
+});
 
-  await db
-    .update(products)
-    .set({ priceMinor: 429900 })
-    .where(eq(products.id, product.id));
-  const repriced = await cart.addItem(product, 1, async () => {});
-
-  assert.equal(repriced.items[0].quantity, 3);
-  assert.equal(repriced.items[0].cartPriceMinor, 429900);
-  assert.equal(repriced.items[0].subtotalMinor, 1289700);
-  assert.deepEqual(repriced.priceChange, {
-    productId: product.id,
-    previousCartPriceMinor: 399900,
-    currentCartPriceMinor: 429900,
+test("Cart additions retain an existing Cart Price", async () => {
+  await runSeedCommand();
+  await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
+  const catalog = createCatalogModule();
+  const result = await catalog.search({
+    query: "StrideFlow Daily Running Shoes",
+    limit: 1,
   });
+  const product = result.products[0];
+  assert.ok(product);
+
+  const [activeCart] = await db
+    .insert(carts)
+    .values({ userId: DEMO_CUSTOMER_ID, currency: "INR" })
+    .returning({ id: carts.id });
+  await db.insert(cartItems).values({
+    cartId: activeCart.id,
+    productId: product.id,
+    quantity: 2,
+    unitPriceSnapshotMinor: 389900,
+  });
+
+  const cart = createCartModule(DEMO_CUSTOMER_ID);
+  const updated = await cart.addItem(product, 1, async () => {});
+
+  assert.equal(updated.items[0].quantity, 3);
+  assert.equal(updated.items[0].cartPriceMinor, 389900);
+  assert.equal(updated.items[0].subtotalMinor, 1169700);
+  assert.equal("priceChange" in updated, false);
+});
+
+test("database rejects runtime Cart Price changes", async () => {
+  await runSeedCommand();
+  await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
+  const [product] = await db
+    .select({ id: products.id, priceMinor: products.priceMinor })
+    .from(products)
+    .limit(1);
+  assert.ok(product);
+  const [activeCart] = await db
+    .insert(carts)
+    .values({ userId: DEMO_CUSTOMER_ID, currency: "INR" })
+    .returning({ id: carts.id });
+  await db.insert(cartItems).values({
+    cartId: activeCart.id,
+    productId: product.id,
+    quantity: 1,
+    unitPriceSnapshotMinor: product.priceMinor,
+  });
+
+  await assert.rejects(
+    db
+      .update(cartItems)
+      .set({ unitPriceSnapshotMinor: product.priceMinor + 1 })
+      .where(eq(cartItems.cartId, activeCart.id)),
+  );
 });

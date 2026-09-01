@@ -342,7 +342,7 @@ export function createCommerceAgent(
             const outcome: AgentOutcome = {
               status: "COMPLETED",
               conversationId: turn.conversationId,
-              message: cartAdditionsMessage(additions, updatedCart),
+              message: cartAdditionsMessage(additions),
               intentBrief,
               products: [],
               cart: updatedCart,
@@ -365,7 +365,7 @@ export function createCommerceAgent(
           return completeTurn(turn, {
             status: "COMPLETED",
             conversationId: turn.conversationId,
-            message: cartAdditionsMessage(additions, cart),
+            message: cartAdditionsMessage(additions),
             intentBrief,
             products: [],
             cart,
@@ -517,25 +517,16 @@ function contextConflictOutcome(conversationId: string): AgentOutcome {
 function cartAdditionMessage(
   quantity: number,
   productName: string,
-  cart: Awaited<ReturnType<CartModule["addItem"]>>,
 ): string {
-  const confirmation = `Added ${quantity} × ${productName} to your Cart.`;
-  if (!cart.priceChange) return confirmation;
-  const formatPrice = (priceMinor: number) =>
-    new Intl.NumberFormat("en-IN", {
-      style: "currency",
-      currency: cart.currency,
-    }).format(priceMinor / 100);
-  return `${confirmation} Its Cart Price changed from ${formatPrice(cart.priceChange.previousCartPriceMinor)} to ${formatPrice(cart.priceChange.currentCartPriceMinor)}.`;
+  return `Added ${quantity} × ${productName} to your Cart.`;
 }
 
 function cartAdditionsMessage(
   additions: Array<{ product: CatalogProduct; quantity: number }>,
-  cart: Awaited<ReturnType<CartModule["addItem"]>>,
 ): string {
   if (additions.length === 1) {
     const [{ product, quantity }] = additions;
-    return cartAdditionMessage(quantity, product.name, cart);
+    return cartAdditionMessage(quantity, product.name);
   }
   const selections = additions.map(
     ({ product, quantity }) => `${quantity} × ${product.name}`,

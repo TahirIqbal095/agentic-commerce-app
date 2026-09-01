@@ -30,6 +30,7 @@ export const carts = pgTable(
       .on(table.userId)
       .where(sql`${table.status} = 'ACTIVE'`),
     index("carts_user_idx").on(table.userId),
+    check("carts_currency_inr", sql`${table.currency} = 'INR'`),
     check("carts_version_positive", sql`${table.version} > 0`),
   ],
 );

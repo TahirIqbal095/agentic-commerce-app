@@ -10,6 +10,7 @@ import { createCartModule } from "@/modules/cart/cart";
 import { requireBrand } from "@/modules/identity/brand";
 import { resolveCustomerContext } from "@/modules/identity/customer-context";
 import { resolveUserContext } from "@/modules/identity/user-context";
+import { createStorefrontGuestSessionRoute } from "@/modules/identity/guest-session";
 import { createPostHandler } from "./handler";
 
 async function createAgentForStorefront(): Promise<CommerceAgent> {
@@ -34,4 +35,8 @@ async function createAgentForStorefront(): Promise<CommerceAgent> {
   );
 }
 
-export const POST = createPostHandler(createAgentForStorefront);
+const postMessage = createPostHandler(createAgentForStorefront);
+
+export const POST = createStorefrontGuestSessionRoute((request) =>
+  postMessage(request),
+);

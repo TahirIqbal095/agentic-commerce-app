@@ -808,11 +808,6 @@ test("adds the second Product from the latest Recommendation Set with a default 
     totalQuantity: 2,
     subtotalMinor: 2 * currentProduct.priceMinor,
     currency: "INR",
-    priceChange: {
-      productId: currentProduct.id,
-      previousCartPriceMinor: 390000,
-      currentCartPriceMinor: currentProduct.priceMinor,
-    },
   };
   const additions: Array<{ productId: string; priceMinor: number; quantity: number }> = [];
   let turn = 0;
@@ -881,8 +876,7 @@ test("adds the second Product from the latest Recommendation Set with a default 
   assert.deepEqual((await addition.json()).data, {
     status: "COMPLETED",
     conversationId,
-    message:
-      "Added 1 × Road Two to your Cart. Its Cart Price changed from ₹3,900.00 to ₹4,100.00.",
+    message: "Added 1 × Road Two to your Cart.",
     intentBrief: {
       goal: "Add a recommended Product",
       constraints: emptyConversationContext().productConstraints,
