@@ -43,7 +43,9 @@ export function createPostHandler(createAgent: AgentFactory) {
     }
 
     const identityField = Object.keys(body).find((field) =>
-      /^(?:user|customer|admin)(?:Id|_id|Identifier)$/.test(field),
+      /^(?:(?:user|customer|admin|brandAdmin)(?:Id|Identifier)|(?:user|customer|admin|brand_admin)_id)$/.test(
+        field,
+      ),
     );
     if (identityField) {
       return errorResponse(

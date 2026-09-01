@@ -2467,6 +2467,9 @@ test("rejects legacy Customer identity fields before creating an agent", async (
     "userIdentifier",
     "customerIdentifier",
     "adminIdentifier",
+    "brandAdminId",
+    "brand_admin_id",
+    "brandAdminIdentifier",
   ] as const) {
     const response = await POST(
       new Request("http://localhost/api/agent/message", {
