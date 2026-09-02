@@ -128,7 +128,6 @@ export function createConversationState(
         await transaction
           .update(conversations)
           .set({
-            activeCartId: null,
             closedAt: new Date(),
             context: createEmptyConversationContext(),
             updatedAt: new Date(),

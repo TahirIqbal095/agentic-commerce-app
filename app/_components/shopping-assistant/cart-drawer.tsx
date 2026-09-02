@@ -47,7 +47,8 @@ export function CartDrawer({
         <DrawerHeader className="border-b border-[#1d2a24]/10 px-5 pb-5 sm:px-7">
           <DrawerTitle>Your Cart</DrawerTitle>
           <DrawerDescription>
-            Authoritative Items, quantities, Cart Prices, and Cart Subtotal.
+            Authoritative Cart Items, quantities, Cart Prices, and Cart
+            Subtotal.
           </DrawerDescription>
         </DrawerHeader>
         <div className="overflow-y-auto px-5 py-6 sm:px-7">

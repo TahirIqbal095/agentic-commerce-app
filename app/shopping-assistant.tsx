@@ -197,6 +197,7 @@ export function ShoppingAssistant({
 
   async function addProduct(product: CatalogProduct) {
     if (addingProductIds.has(product.id)) return;
+    let cartWasReconciled = false;
     setAddingProductIds((current) => new Set(current).add(product.id));
     setCartFeedback((current) => {
       const next = { ...current };
@@ -219,6 +220,7 @@ export function ShoppingAssistant({
         if ("error" in payload && payload.error.details?.cart) {
           setCart(payload.error.details.cart);
           setCartState("ready");
+          cartWasReconciled = true;
         }
         throw new Error(
           "error" in payload
@@ -240,6 +242,7 @@ export function ShoppingAssistant({
         },
       }));
     } catch (requestError) {
+      if (!cartWasReconciled) setCartState("error");
       setCartFeedback((current) => ({
         ...current,
         [product.id]: {

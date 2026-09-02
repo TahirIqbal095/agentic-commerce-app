@@ -298,12 +298,10 @@ test("cleanup removes an expired Guest Session's Cart, Conversation, and Recomme
     {
       id: expiredConversationId,
       guestSessionId: expiredGuestSessionId,
-      activeCartId: expiredCartId,
     },
     {
       id: activeConversationId,
       guestSessionId: activeGuestSessionId,
-      activeCartId,
     },
   ]);
   await db.insert(messages).values([

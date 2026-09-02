@@ -71,32 +71,35 @@ test("Customer adds a recommended Product without optimistic Cart changes or mod
     requests.push([input, init]);
     addAttempt += 1;
     if (addAttempt === 1) return addResponse;
-    return Response.json(
-      {
-        error: {
-          code: "CART_RULE_REJECTED",
-          message: "Quiet Buds cannot have more than 10 units in the Cart.",
-          details: {
-            cart: {
-              id: "31000000-0000-4000-8000-000000000001",
-              items: [
-                {
-                  productId,
-                  productName: "Quiet Buds",
-                  quantity: 10,
-                  cartPriceMinor: 349900,
-                  subtotalMinor: 3499000,
-                },
-              ],
-              totalQuantity: 10,
-              subtotalMinor: 3499000,
-              currency: "INR",
+    if (addAttempt === 2) {
+      return Response.json(
+        {
+          error: {
+            code: "CART_RULE_REJECTED",
+            message: "Quiet Buds cannot have more than 10 units in the Cart.",
+            details: {
+              cart: {
+                id: "31000000-0000-4000-8000-000000000001",
+                items: [
+                  {
+                    productId,
+                    productName: "Quiet Buds",
+                    quantity: 10,
+                    cartPriceMinor: 349900,
+                    subtotalMinor: 3499000,
+                  },
+                ],
+                totalQuantity: 10,
+                subtotalMinor: 3499000,
+                currency: "INR",
+              },
             },
           },
         },
-      },
-      { status: 409 },
-    );
+        { status: 409 },
+      );
+    }
+    throw new Error("Cart request failed after submission.");
   };
   const [{ render, cleanup, act }, userEvent, { ShoppingAssistant }] =
     await Promise.all([
@@ -203,6 +206,15 @@ test("Customer adds a recommended Product without optimistic Cart changes or mod
     "Quiet Buds cannot have more than 10 units in the Cart.",
   );
   assert.ok(view.getByRole("button", { name: "Cart · 10" }));
+
+  await user.click(add);
+
+  assert.equal(
+    (await view.findByRole("alert")).textContent,
+    "Cart request failed after submission.",
+  );
+  assert.ok(view.getByRole("button", { name: "Cart, unavailable" }));
+  assert.equal(view.queryByRole("button", { name: "Cart · 10" }), null);
 });
 
 test("Customer uses the same deterministic Add behavior from Product details", async (t) => {

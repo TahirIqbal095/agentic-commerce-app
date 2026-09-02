@@ -11,7 +11,6 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
-import { carts } from "./cart";
 import { createdAt, id, updatedAt } from "./columns";
 import { agentActionStatusEnum, messageRoleEnum } from "./enums";
 import { guestSessions } from "./identity";
@@ -28,9 +27,6 @@ export const conversations = pgTable(
     guestSessionId: uuid("guest_session_id")
       .notNull()
       .references(() => guestSessions.id, { onDelete: "cascade" }),
-    activeCartId: uuid("active_cart_id").references(() => carts.id, {
-      onDelete: "set null",
-    }),
     context: jsonb("context")
       .$type<ConversationContext>()
       .notNull()
