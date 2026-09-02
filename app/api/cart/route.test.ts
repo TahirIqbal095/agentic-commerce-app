@@ -898,9 +898,6 @@ test("returning with the same valid cookie resumes the current Cart", async () =
         async inspect() {
           return cartBySessionId.get(guestSession.id)!;
         },
-        async inspectForReview() {
-          throw new Error("The Cart route never reviews the Cart");
-        },
         async addItem() {
           throw new Error("The Cart route is read-only");
         },

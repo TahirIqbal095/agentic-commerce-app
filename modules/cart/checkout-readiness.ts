@@ -4,7 +4,7 @@ import {
   toCartViewItem,
   type CartView,
   type CartWithProductAvailability,
-} from "./cart";
+} from "./cart-view";
 import type { CartReviewRead } from "./cart-inspection";
 
 /**

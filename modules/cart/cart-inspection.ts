@@ -1,4 +1,9 @@
-import type { CartModule, CartView, CartWithProductAvailability } from "./cart";
+import type {
+  CartModule,
+  CartReviewSource,
+  CartView,
+  CartWithProductAvailability,
+} from "./cart";
 
 /**
  * The narrow read-only Cart capability named by ADR-0004.
@@ -55,7 +60,7 @@ export interface CartReviewRead {
  */
 export function createCartReviewRead(
   guestSessionId: string,
-  createCart: (guestSessionId: string) => Pick<CartModule, "inspectForReview">,
+  createCart: (guestSessionId: string) => CartReviewSource,
 ): CartReviewRead {
   const cart = createCart(guestSessionId);
   return Object.freeze({

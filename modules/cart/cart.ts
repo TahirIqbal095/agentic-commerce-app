@@ -4,60 +4,25 @@ import type { DbExecutor } from "@/db";
 import { cartItems, cartMutations, carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
+import {
+  CART_ITEM_QUANTITY_LIMIT,
+  STOREFRONT_CURRENCY,
+  toCartViewItem,
+  type CartView,
+  type CartWithProductAvailability,
+} from "./cart-view";
 
-export type CartSummary = {
-  id: string;
-  version: number;
-  totalQuantity: number;
-  subtotalMinor: number;
-  currency: string;
-};
+export {
+  CART_ITEM_QUANTITY_LIMIT,
+  STOREFRONT_CURRENCY,
+  toCartViewItem,
+} from "./cart-view";
+export type {
+  CartSummary,
+  CartView,
+  CartWithProductAvailability,
+} from "./cart-view";
 
-export type CartView = Omit<CartSummary, "id"> & {
-  id: string | null;
-  items: Array<{
-    productId: string;
-    productName: string;
-    quantity: number;
-    cartPriceMinor: number;
-    subtotalMinor: number;
-  }>;
-};
-
-/**
- * A Cart read together with each Cart Item's current authoritative
- * availability.
- *
- * Checkout Readiness needs the Product state behind a Cart Item, not only the
- * commercial values a Customer sees, so it re-reads availability and stock in
- * the same read as the Cart itself. The availability is deliberately absent
- * from `CartView`, so it can never reach a persisted readiness card, a Cart
- * Summary, or the Commerce Agent.
- */
-export type CartWithProductAvailability = Omit<CartView, "items"> & {
-  items: Array<
-    CartView["items"][number] & {
-      isAvailable: boolean;
-      stock: number;
-    }
-  >;
-};
-
-/**
- * The authoritative whole-unit ceiling for one Cart Item.
- *
- * Cart commands refuse to exceed it and Checkout Readiness reports a Cart Item
- * that already does, so both speak about the same limit.
- */
-export const CART_ITEM_QUANTITY_LIMIT = 10;
-
-/**
- * The only Currency the Storefront supports, named by ADR-0008.
- *
- * Persisted data outside it is rejected rather than converted, so Cart commands
- * and Checkout Readiness both refuse a Cart priced in anything else.
- */
-export const STOREFRONT_CURRENCY = "INR";
 
 export type CartAddition = {
   product: CatalogProduct;
@@ -104,10 +69,16 @@ export interface CartModule {
     mutation: CartMutation,
   ): Promise<CartView | null>;
   inspect(): Promise<CartView>;
-  /**
-   * Reads the Cart together with each Cart Item's current availability, for
-   * the Checkout Readiness review that must judge stale Catalog state.
-   */
+}
+
+/**
+ * The Cart read Checkout Readiness needs, kept off `CartModule`.
+ *
+ * Only a review asks the Cart for the availability behind its Items, so
+ * requiring it of every Cart module would make each Cart route and its fakes
+ * carry a capability they must never use.
+ */
+export interface CartReviewSource {
   inspectForReview(): Promise<CartWithProductAvailability>;
 }
 
@@ -210,7 +181,7 @@ export async function withBoundedCartConflictRetry<Result>(
 export function createCartModule(
   guestSessionId: string,
   defaultCurrency: string = STOREFRONT_CURRENCY,
-): CartModule {
+): CartModule & CartReviewSource {
   if (defaultCurrency !== STOREFRONT_CURRENCY) {
     throw new CartError(`Cart currency must be ${STOREFRONT_CURRENCY}.`);
   }
@@ -722,24 +693,6 @@ async function readCart(
   return { ...cart, items: items.map(toCartViewItem) };
 }
 
-/**
- * Narrows one reviewed Cart Item to the commercial values a Customer sees.
- *
- * Checkout Readiness judges availability but must not carry it into the Cart it
- * reports, so the Cart in a readiness result is built through this narrowing.
- *
- * @param item - One Cart Item read with its current Product availability.
- * @returns The same Cart Item without any inventory state.
- */
-export function toCartViewItem({
-  productId,
-  productName,
-  quantity,
-  cartPriceMinor,
-  subtotalMinor,
-}: CartWithProductAvailability["items"][number]): CartView["items"][number] {
-  return { productId, productName, quantity, cartPriceMinor, subtotalMinor };
-}
 
 function assertMutationVersionIsNotAhead(
   currentVersion: number,

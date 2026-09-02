@@ -4,7 +4,11 @@ import {
   CHECKOUT_READINESS_ACTION_MESSAGE,
   type CustomerActionEntry,
 } from "@/modules/agent/customer-action-entry";
-import type { CartModule, CartWithProductAvailability } from "@/modules/cart/cart";
+import type {
+  CartModule,
+  CartReviewSource,
+  CartWithProductAvailability,
+} from "@/modules/cart/cart";
 import { createCartReviewRead } from "@/modules/cart/cart-inspection";
 import {
   createCheckoutReadinessReview,
@@ -270,7 +274,9 @@ const unsuppliableCart: CartWithProductAvailability = {
  * Reviewing is a read, so a route that reaches any of these has reserved
  * inventory or changed the Cart on the Customer's behalf.
  */
-function readOnlyCartModule(cart: CartWithProductAvailability): CartModule {
+function readOnlyCartModule(
+  cart: CartWithProductAvailability,
+): CartModule & CartReviewSource {
   const command = async () => {
     throw new Error("A Checkout Readiness review must change no Cart state.");
   };
