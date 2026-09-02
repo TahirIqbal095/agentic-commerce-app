@@ -107,9 +107,7 @@ export function ResultArea({
                         cartFeedback={cartFeedback}
                       />
                     ) : null}
-                    {inspectedCart && inspectedCart.items.length > 0 ? (
-                      <CartPanel cart={inspectedCart} />
-                    ) : null}
+                    {inspectedCart ? <CartPanel cart={inspectedCart} /> : null}
                   </AgentMessage>
                 </motion.div>
               ) : null}

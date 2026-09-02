@@ -65,19 +65,8 @@ export function CartDrawer({
             <p role="alert" className="py-10 text-center text-sm text-red-700">
               Cart details are unavailable. Try again shortly.
             </p>
-          ) : cart.items.length === 0 ? (
-            <div className="py-12 text-center">
-              <ShoppingBag className="mx-auto mb-4 size-8 text-[#708176]" />
-              <p className="font-medium">Your Cart is empty.</p>
-              <p className="mt-2 text-sm text-[#708176]">
-                Add a Product from the Storefront when you find the right one.
-              </p>
-            </div>
           ) : (
-            <CartPanel
-              cart={cart}
-              controls={controls}
-            />
+            <CartPanel cart={cart} controls={controls} />
           )}
         </div>
       </DrawerContent>

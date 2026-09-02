@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { JSDOM } from "jsdom";
 import React from "react";
+import type { AgentOutcome } from "@/modules/agent/agent-outcome";
+import type { CartView } from "@/modules/cart/cart";
 import { createEmptyConversationContext } from "@/modules/agent/intent";
 
 function installBrowser(dom: JSDOM) {
@@ -429,4 +431,234 @@ test("historical Cart Summaries in the Conversation remain read-only", async (t)
   const summary = view.getByRole("region", { name: "Your Cart" });
   assert.ok(within(summary).getByText("2 × ₹3,499"));
   assert.equal(within(summary).queryAllByRole("button").length, 0);
+});
+
+function cartInspectionTurn(
+  message: string,
+  cart: CartView,
+): AgentOutcome & { status: "COMPLETED" } {
+  return {
+    status: "COMPLETED",
+    conversationId: "41000000-0000-4000-8000-000000000001",
+    message,
+    intentBrief: {
+      goal: "Inspect Cart",
+      constraints: createEmptyConversationContext().productConstraints,
+      knownEntities: [],
+      missingInformation: [],
+      confidence: 1,
+      requestedEffects: ["INSPECT_CART"],
+    },
+    products: [],
+    cart,
+  };
+}
+
+async function askAboutTheCart(
+  t: TestContext,
+  dom: JSDOM,
+  agentResponse: () => Response,
+) {
+  installBrowser(dom);
+  globalThis.fetch = async (input, init) => {
+    if (input === "/api/agent/conversation") return Response.json({ data: null });
+    if (input === "/api/cart" && !init?.method) {
+      return Response.json({
+        data: {
+          id: null,
+          version: 0,
+          items: [],
+          totalQuantity: 0,
+          subtotalMinor: 0,
+          currency: "INR",
+        },
+      });
+    }
+    if (input === "/api/agent/message") return agentResponse();
+    throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${input}`);
+  };
+
+  const [testingLibrary, userEvent, { ShoppingAssistant }] = await Promise.all([
+    import("@testing-library/react"),
+    import("@testing-library/user-event").then((module) => module.default),
+    import("./shopping-assistant"),
+  ]);
+  const view = testingLibrary.render(
+    React.createElement(ShoppingAssistant, {
+      brandName: "Arc",
+      resumeConversation: true,
+    }),
+  );
+  t.after(() => {
+    testingLibrary.cleanup();
+    dom.window.close();
+  });
+
+  const user = userEvent.setup({ document: dom.window.document });
+  await user.type(
+    view.getByRole("textbox", { name: /message/i }),
+    "What is in my Cart?",
+  );
+  await user.click(view.getByRole("button", { name: /send/i }));
+  return { view, within: testingLibrary.within };
+}
+
+test("a Cart inspection renders authoritative Items, Cart Prices, and Cart Subtotal", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  const { view, within } = await askAboutTheCart(t, dom, () =>
+    Response.json({
+      data: cartInspectionTurn("Here’s what’s in your Cart.", {
+        id: "31000000-0000-4000-8000-000000000001",
+        version: 4,
+        items: [
+          {
+            productId: "11000000-0000-4000-8000-000000000001",
+            productName: "Quiet Buds",
+            quantity: 2,
+            cartPriceMinor: 349900,
+            subtotalMinor: 699800,
+          },
+          {
+            productId: "11000000-0000-4000-8000-000000000002",
+            productName: "Trail Runner",
+            quantity: 1,
+            cartPriceMinor: 899900,
+            subtotalMinor: 899900,
+          },
+        ],
+        totalQuantity: 3,
+        subtotalMinor: 1599700,
+        currency: "INR",
+      }),
+    }),
+  );
+
+  const summary = within(await view.findByRole("region", { name: "Your Cart" }));
+  assert.ok(summary.getByText("Quiet Buds"));
+  assert.ok(summary.getByText("2 × ₹3,499"));
+  assert.ok(summary.getByText("Trail Runner"));
+  assert.ok(summary.getByText("1 × ₹8,999"));
+  assert.equal(
+    summary.getByLabelText("Quiet Buds subtotal").textContent,
+    "₹6,998",
+  );
+  assert.ok(summary.getByText("Cart Subtotal"));
+  assert.ok(summary.getByText("₹15,997"));
+  assert.equal(summary.queryAllByRole("button").length, 0);
+});
+
+test("every commercial value on screen comes from the structured Cart", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  const { view, within } = await askAboutTheCart(t, dom, () =>
+    Response.json({
+      data: cartInspectionTurn("Here\u2019s what\u2019s in your Cart.", {
+        id: "31000000-0000-4000-8000-000000000001",
+        version: 4,
+        items: [
+          {
+            productId: "11000000-0000-4000-8000-000000000001",
+            productName: "Quiet Buds",
+            quantity: 2,
+            cartPriceMinor: 349900,
+            subtotalMinor: 699800,
+          },
+        ],
+        totalQuantity: 2,
+        subtotalMinor: 699800,
+        currency: "INR",
+      }),
+    }),
+  );
+
+  const summary = within(await view.findByRole("region", { name: "Your Cart" }));
+  assert.equal(
+    summary.getByLabelText("Quiet Buds subtotal").textContent,
+    "\u20b96,998",
+  );
+  assert.equal(
+    summary.getByLabelText("Cart Subtotal").textContent,
+    "\u20b96,998",
+  );
+  assert.deepEqual(
+    dom.window.document.body.textContent?.match(/\u20b9[\d,]+/g),
+    ["\u20b93,499", "\u20b96,998", "\u20b96,998"],
+  );
+  assert.ok(await view.findByRole("button", { name: "Cart \u00b7 2" }));
+});
+
+test("an unrelated Conversation Turn renders no Cart Summary", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  const { view } = await askAboutTheCart(t, dom, () =>
+    Response.json({
+      data: {
+        status: "COMPLETED",
+        conversationId: "41000000-0000-4000-8000-000000000001",
+        message: "Here are two running shoes.",
+        intentBrief: {
+          goal: "Find running shoes",
+          constraints: createEmptyConversationContext().productConstraints,
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 1,
+          requestedEffects: ["DISCOVER_PRODUCTS"],
+        },
+        products: [],
+      },
+    }),
+  );
+
+  assert.ok(await view.findByText("Here are two running shoes."));
+  assert.equal(view.queryByRole("region", { name: "Your Cart" }), null);
+});
+
+test("an empty Cart inspection renders an explicit empty Cart Summary", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  const { view, within } = await askAboutTheCart(t, dom, () =>
+    Response.json({
+      data: cartInspectionTurn("Your Cart is empty.", {
+        id: null,
+        version: 0,
+        items: [],
+        totalQuantity: 0,
+        subtotalMinor: 0,
+        currency: "INR",
+      }),
+    }),
+  );
+
+  const summary = within(await view.findByRole("region", { name: "Your Cart" }));
+  assert.ok(summary.getByText("Your Cart is empty."));
+  assert.ok(summary.getByText("0 units"));
+  assert.ok(summary.getByText("Cart Subtotal"));
+  assert.ok(summary.getByText("₹0"));
+});
+
+test("a failed Cart inspection shows a retryable reason and no Cart values", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  const { view } = await askAboutTheCart(t, dom, () =>
+    Response.json({
+      data: {
+        status: "TEMPORARILY_UNAVAILABLE",
+        conversationId: "41000000-0000-4000-8000-000000000001",
+        message: "I couldn't read your Cart right now. Please try again.",
+        retryable: true,
+        products: [],
+      },
+    }),
+  );
+
+  assert.ok(
+    await view.findByText("I couldn't read your Cart right now. Please try again."),
+  );
+  assert.equal(view.queryByRole("region", { name: "Your Cart" }), null);
 });

@@ -1,5 +1,5 @@
 import type { CatalogModule } from "@/modules/catalog/catalog";
-import type { CartModule } from "@/modules/cart/cart";
+import type { CartInspection } from "@/modules/cart/cart-inspection";
 import type {
   CatalogProduct,
   CatalogSearch,
@@ -68,7 +68,8 @@ export const MAX_COMMERCE_AGENT_TOOL_PRODUCTS = 8;
 
 type CommerceAgentOptions = {
   agentLoop: CommerceAgentLoop;
-  cart?: Pick<CartModule, "inspect">;
+  /** Read-only Cart capability; absent when the Cart cannot be inspected. */
+  cartInspection?: CartInspection;
   limits?: CommerceAgentLimits;
 };
 
@@ -156,8 +157,10 @@ export function createCommerceAgent(
       }
       if (intentBrief.requestedEffects.includes("INSPECT_CART")) {
         try {
-          if (!options.cart) throw new Error("Cart capability unavailable");
-          const cart = await options.cart.inspect();
+          if (!options.cartInspection) {
+            throw new Error("Cart inspection is unavailable.");
+          }
+          const cart = await options.cartInspection.inspectCart();
           return completeTurn(turn, {
             status: "COMPLETED",
             conversationId: turn.conversationId,

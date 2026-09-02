@@ -7,6 +7,7 @@ import { createAiIntentAnalyzer } from "@/modules/agent/ai-intent-analyzer";
 import { createConversationModule } from "@/modules/agent/conversation";
 import { createCatalogModule } from "@/modules/catalog/catalog";
 import { createCartModule } from "@/modules/cart/cart";
+import { createCartInspection } from "@/modules/cart/cart-inspection";
 import { requireBrand } from "@/modules/identity/brand";
 import { db } from "@/db";
 import {
@@ -23,7 +24,6 @@ async function createAgentForStorefront(
   const catalogModule = createCatalogModule();
   const intentAnalyzer = createAiIntentAnalyzer();
   const conversationModule = createConversationModule(guestSession.id);
-  const cartModule = createCartModule(guestSession.id, brand.currency);
 
   return createCommerceAgent(
     catalogModule,
@@ -31,7 +31,9 @@ async function createAgentForStorefront(
     conversationModule,
     {
       agentLoop: createAiCommerceAgentLoop(),
-      cart: { inspect: () => cartModule.inspect() },
+      cartInspection: createCartInspection(guestSession.id, (guestSessionId) =>
+        createCartModule(guestSessionId, brand.currency),
+      ),
     },
   );
 }
