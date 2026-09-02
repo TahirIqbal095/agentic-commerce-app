@@ -502,6 +502,18 @@ export function ShoppingAssistant({
     }
   }
 
+  /**
+   * The deterministic Cart Item controls, shared by every surface that may
+   * change the Cart. The Cart drawer and a blocked readiness card offer the
+   * same commands, so correcting a blocker is the Customer action it already
+   * was rather than a second, readiness-only path into the Cart.
+   */
+  const cartControls = {
+    onCommand: changeCartItem,
+    pendingCommands: pendingCartCommands,
+    itemFeedback: cartItemFeedback,
+  };
+
   return (
     <main className="min-h-screen bg-[#f4f1eb] text-[#1d2a24]">
       <div
@@ -519,11 +531,7 @@ export function ShoppingAssistant({
           cartState={cartState}
           hasConversation={entries.length > 0}
           onNewConversation={startNewConversation}
-          cartControls={{
-            onCommand: changeCartItem,
-            pendingCommands: pendingCartCommands,
-            itemFeedback: cartItemFeedback,
-          }}
+          cartControls={cartControls}
           checkoutReadiness={{
             onReview: reviewCheckoutReadiness,
             isReviewing,
@@ -557,6 +565,8 @@ export function ShoppingAssistant({
                 addingProductIds={addingProductIds}
                 cartFeedback={cartFeedback}
                 entries={entries}
+                currentCart={cart}
+                cartControls={cartControls}
               />
             </>
           )}

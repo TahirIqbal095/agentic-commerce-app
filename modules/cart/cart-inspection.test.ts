@@ -18,6 +18,7 @@ function writableCartModule(inspect: () => Promise<CartView>): CartModule {
   };
   return {
     inspect,
+    inspectForReview: write,
     addItem: write,
     addItems: write,
     changeItemQuantity: write,

@@ -4,7 +4,12 @@ import {
   CHECKOUT_READINESS_ACTION_MESSAGE,
   type CustomerActionEntry,
 } from "@/modules/agent/customer-action-entry";
-import type { CheckoutReadiness } from "@/modules/cart/checkout-readiness";
+import type { CartModule, CartWithProductAvailability } from "@/modules/cart/cart";
+import { createCartReviewRead } from "@/modules/cart/cart-inspection";
+import {
+  createCheckoutReadinessReview,
+  type CheckoutReadiness,
+} from "@/modules/cart/checkout-readiness";
 import type {
   GuestSession,
   GuestSessionStore,
@@ -229,4 +234,230 @@ test("a failed Cart read records nothing and returns a retryable failure", async
   assert.deepEqual(conversation.recorded, []);
   const payload = (await response.json()) as { error: { code: string } };
   assert.equal(payload.error.code, "INTERNAL_ERROR");
+});
+
+const unsuppliableCart: CartWithProductAvailability = {
+  id: "31000000-0000-4000-8000-000000000001",
+  version: 7,
+  items: [
+    {
+      productId: "11000000-0000-4000-8000-000000000001",
+      productName: "Quiet Buds",
+      quantity: 3,
+      cartPriceMinor: 349900,
+      subtotalMinor: 1049700,
+      isAvailable: true,
+      stock: 1,
+    },
+    {
+      productId: "11000000-0000-4000-8000-000000000002",
+      productName: "Trail Runner",
+      quantity: 1,
+      cartPriceMinor: 899900,
+      subtotalMinor: 899900,
+      isAvailable: false,
+      stock: 4,
+    },
+  ],
+  totalQuantity: 4,
+  subtotalMinor: 1949600,
+  currency: "INR",
+};
+
+/**
+ * A Cart module whose every command fails the test.
+ *
+ * Reviewing is a read, so a route that reaches any of these has reserved
+ * inventory or changed the Cart on the Customer's behalf.
+ */
+function readOnlyCartModule(cart: CartWithProductAvailability): CartModule {
+  const command = async () => {
+    throw new Error("A Checkout Readiness review must change no Cart state.");
+  };
+  return {
+    inspect: command,
+    inspectForReview: async () => cart,
+    addItem: command,
+    addItems: command,
+    changeItemQuantity: command,
+    removeItem: command,
+    replayMutation: command,
+  };
+}
+
+/**
+ * Builds the route over a real review of `cart`, so a test drives the readiness
+ * rules through the same composition the Storefront uses.
+ */
+function routeReviewing(
+  cart: CartWithProductAvailability,
+  conversation: ReturnType<typeof recordingConversationState>,
+) {
+  return createCheckoutReadinessRoute({
+    store: memoryGuestSessionStore(),
+    issueToken: () => "reviewing-browser-token",
+    createState: conversation.createState,
+    createReview: (guestSession) =>
+      createCheckoutReadinessReview(
+        createCartReviewRead(guestSession.id, () => readOnlyCartModule(cart)),
+      ),
+  });
+}
+
+test("a Cart the Catalog can no longer supply returns a blocker for each affected Cart Item", async () => {
+  const conversation = recordingConversationState();
+  const route = routeReviewing(unsuppliableCart, conversation);
+
+  const response = await route(reviewRequest());
+  const payload = (await response.json()) as { data: CustomerActionEntry };
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.data.readiness.status, "NOT_READY");
+  assert.deepEqual(payload.data.readiness.blockers, [
+    {
+      code: "INSUFFICIENT_STOCK",
+      productId: "11000000-0000-4000-8000-000000000001",
+      productName: "Quiet Buds",
+      message:
+        "Quiet Buds only has 1 unit in stock. Reduce the quantity to 1, or remove it from the Cart.",
+    },
+    {
+      code: "PRODUCT_UNAVAILABLE",
+      productId: "11000000-0000-4000-8000-000000000002",
+      productName: "Trail Runner",
+      message:
+        "Trail Runner is no longer available. Remove it from the Cart to continue.",
+    },
+  ]);
+  assert.deepEqual(conversation.recorded, [
+    {
+      guestSessionId: "guest-session-1",
+      readiness: payload.data.readiness,
+    },
+  ]);
+});
+
+test("a blocked review returns the evaluated Cart unchanged and reserves nothing", async () => {
+  const conversation = recordingConversationState();
+  const route = routeReviewing(unsuppliableCart, conversation);
+
+  const response = await route(reviewRequest());
+  const payload = (await response.json()) as { data: CustomerActionEntry };
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.data.readiness.cart.version, 7);
+  assert.deepEqual(payload.data.readiness.cart.items, [
+    {
+      productId: "11000000-0000-4000-8000-000000000001",
+      productName: "Quiet Buds",
+      quantity: 3,
+      cartPriceMinor: 349900,
+      subtotalMinor: 1049700,
+    },
+    {
+      productId: "11000000-0000-4000-8000-000000000002",
+      productName: "Trail Runner",
+      quantity: 1,
+      cartPriceMinor: 899900,
+      subtotalMinor: 899900,
+    },
+  ]);
+});
+
+test("a successful review returns no reservation, expiry, or payment state", async () => {
+  const conversation = recordingConversationState();
+  const route = routeReviewing({
+            ...unsuppliableCart,
+            items: [
+              {
+                ...unsuppliableCart.items[0],
+                quantity: 1,
+                subtotalMinor: 349900,
+              },
+            ],
+            totalQuantity: 1,
+            subtotalMinor: 349900,
+          }, conversation);
+
+  const response = await route(reviewRequest());
+  const payload = (await response.json()) as { data: CustomerActionEntry };
+
+  assert.equal(payload.data.readiness.status, "READY");
+  assert.deepEqual(Object.keys(payload.data.readiness).sort(), [
+    "blockers",
+    "cart",
+    "status",
+  ]);
+  assert.deepEqual(Object.keys(payload.data).sort(), [
+    "action",
+    "id",
+    "message",
+    "provenance",
+    "readiness",
+  ]);
+  assert.deepEqual(Object.keys(payload.data.readiness.cart.items[0]).sort(), [
+    "cartPriceMinor",
+    "productId",
+    "productName",
+    "quantity",
+    "subtotalMinor",
+  ]);
+});
+
+test("a Cart Item above the authoritative quantity limit is blocked through the route", async () => {
+  const conversation = recordingConversationState();
+  const route = routeReviewing({
+            ...unsuppliableCart,
+            items: [
+              {
+                ...unsuppliableCart.items[0],
+                quantity: 11,
+                subtotalMinor: 3848900,
+                stock: 40,
+              },
+            ],
+            totalQuantity: 11,
+            subtotalMinor: 3848900,
+          }, conversation);
+
+  const response = await route(reviewRequest());
+  const payload = (await response.json()) as { data: CustomerActionEntry };
+
+  assert.equal(payload.data.readiness.status, "NOT_READY");
+  assert.deepEqual(payload.data.readiness.blockers, [
+    {
+      code: "QUANTITY_LIMIT_EXCEEDED",
+      productId: "11000000-0000-4000-8000-000000000001",
+      productName: "Quiet Buds",
+      message:
+        "Quiet Buds cannot have more than 10 units in the Cart. Reduce the quantity to 10 or fewer.",
+    },
+  ]);
+});
+
+test("a Cart priced outside Indian rupees is blocked through the route", async () => {
+  const conversation = recordingConversationState();
+  const route = routeReviewing(
+    {
+      ...unsuppliableCart,
+      items: [{ ...unsuppliableCart.items[0], quantity: 1, subtotalMinor: 349900 }],
+      totalQuantity: 1,
+      subtotalMinor: 349900,
+      currency: "USD",
+    },
+    conversation,
+  );
+
+  const response = await route(reviewRequest());
+  const payload = (await response.json()) as { data: CustomerActionEntry };
+
+  assert.equal(payload.data.readiness.status, "NOT_READY");
+  assert.deepEqual(payload.data.readiness.blockers, [
+    {
+      code: "CURRENCY_UNSUPPORTED",
+      message:
+        "This Cart is priced in USD, but the Storefront supports Indian rupees (INR) only. It cannot be reviewed for checkout.",
+    },
+  ]);
+  assert.equal(payload.data.readiness.cart.currency, "USD");
 });

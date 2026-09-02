@@ -10,15 +10,21 @@ import {
   PATCH as updateCartItem,
   POST as addToCart,
 } from "@/app/api/cart/route";
-import { DELETE as deleteConversation } from "@/app/api/agent/conversation/route";
+import {
+  DELETE as deleteConversation,
+  GET as readConversation,
+} from "@/app/api/agent/conversation/route";
+import { POST as reviewCheckoutReadiness } from "@/app/api/cart/checkout-readiness/route";
 import { db } from "@/db";
 import { conversations, messages } from "@/db/schema/agent";
 import { recommendationEvents } from "@/db/schema/analytics";
 import { auditEvents } from "@/db/schema/audit";
-import { cartItems, carts } from "@/db/schema/cart";
+import { cartItems, cartMutations, carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
 import { brands, guestSessions } from "@/db/schema/identity";
 import { createCatalogModule } from "@/modules/catalog/catalog";
+import type { CustomerActionEntry } from "@/modules/agent/customer-action-entry";
+import type { CurrentConversation } from "@/modules/agent/conversation-state";
 import { createCartModule, type CartView } from "@/modules/cart/cart";
 import {
   cleanupExpiredGuestSessions,
@@ -1132,4 +1138,166 @@ test("a Cart command retried after a lost response applies exactly once", async 
   const currentCart = await currentCartFor(cookie);
   assert.equal(currentCart.totalQuantity, 2);
   assert.equal(currentCart.version, appliedCart.version);
+});
+
+async function reviewCartFor(cookie: string): Promise<CustomerActionEntry> {
+  const response = await reviewCheckoutReadiness(
+    new Request("http://localhost/api/cart/checkout-readiness", {
+      method: "POST",
+      headers: { cookie },
+    }),
+  );
+  assert.equal(response.status, 200);
+  return ((await response.json()) as { data: CustomerActionEntry }).data;
+}
+
+async function transcriptFor(cookie: string): Promise<CurrentConversation> {
+  const response = await readConversation(
+    new Request("http://localhost/api/agent/conversation", {
+      headers: { cookie },
+    }),
+  );
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as { data: CurrentConversation };
+  assert.ok(payload.data);
+  return payload.data;
+}
+
+/**
+ * Puts one seeded Product in a fresh Guest Session's Cart at `quantity`, so a
+ * readiness test can then change the authoritative Catalog under it.
+ */
+async function cartHolding(quantity: number) {
+  const [product] = await seededProducts(1);
+  const { cookie, cart } = await startCartWith(product.id);
+  let currentCart = cart;
+  for (let added = 1; added < quantity; added += 1) {
+    const response = await addToCart(
+      cartAddRequest(
+        product.id,
+        crypto.randomUUID(),
+        cookie,
+        currentCart.version,
+      ),
+    );
+    assert.equal(response.status, 200);
+    currentCart = ((await response.json()) as { data: CartView }).data;
+  }
+  return { product, cookie, cart: currentCart };
+}
+
+test("Checkout Readiness blocks a Cart holding a Product the Catalog withdrew", async () => {
+  await runSeedCommand();
+  const { product, cookie } = await cartHolding(1);
+  await db.update(products).set({ active: false }).where(eq(products.id, product.id));
+
+  const entry = await reviewCartFor(cookie);
+
+  assert.equal(entry.readiness.status, "NOT_READY");
+  assert.deepEqual(entry.readiness.blockers, [
+    {
+      code: "PRODUCT_UNAVAILABLE",
+      productId: product.id,
+      productName: product.name,
+      message: `${product.name} is no longer available. Remove it from the Cart to continue.`,
+    },
+  ]);
+  assert.equal(entry.readiness.cart.items[0]?.productId, product.id);
+});
+
+test("Checkout Readiness blocks a Cart quantity the current stock cannot supply", async () => {
+  await runSeedCommand();
+  const { product, cookie } = await cartHolding(3);
+  await db.update(products).set({ stock: 2 }).where(eq(products.id, product.id));
+
+  const entry = await reviewCartFor(cookie);
+
+  assert.equal(entry.readiness.status, "NOT_READY");
+  assert.deepEqual(entry.readiness.blockers, [
+    {
+      code: "INSUFFICIENT_STOCK",
+      productId: product.id,
+      productName: product.name,
+      message: `${product.name} only has 2 units in stock. Reduce the quantity to 2, or remove it from the Cart.`,
+    },
+  ]);
+  assert.equal(entry.readiness.cart.items[0]?.quantity, 3);
+});
+
+test("a corrected Cart produces a fresh ready result at its new Cart version", async () => {
+  await runSeedCommand();
+  const { product, cookie, cart } = await cartHolding(3);
+  await db.update(products).set({ stock: 2 }).where(eq(products.id, product.id));
+  const blocked = await reviewCartFor(cookie);
+
+  const correction = await updateCartItem(
+    cartItemRequest(
+      "DECREMENT_ITEM",
+      product.id,
+      crypto.randomUUID(),
+      cookie,
+      cart.version,
+    ),
+  );
+  assert.equal(correction.status, 200);
+  const corrected = await reviewCartFor(cookie);
+
+  assert.equal(blocked.readiness.status, "NOT_READY");
+  assert.equal(corrected.readiness.status, "READY");
+  assert.deepEqual(corrected.readiness.blockers, []);
+  assert.equal(corrected.readiness.cart.items[0]?.quantity, 2);
+  assert.ok(corrected.readiness.cart.version > blocked.readiness.cart.version);
+});
+
+test("a Checkout Readiness review reserves no inventory and records no Cart mutation", async () => {
+  await runSeedCommand();
+  const { product, cookie, cart } = await cartHolding(2);
+  const [stockedProduct] = await db
+    .select({ stock: products.stock })
+    .from(products)
+    .where(eq(products.id, product.id));
+  const mutationsBefore = await db
+    .select({ id: cartMutations.id })
+    .from(cartMutations);
+
+  const entry = await reviewCartFor(cookie);
+  const [reviewedProduct] = await db
+    .select({ stock: products.stock, active: products.active })
+    .from(products)
+    .where(eq(products.id, product.id));
+  const mutationsAfter = await db
+    .select({ id: cartMutations.id })
+    .from(cartMutations);
+
+  assert.equal(entry.readiness.status, "READY");
+  assert.equal(reviewedProduct.stock, stockedProduct.stock);
+  assert.equal(reviewedProduct.active, true);
+  assert.equal(mutationsAfter.length, mutationsBefore.length);
+  assert.deepEqual(await currentCartFor(cookie), cart);
+  assert.equal(entry.readiness.cart.version, cart.version);
+});
+
+test("a readiness card persists as history at the Cart version it evaluated", async () => {
+  await runSeedCommand();
+  const { product, cookie, cart } = await cartHolding(2);
+  const entry = await reviewCartFor(cookie);
+
+  const mutation = await removeCartItem(
+    cartItemRequest(
+      "REMOVE_ITEM",
+      product.id,
+      crypto.randomUUID(),
+      cookie,
+      cart.version,
+    ),
+  );
+  assert.equal(mutation.status, 200);
+  const transcript = await transcriptFor(cookie);
+
+  assert.deepEqual(transcript.transcript, [entry]);
+  const [persisted] = transcript.transcript;
+  assert.ok("readiness" in persisted);
+  assert.equal(persisted.readiness.cart.version, cart.version);
+  assert.equal(persisted.readiness.cart.items.length, 1);
+  assert.equal((await currentCartFor(cookie)).version, cart.version + 1);
 });

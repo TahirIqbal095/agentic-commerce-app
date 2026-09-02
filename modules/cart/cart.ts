@@ -24,6 +24,41 @@ export type CartView = Omit<CartSummary, "id"> & {
   }>;
 };
 
+/**
+ * A Cart read together with each Cart Item's current authoritative
+ * availability.
+ *
+ * Checkout Readiness needs the Product state behind a Cart Item, not only the
+ * commercial values a Customer sees, so it re-reads availability and stock in
+ * the same read as the Cart itself. The availability is deliberately absent
+ * from `CartView`, so it can never reach a persisted readiness card, a Cart
+ * Summary, or the Commerce Agent.
+ */
+export type CartWithProductAvailability = Omit<CartView, "items"> & {
+  items: Array<
+    CartView["items"][number] & {
+      isAvailable: boolean;
+      stock: number;
+    }
+  >;
+};
+
+/**
+ * The authoritative whole-unit ceiling for one Cart Item.
+ *
+ * Cart commands refuse to exceed it and Checkout Readiness reports a Cart Item
+ * that already does, so both speak about the same limit.
+ */
+export const CART_ITEM_QUANTITY_LIMIT = 10;
+
+/**
+ * The only Currency the Storefront supports, named by ADR-0008.
+ *
+ * Persisted data outside it is rejected rather than converted, so Cart commands
+ * and Checkout Readiness both refuse a Cart priced in anything else.
+ */
+export const STOREFRONT_CURRENCY = "INR";
+
 export type CartAddition = {
   product: CatalogProduct;
   quantity: number;
@@ -69,6 +104,11 @@ export interface CartModule {
     mutation: CartMutation,
   ): Promise<CartView | null>;
   inspect(): Promise<CartView>;
+  /**
+   * Reads the Cart together with each Cart Item's current availability, for
+   * the Checkout Readiness review that must judge stale Catalog state.
+   */
+  inspectForReview(): Promise<CartWithProductAvailability>;
 }
 
 export type CartErrorCode = "CART_RULE_REJECTED" | "CART_CONFLICT";
@@ -169,10 +209,10 @@ export async function withBoundedCartConflictRetry<Result>(
 
 export function createCartModule(
   guestSessionId: string,
-  defaultCurrency = "INR",
+  defaultCurrency: string = STOREFRONT_CURRENCY,
 ): CartModule {
-  if (defaultCurrency !== "INR") {
-    throw new CartError("Cart currency must be INR.");
+  if (defaultCurrency !== STOREFRONT_CURRENCY) {
+    throw new CartError(`Cart currency must be ${STOREFRONT_CURRENCY}.`);
   }
 
   const addItems: NonNullable<CartModule["addItems"]> = async (
@@ -189,9 +229,13 @@ export function createCartModule(
         throw new CartError(`${product.name} was selected more than once.`);
       }
       productIds.add(product.id);
-      if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
+      if (
+        !Number.isInteger(quantity) ||
+        quantity < 1 ||
+        quantity > CART_ITEM_QUANTITY_LIMIT
+      ) {
         throw new CartError(
-          `${product.name} quantity must be between 1 and 10.`,
+          `${product.name} quantity must be between 1 and ${CART_ITEM_QUANTITY_LIMIT}.`,
         );
       }
     }
@@ -294,9 +338,9 @@ export function createCartModule(
           ({ product, quantity }) => {
             const existing = existingByProductId.get(product.id);
             const nextQuantity = (existing?.quantity ?? 0) + quantity;
-            if (nextQuantity > 10) {
+            if (nextQuantity > CART_ITEM_QUANTITY_LIMIT) {
               throw new CartError(
-                `${product.name} cannot have more than 10 units in the Cart.`,
+                `${product.name} cannot have more than ${CART_ITEM_QUANTITY_LIMIT} units in the Cart.`,
               );
             }
             if (nextQuantity > product.stock) {
@@ -417,9 +461,9 @@ export function createCartModule(
     return activeCart;
   };
 
-  return {
-    async inspect() {
-      const [activeCart] = await db
+  const readActiveCart = async () =>
+    (
+      await db
         .select({
           id: carts.id,
           currency: carts.currency,
@@ -432,20 +476,28 @@ export function createCartModule(
             eq(carts.status, "ACTIVE"),
           ),
         )
-        .limit(1);
+        .limit(1)
+    )[0];
 
-      if (!activeCart) {
-        return {
-          id: null,
-          version: 0,
-          items: [],
-          totalQuantity: 0,
-          subtotalMinor: 0,
-          currency: defaultCurrency,
-        };
-      }
+  const emptyCart = (): CartWithProductAvailability => ({
+    id: null,
+    version: 0,
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: defaultCurrency,
+  });
 
+  return {
+    async inspect() {
+      const activeCart = await readActiveCart();
+      if (!activeCart) return emptyCart();
       return readCart(db, activeCart);
+    },
+    async inspectForReview() {
+      const activeCart = await readActiveCart();
+      if (!activeCart) return emptyCart();
+      return readCartWithProductAvailability(db, activeCart);
     },
     async addItem(product, quantity, complete, mutation) {
       return addItems([{ product, quantity }], complete, mutation);
@@ -517,9 +569,9 @@ export function createCartModule(
             if (!item.active) {
               throw new CartError(`${item.productName} is not available.`);
             }
-            if (nextQuantity > 10) {
+            if (nextQuantity > CART_ITEM_QUANTITY_LIMIT) {
               throw new CartError(
-                `${item.productName} cannot have more than 10 units in the Cart.`,
+                `${item.productName} cannot have more than ${CART_ITEM_QUANTITY_LIMIT} units in the Cart.`,
               );
             }
             if (nextQuantity > item.stock) {
@@ -611,30 +663,34 @@ export function createCartModule(
   };
 }
 
-async function readCart(
+/**
+ * Reads one Cart with the current availability behind each Cart Item.
+ *
+ * Availability is read in the same statement as the Cart, so a readiness
+ * decision can never pair a Cart Item with Product state read at another
+ * moment.
+ */
+async function readCartWithProductAvailability(
   executor: DbExecutor,
   activeCart: { id: string; currency: string; version: number },
-): Promise<CartView> {
+): Promise<CartWithProductAvailability> {
   const items = await executor
     .select({
       productId: cartItems.productId,
       productName: products.name,
       quantity: cartItems.quantity,
       cartPriceMinor: cartItems.unitPriceSnapshotMinor,
+      isAvailable: products.active,
+      stock: products.stock,
     })
     .from(cartItems)
     .innerJoin(products, eq(products.id, cartItems.productId))
     .where(eq(cartItems.cartId, activeCart.id))
     .orderBy(asc(cartItems.createdAt), asc(cartItems.id));
-  const viewedItems = items.map(
-    ({ productId, productName, quantity, cartPriceMinor }) => ({
-      productId,
-      productName,
-      quantity,
-      cartPriceMinor,
-      subtotalMinor: quantity * cartPriceMinor,
-    }),
-  );
+  const viewedItems = items.map((item) => ({
+    ...item,
+    subtotalMinor: item.quantity * item.cartPriceMinor,
+  }));
 
   return {
     id: activeCart.id,
@@ -650,6 +706,39 @@ async function readCart(
     ),
     currency: activeCart.currency,
   };
+}
+
+/**
+ * Reads one Cart as the Customer-visible Cart Summary.
+ *
+ * Product availability is dropped here, so no Cart response, persisted card, or
+ * Commerce Agent payload can carry inventory state it has no reason to know.
+ */
+async function readCart(
+  executor: DbExecutor,
+  activeCart: { id: string; currency: string; version: number },
+): Promise<CartView> {
+  const { items, ...cart } = await readCartWithProductAvailability(executor, activeCart);
+  return { ...cart, items: items.map(toCartViewItem) };
+}
+
+/**
+ * Narrows one reviewed Cart Item to the commercial values a Customer sees.
+ *
+ * Checkout Readiness judges availability but must not carry it into the Cart it
+ * reports, so the Cart in a readiness result is built through this narrowing.
+ *
+ * @param item - One Cart Item read with its current Product availability.
+ * @returns The same Cart Item without any inventory state.
+ */
+export function toCartViewItem({
+  productId,
+  productName,
+  quantity,
+  cartPriceMinor,
+  subtotalMinor,
+}: CartWithProductAvailability["items"][number]): CartView["items"][number] {
+  return { productId, productName, quantity, cartPriceMinor, subtotalMinor };
 }
 
 function assertMutationVersionIsNotAhead(
