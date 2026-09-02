@@ -1,12 +1,13 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import type { DbExecutor } from "@/db";
-import { cartItems, carts } from "@/db/schema/cart";
+import { cartItems, cartMutations, carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
 
 export type CartSummary = {
   id: string;
+  version: number;
   totalQuantity: number;
   subtotalMinor: number;
   currency: string;
@@ -28,16 +29,45 @@ export type CartAddition = {
   quantity: number;
 };
 
+export type CartMutation = {
+  mutationKey: string;
+  expectedVersion: number;
+};
+
+export type CartCommandType =
+  | "ADD_PRODUCT"
+  | "INCREMENT_ITEM"
+  | "DECREMENT_ITEM"
+  | "REMOVE_ITEM";
+
 export interface CartModule {
   addItem(
     product: CatalogProduct,
     quantity: number,
     complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
+    mutation?: CartMutation,
   ): Promise<CartView>;
   addItems?(
     additions: CartAddition[],
     complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
+    mutation?: CartMutation,
   ): Promise<CartView>;
+  changeItemQuantity?(
+    productId: string,
+    change: -1 | 1,
+    complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
+    mutation: CartMutation,
+  ): Promise<CartView>;
+  removeItem?(
+    productId: string,
+    complete: (cart: CartView, transaction: DbExecutor) => Promise<void>,
+    mutation: CartMutation,
+  ): Promise<CartView>;
+  replayMutation?(
+    productId: string,
+    commandType: CartCommandType,
+    mutation: CartMutation,
+  ): Promise<CartView | null>;
   inspect(): Promise<CartView>;
 }
 
@@ -59,6 +89,7 @@ export function createCartModule(
   const addItems: NonNullable<CartModule["addItems"]> = async (
     additions,
     complete,
+    mutation,
   ) => {
     if (additions.length === 0) {
       throw new CartError("At least one Cart Item is required.");
@@ -80,6 +111,15 @@ export function createCartModule(
       await transaction.execute(
         sql`select pg_advisory_xact_lock(hashtext(${guestSessionId}))`,
       );
+      if (mutation) {
+        const replay = await findMutationReplay(
+          transaction,
+          mutation,
+          "ADD_PRODUCT",
+          additions[0].product.id,
+        );
+        if (replay) return replay;
+      }
       const productRows = await transaction
         .select({
           id: products.id,
@@ -103,7 +143,7 @@ export function createCartModule(
       });
 
       let [activeCart] = await transaction
-        .select({ id: carts.id, currency: carts.currency })
+        .select({ id: carts.id, currency: carts.currency, version: carts.version })
         .from(carts)
         .where(
           and(
@@ -122,13 +162,22 @@ export function createCartModule(
         }
       }
 
+      if (mutation) {
+        assertMutationVersionIsNotAhead(
+          activeCart?.version ?? 0,
+          mutation.expectedVersion,
+        );
+      }
       if (!activeCart) {
         [activeCart] = await transaction
           .insert(carts)
           .values({ guestSessionId, currency: cartCurrency })
-          .returning({ id: carts.id, currency: carts.currency });
+          .returning({
+            id: carts.id,
+            currency: carts.currency,
+            version: carts.version,
+          });
       }
-
       const existingRows = await transaction
         .select({
           productId: cartItems.productId,
@@ -181,21 +230,94 @@ export function createCartModule(
           });
       }
 
-      await transaction
+      const [updatedCart] = await transaction
         .update(carts)
         .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
-        .where(eq(carts.id, activeCart.id));
+        .where(eq(carts.id, activeCart.id))
+        .returning({ version: carts.version });
 
-      const cart = await readCart(transaction, activeCart);
+      const cart = await readCart(transaction, {
+        ...activeCart,
+        version: updatedCart.version,
+      });
+      if (mutation) {
+        await recordMutation(
+          transaction,
+          mutation,
+          "ADD_PRODUCT",
+          additions[0].product.id,
+          cart,
+        );
+      }
       await complete(cart, transaction);
       return cart;
     });
   };
 
+  const findMutationReplay = async (
+    transaction: DbExecutor,
+    mutation: CartMutation,
+    commandType: CartCommandType,
+    productId: string,
+  ) => {
+    const [stored] = await transaction
+      .select({
+        commandType: cartMutations.commandType,
+        productId: cartMutations.productId,
+        result: cartMutations.result,
+      })
+      .from(cartMutations)
+      .where(
+        and(
+          eq(cartMutations.guestSessionId, guestSessionId),
+          eq(cartMutations.mutationKey, mutation.mutationKey),
+        ),
+      )
+      .limit(1);
+    if (!stored) return null;
+    if (stored.commandType !== commandType || stored.productId !== productId) {
+      throw new CartError(
+        "The mutation key was already used for another Cart command.",
+      );
+    }
+    return structuredClone(stored.result) as CartView;
+  };
+
+  const recordMutation = async (
+    transaction: DbExecutor,
+    mutation: CartMutation,
+    commandType: CartCommandType,
+    productId: string,
+    result: CartView,
+  ) => {
+    await transaction.insert(cartMutations).values({
+      guestSessionId,
+      mutationKey: mutation.mutationKey,
+      commandType,
+      productId,
+      result,
+    });
+  };
+
+  const findActiveCart = async (transaction: DbExecutor) => {
+    const [activeCart] = await transaction
+      .select({ id: carts.id, currency: carts.currency, version: carts.version })
+      .from(carts)
+      .where(
+        and(
+          eq(carts.guestSessionId, guestSessionId),
+          eq(carts.status, "ACTIVE"),
+        ),
+      )
+      .limit(1);
+    if (!activeCart) throw new CartError("The Cart Item is no longer in the Cart.");
+    return activeCart;
+  };
+
   return {
     async inspect() {
       const [activeCart] = await db
-        .select({ id: carts.id, currency: carts.currency })
+        .select({ id: carts.id, currency: carts.currency, version: carts.version })
         .from(carts)
         .where(
           and(
@@ -208,6 +330,7 @@ export function createCartModule(
       if (!activeCart) {
         return {
           id: null,
+          version: 0,
           items: [],
           totalQuantity: 0,
           subtotalMinor: 0,
@@ -217,16 +340,165 @@ export function createCartModule(
 
       return readCart(db, activeCart);
     },
-    async addItem(product, quantity, complete) {
-      return addItems([{ product, quantity }], complete);
+    async addItem(product, quantity, complete, mutation) {
+      return addItems([{ product, quantity }], complete, mutation);
     },
     addItems,
+    async replayMutation(productId, commandType, mutation) {
+      return db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${guestSessionId}))`,
+        );
+        return findMutationReplay(
+          transaction,
+          mutation,
+          commandType,
+          productId,
+        );
+      });
+    },
+    async changeItemQuantity(productId, change, complete, mutation) {
+      return db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${guestSessionId}))`,
+        );
+        const commandType =
+          change === 1 ? "INCREMENT_ITEM" : "DECREMENT_ITEM";
+        const replay = await findMutationReplay(
+          transaction,
+          mutation,
+          commandType,
+          productId,
+        );
+        if (replay) return replay;
+        const activeCart = await findActiveCart(transaction);
+        assertMutationVersionIsNotAhead(
+          activeCart.version,
+          mutation.expectedVersion,
+        );
+        const [item] = await transaction
+          .select({
+            id: cartItems.id,
+            productName: products.name,
+            quantity: cartItems.quantity,
+            stock: products.stock,
+            active: products.active,
+          })
+          .from(cartItems)
+          .innerJoin(products, eq(products.id, cartItems.productId))
+          .where(
+            and(
+              eq(cartItems.cartId, activeCart.id),
+              eq(cartItems.productId, productId),
+            ),
+          )
+          .limit(1);
+        if (!item) {
+          throw new CartError("The Cart Item is no longer in the Cart.");
+        }
+
+        const nextQuantity = item.quantity + change;
+        if (nextQuantity < 1) {
+          throw new CartError(
+            `${item.productName} quantity cannot be lower than 1. Use Remove instead.`,
+          );
+        }
+        if (change === 1) {
+          if (!item.active) {
+            throw new CartError(`${item.productName} is not available.`);
+          }
+          if (nextQuantity > 10) {
+            throw new CartError(
+              `${item.productName} cannot have more than 10 units in the Cart.`,
+            );
+          }
+          if (nextQuantity > item.stock) {
+            throw new CartError(
+              `${item.productName} only has ${item.stock} ${item.stock === 1 ? "unit" : "units"} in stock.`,
+            );
+          }
+        }
+
+        await transaction
+          .update(cartItems)
+          .set({ quantity: nextQuantity, updatedAt: new Date() })
+          .where(eq(cartItems.id, item.id));
+        const [updatedCart] = await transaction
+          .update(carts)
+          .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
+          .where(eq(carts.id, activeCart.id))
+          .returning({ version: carts.version });
+        const cart = await readCart(transaction, {
+          ...activeCart,
+          version: updatedCart.version,
+        });
+        await recordMutation(
+          transaction,
+          mutation,
+          commandType,
+          productId,
+          cart,
+        );
+        await complete(cart, transaction);
+        return cart;
+      });
+    },
+    async removeItem(productId, complete, mutation) {
+      return db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${guestSessionId}))`,
+        );
+        const replay = await findMutationReplay(
+          transaction,
+          mutation,
+          "REMOVE_ITEM",
+          productId,
+        );
+        if (replay) return replay;
+        const activeCart = await findActiveCart(transaction);
+        assertMutationVersionIsNotAhead(
+          activeCart.version,
+          mutation.expectedVersion,
+        );
+        const removed = await transaction
+          .delete(cartItems)
+          .where(
+            and(
+              eq(cartItems.cartId, activeCart.id),
+              eq(cartItems.productId, productId),
+            ),
+          )
+          .returning({ id: cartItems.id });
+        if (removed.length === 0) {
+          throw new CartError("The Cart Item is no longer in the Cart.");
+        }
+
+        const [updatedCart] = await transaction
+          .update(carts)
+          .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
+          .where(eq(carts.id, activeCart.id))
+          .returning({ version: carts.version });
+        const cart = await readCart(transaction, {
+          ...activeCart,
+          version: updatedCart.version,
+        });
+        await recordMutation(
+          transaction,
+          mutation,
+          "REMOVE_ITEM",
+          productId,
+          cart,
+        );
+        await complete(cart, transaction);
+        return cart;
+      });
+    },
   };
 }
 
 async function readCart(
   executor: DbExecutor,
-  activeCart: { id: string; currency: string },
+  activeCart: { id: string; currency: string; version: number },
 ): Promise<CartView> {
   const items = await executor
     .select({
@@ -251,6 +523,7 @@ async function readCart(
 
   return {
     id: activeCart.id,
+    version: activeCart.version,
     items: viewedItems,
     totalQuantity: viewedItems.reduce(
       (total, item) => total + item.quantity,
@@ -262,4 +535,15 @@ async function readCart(
     ),
     currency: activeCart.currency,
   };
+}
+
+function assertMutationVersionIsNotAhead(
+  currentVersion: number,
+  expectedVersion: number,
+) {
+  if (expectedVersion > currentVersion) {
+    throw new CartError(
+      "The Cart version is newer than the authoritative Cart. Reload the Cart and try again.",
+    );
+  }
 }

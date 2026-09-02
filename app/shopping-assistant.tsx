@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import { Composer } from "./_components/shopping-assistant/composer";
 import type { CartLoadState } from "./_components/shopping-assistant/cart-drawer";
+import type { CartItemCommand } from "./_components/shopping-assistant/cart-panel";
 import { ContextSummary } from "./_components/shopping-assistant/context-summary";
 import { Header } from "./_components/shopping-assistant/header";
 import { Hero } from "./_components/shopping-assistant/hero";
@@ -62,6 +63,31 @@ export function ShoppingAssistant({
   const [cartFeedback, setCartFeedback] = useState<
     Record<string, CartFeedback>
   >({});
+  const [pendingCartCommands, setPendingCartCommands] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [cartItemFeedback, setCartItemFeedback] = useState<
+    Record<string, string>
+  >({});
+
+  function replaceCartFromAuthority(nextCart: CartView) {
+    setCart((current) =>
+      current && current.version > nextCart.version ? current : nextCart,
+    );
+    setCartState("ready");
+  }
+
+  async function reloadCartFromAuthority() {
+    try {
+      const response = await fetch("/api/cart");
+      if (!response.ok) return false;
+      const payload = (await response.json()) as { data: CartView };
+      replaceCartFromAuthority(payload.data);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   useEffect(() => {
     if (!resumeConversation) return;
@@ -91,8 +117,7 @@ export function ShoppingAssistant({
       })
       .then((cart) => {
         if (!active) return;
-        setCart(cart);
-        setCartState("ready");
+        replaceCartFromAuthority(cart);
       })
       .catch(() => {
         if (active) setCartState("error");
@@ -147,8 +172,7 @@ export function ShoppingAssistant({
         setConversationId(payload.data.conversationId);
       }
       if (payload.data.cart && "items" in payload.data.cart) {
-        setCart(payload.data.cart);
-        setCartState("ready");
+        replaceCartFromAuthority(payload.data.cart);
       }
       const nextSummary =
         payload.data.intentBrief?.constraints ?? payload.data.intent;
@@ -213,13 +237,13 @@ export function ShoppingAssistant({
           type: "ADD_PRODUCT",
           productId: product.id,
           mutationKey: crypto.randomUUID(),
+          expectedVersion: cart?.version ?? 0,
         }),
       });
       const payload = (await response.json()) as CartApiResponse;
       if (!response.ok || !("data" in payload)) {
         if ("error" in payload && payload.error.details?.cart) {
-          setCart(payload.error.details.cart);
-          setCartState("ready");
+          replaceCartFromAuthority(payload.error.details.cart);
           cartWasReconciled = true;
         }
         throw new Error(
@@ -229,8 +253,7 @@ export function ShoppingAssistant({
         );
       }
 
-      setCart(payload.data);
-      setCartState("ready");
+      replaceCartFromAuthority(payload.data);
       const item = payload.data.items.find(
         (cartItem) => cartItem.productId === product.id,
       );
@@ -242,7 +265,10 @@ export function ShoppingAssistant({
         },
       }));
     } catch (requestError) {
-      if (!cartWasReconciled) setCartState("error");
+      if (!cartWasReconciled) {
+        const reloaded = await reloadCartFromAuthority();
+        if (!reloaded && !cart) setCartState("error");
+      }
       setCartFeedback((current) => ({
         ...current,
         [product.id]: {
@@ -257,6 +283,66 @@ export function ShoppingAssistant({
       setAddingProductIds((current) => {
         const next = new Set(current);
         next.delete(product.id);
+        return next;
+      });
+    }
+  }
+
+  async function changeCartItem(productId: string, command: CartItemCommand) {
+    const pendingKey = `${productId}:${command}`;
+    if (pendingCartCommands.has(pendingKey)) return;
+    setPendingCartCommands((current) => new Set(current).add(pendingKey));
+    setCartItemFeedback((current) => {
+      const next = { ...current };
+      delete next[productId];
+      return next;
+    });
+    let cartWasReconciled = false;
+
+    try {
+      const response = await fetch("/api/cart", {
+        method: command === "remove" ? "DELETE" : "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          type:
+            command === "increment"
+              ? "INCREMENT_ITEM"
+              : command === "decrement"
+                ? "DECREMENT_ITEM"
+                : "REMOVE_ITEM",
+          productId,
+          mutationKey: crypto.randomUUID(),
+          expectedVersion: cart?.version ?? 0,
+        }),
+      });
+      const payload = (await response.json()) as CartApiResponse;
+      if (!response.ok || !("data" in payload)) {
+        if ("error" in payload && payload.error.details?.cart) {
+          replaceCartFromAuthority(payload.error.details.cart);
+          cartWasReconciled = true;
+        }
+        throw new Error(
+          "error" in payload
+            ? payload.error.message
+            : "The Cart Item could not be changed.",
+        );
+      }
+      replaceCartFromAuthority(payload.data);
+    } catch (requestError) {
+      if (!cartWasReconciled) {
+        await reloadCartFromAuthority();
+      }
+      setCartItemFeedback((current) => ({
+        ...current,
+        [productId]:
+          requestError instanceof Error
+            ? requestError.message
+            : "The Cart Item could not be changed.",
+      }));
+    } finally {
+      setPendingCartCommands((current) => {
+        const next = new Set(current);
+        next.delete(pendingKey);
         return next;
       });
     }
@@ -279,6 +365,11 @@ export function ShoppingAssistant({
           cartState={cartState}
           hasConversation={turns.length > 0}
           onNewConversation={startNewConversation}
+          cartControls={{
+            onCommand: changeCartItem,
+            pendingCommands: pendingCartCommands,
+            itemFeedback: cartItemFeedback,
+          }}
         />
 
         <div

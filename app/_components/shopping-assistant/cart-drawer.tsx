@@ -10,16 +10,18 @@ import {
   DrawerTrigger,
 } from "@/components/ui/drawer";
 import type { CartView } from "@/modules/cart/cart";
-import { CartPanel } from "./cart-panel";
+import { CartPanel, type CartControls } from "./cart-panel";
 
 export type CartLoadState = "loading" | "ready" | "error";
 
 export function CartDrawer({
   cart,
   state,
+  controls,
 }: {
   cart: CartView | null;
   state: CartLoadState;
+  controls: CartControls;
 }) {
   const quantity = state === "ready" ? cart?.totalQuantity : undefined;
   const accessibleName =
@@ -72,7 +74,10 @@ export function CartDrawer({
               </p>
             </div>
           ) : (
-            <CartPanel cart={cart} />
+            <CartPanel
+              cart={cart}
+              controls={controls}
+            />
           )}
         </div>
       </DrawerContent>

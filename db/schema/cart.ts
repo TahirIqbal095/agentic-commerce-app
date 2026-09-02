@@ -3,7 +3,9 @@ import {
   check,
   index,
   integer,
+  jsonb,
   pgTable,
+  text,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
@@ -63,6 +65,34 @@ export const cartItems = pgTable(
     check(
       "cart_items_snapshot_nonnegative",
       sql`${table.unitPriceSnapshotMinor} >= 0`,
+    ),
+  ],
+);
+
+export const cartMutations = pgTable(
+  "cart_mutations",
+  {
+    id: id(),
+    guestSessionId: uuid("guest_session_id")
+      .notNull()
+      .references(() => guestSessions.id, { onDelete: "cascade" }),
+    mutationKey: uuid("mutation_key").notNull(),
+    commandType: text("command_type").notNull(),
+    productId: uuid("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "restrict" }),
+    result: jsonb("result").notNull(),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    uniqueIndex("cart_mutations_guest_key_unique").on(
+      table.guestSessionId,
+      table.mutationKey,
+    ),
+    index("cart_mutations_guest_session_idx").on(table.guestSessionId),
+    check(
+      "cart_mutations_command_type_valid",
+      sql`${table.commandType} in ('ADD_PRODUCT', 'INCREMENT_ITEM', 'DECREMENT_ITEM', 'REMOVE_ITEM')`,
     ),
   ],
 );

@@ -7,7 +7,12 @@ import {
   type GuestSession,
   type GuestSessionStore,
 } from "@/modules/identity/guest-session";
-import { createAddToCartRoute, createCartRoute } from "./route-factory";
+import {
+  createAddToCartRoute,
+  createCartRoute,
+  createRemoveCartItemRoute,
+  createUpdateCartItemRoute,
+} from "./route-factory";
 
 test("an explicit Add Product command returns the complete authoritative Cart", async () => {
   const product = {
@@ -23,6 +28,7 @@ test("an explicit Add Product command returns the complete authoritative Cart", 
   };
   const authoritativeCart: CartView = {
     id: "31000000-0000-4000-8000-000000000001",
+    version: 1,
     items: [
       {
         productId: product.id,
@@ -81,6 +87,7 @@ test("an explicit Add Product command returns the complete authoritative Cart", 
         type: "ADD_PRODUCT",
         productId: product.id,
         mutationKey: "61000000-0000-4000-8000-000000000001",
+        expectedVersion: 0,
       }),
     }),
   );
@@ -88,6 +95,557 @@ test("an explicit Add Product command returns the complete authoritative Cart", 
   assert.equal(response.status, 200);
   assert.match(response.headers.get("set-cookie") ?? "", /^guest_session=/);
   assert.deepEqual(await response.json(), { data: authoritativeCart });
+});
+
+test("replaying an Add returns its stored Cart before rereading Product availability", async () => {
+  const productId = "11000000-0000-4000-8000-000000000001";
+  const storedCart: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    version: 2,
+    items: [
+      {
+        productId,
+        productName: "Quiet Buds",
+        quantity: 1,
+        cartPriceMinor: 349900,
+        subtotalMinor: 349900,
+      },
+    ],
+    totalQuantity: 1,
+    subtotalMinor: 349900,
+    currency: "INR",
+  };
+  const route = createAddToCartRoute({
+    store: {
+      async findActive() {
+        return { id: "guest-session-1" };
+      },
+      async create() {
+        throw new Error("The existing Guest Session should be reused");
+      },
+      async refresh() {},
+    },
+    catalog: {
+      async search() {
+        throw new Error("Search is not part of an explicit Add command");
+      },
+      async getProduct() {
+        throw new Error("A replay must not reread Product availability");
+      },
+    },
+    createCart() {
+      return {
+        async inspect() {
+          throw new Error("A successful replay returns its stored result");
+        },
+        async addItem() {
+          throw new Error("A replay must not add the Product again");
+        },
+        async replayMutation() {
+          return storedCart;
+        },
+      };
+    },
+  });
+
+  const response = await route(
+    new Request("https://storefront.example/api/cart", {
+      method: "POST",
+      headers: {
+        cookie: "guest_session=returning-cart-browser-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "ADD_PRODUCT",
+        productId,
+        mutationKey: "61000000-0000-4000-8000-000000000011",
+        expectedVersion: 0,
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { data: storedCart });
+});
+
+test("incrementing a Cart Item returns the complete authoritative Cart", async () => {
+  const productId = "11000000-0000-4000-8000-000000000001";
+  const authoritativeCart: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    version: 1,
+    items: [
+      {
+        productId,
+        productName: "Quiet Buds",
+        quantity: 3,
+        cartPriceMinor: 349900,
+        subtotalMinor: 1049700,
+      },
+    ],
+    totalQuantity: 3,
+    subtotalMinor: 1049700,
+    currency: "INR",
+  };
+  const route = createUpdateCartItemRoute({
+    store: {
+      async findActive() {
+        return { id: "guest-session-1" };
+      },
+      async create() {
+        throw new Error("The existing Guest Session should be reused");
+      },
+      async refresh() {},
+    },
+    createCart(guestSession) {
+      assert.equal(guestSession.id, "guest-session-1");
+      return {
+        async inspect() {
+          throw new Error("The successful command returns its result directly");
+        },
+        async addItem() {
+          throw new Error("Increment must not use the Add Product capability");
+        },
+        async changeItemQuantity(selectedProductId, change) {
+          assert.equal(selectedProductId, productId);
+          assert.equal(change, 1);
+          return authoritativeCart;
+        },
+      };
+    },
+  });
+
+  const response = await route(
+    new Request("https://storefront.example/api/cart", {
+      method: "PATCH",
+      headers: {
+        cookie: "guest_session=returning-cart-browser-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "INCREMENT_ITEM",
+        productId,
+        mutationKey: "61000000-0000-4000-8000-000000000004",
+        expectedVersion: 1,
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { data: authoritativeCart });
+});
+
+test("replaying the same Cart Item command returns its original authoritative result", async () => {
+  const productId = "11000000-0000-4000-8000-000000000001";
+  let quantity = 1;
+  const resultsByMutationKey = new Map<string, CartView>();
+  const route = createUpdateCartItemRoute({
+    store: {
+      async findActive() {
+        return { id: "guest-session-1" };
+      },
+      async create() {
+        throw new Error("The existing Guest Session should be reused");
+      },
+      async refresh() {},
+    },
+    createCart() {
+      return {
+        async inspect() {
+          throw new Error("A successful replay returns its stored result");
+        },
+        async addItem() {
+          throw new Error("Increment must not use the Add Product capability");
+        },
+        async changeItemQuantity(
+          _selectedProductId,
+          _change,
+          _complete,
+          ...rest: unknown[]
+        ) {
+          const mutation = rest[0] as
+            | { mutationKey: string; expectedVersion: number }
+            | undefined;
+          const key = mutation?.mutationKey ?? crypto.randomUUID();
+          const replay = resultsByMutationKey.get(key);
+          if (replay) return replay;
+          quantity += 1;
+          const result: CartView = {
+            id: "31000000-0000-4000-8000-000000000001",
+            version: 1,
+            items: [
+              {
+                productId,
+                productName: "Quiet Buds",
+                quantity,
+                cartPriceMinor: 349900,
+                subtotalMinor: quantity * 349900,
+              },
+            ],
+            totalQuantity: quantity,
+            subtotalMinor: quantity * 349900,
+            currency: "INR",
+          };
+          resultsByMutationKey.set(key, result);
+          return result;
+        },
+      };
+    },
+  });
+  const command = {
+    type: "INCREMENT_ITEM",
+    productId,
+    mutationKey: "61000000-0000-4000-8000-000000000010",
+    expectedVersion: 1,
+  };
+
+  const first = await route(
+    new Request("https://storefront.example/api/cart", {
+      method: "PATCH",
+      headers: {
+        cookie: "guest_session=returning-cart-browser-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(command),
+    }),
+  );
+  const replay = await route(
+    new Request("https://storefront.example/api/cart", {
+      method: "PATCH",
+      headers: {
+        cookie: "guest_session=returning-cart-browser-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(command),
+    }),
+  );
+
+  assert.deepEqual(await first.json(), await replay.json());
+  assert.equal(quantity, 2);
+});
+
+test("decrementing at one keeps the Cart Item and returns the authoritative reason", async () => {
+  const productId = "11000000-0000-4000-8000-000000000001";
+  const unchangedCart: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    version: 1,
+    items: [
+      {
+        productId,
+        productName: "Quiet Buds",
+        quantity: 1,
+        cartPriceMinor: 349900,
+        subtotalMinor: 349900,
+      },
+    ],
+    totalQuantity: 1,
+    subtotalMinor: 349900,
+    currency: "INR",
+  };
+  const route = createUpdateCartItemRoute({
+    store: {
+      async findActive() {
+        return { id: "guest-session-1" };
+      },
+      async create() {
+        throw new Error("The existing Guest Session should be reused");
+      },
+      async refresh() {},
+    },
+    createCart() {
+      return {
+        async inspect() {
+          return unchangedCart;
+        },
+        async addItem() {
+          throw new Error("Decrement must not use the Add Product capability");
+        },
+        async changeItemQuantity(selectedProductId, change) {
+          assert.equal(selectedProductId, productId);
+          assert.equal(change, -1);
+          throw new CartError(
+            "Quiet Buds quantity cannot be lower than 1. Use Remove instead.",
+          );
+        },
+      };
+    },
+  });
+
+  const response = await route(
+    new Request("https://storefront.example/api/cart", {
+      method: "PATCH",
+      headers: {
+        cookie: "guest_session=returning-cart-browser-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "DECREMENT_ITEM",
+        productId,
+        mutationKey: "61000000-0000-4000-8000-000000000005",
+        expectedVersion: 1,
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), {
+    error: {
+      code: "CART_RULE_REJECTED",
+      message: "Quiet Buds quantity cannot be lower than 1. Use Remove instead.",
+      details: { cart: unchangedCart },
+    },
+  });
+});
+
+test("decrementing a Cart Item returns the lower authoritative quantity", async () => {
+  const productId = "11000000-0000-4000-8000-000000000001";
+  const authoritativeCart: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    version: 1,
+    items: [
+      {
+        productId,
+        productName: "Quiet Buds",
+        quantity: 2,
+        cartPriceMinor: 349900,
+        subtotalMinor: 699800,
+      },
+    ],
+    totalQuantity: 2,
+    subtotalMinor: 699800,
+    currency: "INR",
+  };
+  const route = createUpdateCartItemRoute({
+    store: {
+      async findActive() {
+        return { id: "guest-session-1" };
+      },
+      async create() {
+        throw new Error("The existing Guest Session should be reused");
+      },
+      async refresh() {},
+    },
+    createCart() {
+      return {
+        async inspect() {
+          throw new Error("The successful command returns its result directly");
+        },
+        async addItem() {
+          throw new Error("Decrement must not use the Add Product capability");
+        },
+        async changeItemQuantity(selectedProductId, change) {
+          assert.equal(selectedProductId, productId);
+          assert.equal(change, -1);
+          return authoritativeCart;
+        },
+      };
+    },
+  });
+
+  const response = await route(
+    new Request("https://storefront.example/api/cart", {
+      method: "PATCH",
+      headers: {
+        cookie: "guest_session=returning-cart-browser-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "DECREMENT_ITEM",
+        productId,
+        mutationKey: "61000000-0000-4000-8000-000000000009",
+        expectedVersion: 1,
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { data: authoritativeCart });
+});
+
+test("removing a Cart Item returns the authoritative remaining Cart", async () => {
+  const removedProductId = "11000000-0000-4000-8000-000000000001";
+  const authoritativeCart: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    version: 1,
+    items: [
+      {
+        productId: "11000000-0000-4000-8000-000000000002",
+        productName: "Trail Speaker",
+        quantity: 2,
+        cartPriceMinor: 249900,
+        subtotalMinor: 499800,
+      },
+    ],
+    totalQuantity: 2,
+    subtotalMinor: 499800,
+    currency: "INR",
+  };
+  const route = createRemoveCartItemRoute({
+    store: {
+      async findActive() {
+        return { id: "guest-session-1" };
+      },
+      async create() {
+        throw new Error("The existing Guest Session should be reused");
+      },
+      async refresh() {},
+    },
+    createCart() {
+      return {
+        async inspect() {
+          throw new Error("The successful command returns its result directly");
+        },
+        async addItem() {
+          throw new Error("Remove must not use the Add Product capability");
+        },
+        async removeItem(productId) {
+          assert.equal(productId, removedProductId);
+          return authoritativeCart;
+        },
+      };
+    },
+  });
+
+  const response = await route(
+    new Request("https://storefront.example/api/cart", {
+      method: "DELETE",
+      headers: {
+        cookie: "guest_session=returning-cart-browser-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "REMOVE_ITEM",
+        productId: removedProductId,
+        mutationKey: "61000000-0000-4000-8000-000000000006",
+        expectedVersion: 1,
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { data: authoritativeCart });
+});
+
+test("incrementing beyond the authoritative limit returns the unchanged Cart", async () => {
+  const productId = "11000000-0000-4000-8000-000000000001";
+  const unchangedCart: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    version: 1,
+    items: [
+      {
+        productId,
+        productName: "Quiet Buds",
+        quantity: 4,
+        cartPriceMinor: 349900,
+        subtotalMinor: 1399600,
+      },
+    ],
+    totalQuantity: 4,
+    subtotalMinor: 1399600,
+    currency: "INR",
+  };
+  const route = createUpdateCartItemRoute({
+    store: {
+      async findActive() {
+        return { id: "guest-session-1" };
+      },
+      async create() {
+        throw new Error("The existing Guest Session should be reused");
+      },
+      async refresh() {},
+    },
+    createCart() {
+      return {
+        async inspect() {
+          return unchangedCart;
+        },
+        async addItem() {
+          throw new Error("Increment must not use the Add Product capability");
+        },
+        async changeItemQuantity() {
+          throw new CartError("Quiet Buds only has 4 units in stock.");
+        },
+      };
+    },
+  });
+
+  const response = await route(
+    new Request("https://storefront.example/api/cart", {
+      method: "PATCH",
+      headers: {
+        cookie: "guest_session=returning-cart-browser-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "INCREMENT_ITEM",
+        productId,
+        mutationKey: "61000000-0000-4000-8000-000000000007",
+        expectedVersion: 1,
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), {
+    error: {
+      code: "CART_RULE_REJECTED",
+      message: "Quiet Buds only has 4 units in stock.",
+      details: { cart: unchangedCart },
+    },
+  });
+});
+
+test("removing the final Cart Item returns the authoritative empty Cart", async () => {
+  const emptyCart: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    version: 1,
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  const route = createRemoveCartItemRoute({
+    store: {
+      async findActive() {
+        return { id: "guest-session-1" };
+      },
+      async create() {
+        throw new Error("The existing Guest Session should be reused");
+      },
+      async refresh() {},
+    },
+    createCart() {
+      return {
+        async inspect() {
+          throw new Error("The successful command returns its result directly");
+        },
+        async addItem() {
+          throw new Error("Remove must not use the Add Product capability");
+        },
+        async removeItem() {
+          return emptyCart;
+        },
+      };
+    },
+  });
+
+  const response = await route(
+    new Request("https://storefront.example/api/cart", {
+      method: "DELETE",
+      headers: {
+        cookie: "guest_session=returning-cart-browser-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "REMOVE_ITEM",
+        productId: "11000000-0000-4000-8000-000000000001",
+        mutationKey: "61000000-0000-4000-8000-000000000008",
+        expectedVersion: 1,
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { data: emptyCart });
 });
 
 test("a rejected Add returns the reason and unchanged authoritative Cart", async () => {
@@ -104,6 +662,7 @@ test("a rejected Add returns the reason and unchanged authoritative Cart", async
   };
   const unchangedCart: CartView = {
     id: "31000000-0000-4000-8000-000000000001",
+    version: 1,
     items: [
       {
         productId: product.id,
@@ -160,6 +719,7 @@ test("a rejected Add returns the reason and unchanged authoritative Cart", async
         type: "ADD_PRODUCT",
         productId: product.id,
         mutationKey: "61000000-0000-4000-8000-000000000002",
+        expectedVersion: 1,
       }),
     }),
   );
@@ -177,6 +737,7 @@ test("a rejected Add returns the reason and unchanged authoritative Cart", async
 test("an unavailable Product is rejected without changing the Cart", async () => {
   const unchangedCart: CartView = {
     id: null,
+    version: 0,
     items: [],
     totalQuantity: 0,
     subtotalMinor: 0,
@@ -230,6 +791,7 @@ test("an unavailable Product is rejected without changing the Cart", async () =>
         type: "ADD_PRODUCT",
         productId: "11000000-0000-4000-8000-000000000001",
         mutationKey: "61000000-0000-4000-8000-000000000003",
+        expectedVersion: 0,
       }),
     }),
   );
@@ -309,6 +871,7 @@ test("returning with the same valid cookie resumes the current Cart", async () =
     async (_request, guestSession) => {
       cartBySessionId.set(guestSession.id, {
         id: "31000000-0000-4000-8000-000000000001",
+        version: 1,
         items: [],
         totalQuantity: 3,
         subtotalMinor: 1299700,
@@ -378,6 +941,7 @@ test("a Guest Session cannot read another Guest Session's Cart", async () => {
   );
   cartBySessionId.set("guest-session-1", {
     id: "31000000-0000-4000-8000-000000000001",
+    version: 1,
     items: [],
     totalQuantity: 2,
     subtotalMinor: 799800,
@@ -391,6 +955,7 @@ test("a Guest Session cannot read another Guest Session's Cart", async () => {
           return (
             cartBySessionId.get(guestSession.id) ?? {
               id: null,
+              version: 0,
               items: [],
               totalQuantity: 0,
               subtotalMinor: 0,
@@ -416,6 +981,7 @@ test("a Guest Session cannot read another Guest Session's Cart", async () => {
   assert.deepEqual(await response.json(), {
     data: {
       id: null,
+      version: 0,
       items: [],
       totalQuantity: 0,
       subtotalMinor: 0,
@@ -457,6 +1023,7 @@ test("an expired Guest Session cannot resume its former Cart", async () => {
   assert.deepEqual(await response.json(), {
     data: {
       id: null,
+      version: 0,
       items: [],
       totalQuantity: 0,
       subtotalMinor: 0,

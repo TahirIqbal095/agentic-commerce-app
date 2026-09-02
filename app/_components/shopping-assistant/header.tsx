@@ -2,6 +2,7 @@ import { MessageSquarePlus, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { CartView } from "@/modules/cart/cart";
+import type { CartControls } from "./cart-panel";
 import { CartDrawer, type CartLoadState } from "./cart-drawer";
 
 export function Header({
@@ -10,12 +11,14 @@ export function Header({
   cartState,
   hasConversation,
   onNewConversation,
+  cartControls,
 }: {
   brandName: string;
   cart: CartView | null;
   cartState: CartLoadState;
   hasConversation: boolean;
   onNewConversation: () => void;
+  cartControls: CartControls;
 }) {
   return (
     <header className="flex items-center justify-between">
@@ -47,7 +50,11 @@ export function Header({
             <MessageSquarePlus /> New conversation
           </Button>
         ) : null}
-        <CartDrawer cart={cart} state={cartState} />
+        <CartDrawer
+          cart={cart}
+          state={cartState}
+          controls={cartControls}
+        />
       </div>
     </header>
   );

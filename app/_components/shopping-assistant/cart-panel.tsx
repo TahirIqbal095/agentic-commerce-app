@@ -1,7 +1,23 @@
+import { Minus, Plus, Trash2 } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/format-money";
 import type { CartView } from "@/modules/cart/cart";
 
-export function CartPanel({ cart }: { cart: CartView }) {
+export type CartItemCommand = "increment" | "decrement" | "remove";
+export type CartControls = {
+  onCommand: (productId: string, command: CartItemCommand) => void;
+  pendingCommands: ReadonlySet<string>;
+  itemFeedback: Record<string, string>;
+};
+
+export function CartPanel({
+  cart,
+  controls,
+}: {
+  cart: CartView;
+  controls?: CartControls;
+}) {
   return (
     <section
       aria-label="Your Cart"
@@ -25,6 +41,59 @@ export function CartPanel({ cart }: { cart: CartView }) {
               <p className="mt-1 text-sm text-[#708176]">
                 {item.quantity} × {formatMoney(item.cartPriceMinor, cart.currency)}
               </p>
+              {controls ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    aria-label={`Decrease ${item.productName} quantity`}
+                    disabled={controls.pendingCommands.has(
+                      `${item.productId}:decrement`,
+                    )}
+                    onClick={() =>
+                      controls.onCommand(item.productId, "decrement")
+                    }
+                  >
+                    <Minus />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    aria-label={`Increase ${item.productName} quantity`}
+                    disabled={controls.pendingCommands.has(
+                      `${item.productId}:increment`,
+                    )}
+                    onClick={() =>
+                      controls.onCommand(item.productId, "increment")
+                    }
+                  >
+                    <Plus />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-label={`Remove ${item.productName} from Cart`}
+                    disabled={controls.pendingCommands.has(
+                      `${item.productId}:remove`,
+                    )}
+                    onClick={() =>
+                      controls.onCommand(item.productId, "remove")
+                    }
+                    className="text-red-700 hover:text-red-800"
+                  >
+                    <Trash2 />
+                    Remove
+                  </Button>
+                </div>
+              ) : null}
+              {controls?.itemFeedback[item.productId] ? (
+                <p role="alert" className="mt-2 text-sm text-red-700">
+                  {controls.itemFeedback[item.productId]}
+                </p>
+              ) : null}
             </div>
             <p
               aria-label={`${item.productName} subtotal`}

@@ -2,7 +2,12 @@ import { db } from "@/db";
 import { createCartModule } from "@/modules/cart/cart";
 import { createCatalogModule } from "@/modules/catalog/catalog";
 import { createDatabaseGuestSessionStore } from "@/modules/identity/guest-session";
-import { createAddToCartRoute, createCartRoute } from "./route-factory";
+import {
+  createAddToCartRoute,
+  createCartRoute,
+  createRemoveCartItemRoute,
+  createUpdateCartItemRoute,
+} from "./route-factory";
 
 const store = createDatabaseGuestSessionStore(db);
 const createCart = (guestSession: { id: string }) =>
@@ -16,5 +21,15 @@ export const GET = createCartRoute({
 export const POST = createAddToCartRoute({
   store,
   catalog: createCatalogModule(),
+  createCart,
+});
+
+export const PATCH = createUpdateCartItemRoute({
+  store,
+  createCart,
+});
+
+export const DELETE = createRemoveCartItemRoute({
+  store,
   createCart,
 });

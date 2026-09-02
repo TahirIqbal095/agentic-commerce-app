@@ -43,6 +43,7 @@ function cartAddRequest(
   productId: string,
   mutationKey: string,
   cookie?: string,
+  expectedVersion = 0,
 ): Request {
   return new Request("http://localhost/api/cart", {
     method: "POST",
@@ -50,7 +51,12 @@ function cartAddRequest(
       ...(cookie ? { cookie } : {}),
       "content-type": "application/json",
     },
-    body: JSON.stringify({ type: "ADD_PRODUCT", productId, mutationKey }),
+    body: JSON.stringify({
+      type: "ADD_PRODUCT",
+      productId,
+      mutationKey,
+      expectedVersion,
+    }),
   });
 }
 after(async () => {
@@ -645,8 +651,14 @@ test("concurrent Customer turns retain every authoritative Cart addition", async
 
   const cart = createCartModule(TEST_GUEST_SESSION_ID);
   await Promise.all([
-    cart.addItem(product, 1, async () => {}),
-    cart.addItem(product, 1, async () => {}),
+    cart.addItem(product, 1, async () => {}, {
+      mutationKey: "61000000-0000-4000-8000-000000000101",
+      expectedVersion: 0,
+    }),
+    cart.addItem(product, 1, async () => {}, {
+      mutationKey: "61000000-0000-4000-8000-000000000102",
+      expectedVersion: 0,
+    }),
   ]);
   const summary = await cart.inspect();
 
@@ -671,7 +683,7 @@ test("repeated explicit Add commands increment one Cart Item without repricing i
   const cookie = firstResponse.headers.get("set-cookie")?.split(";", 1)[0];
   assert.ok(cookie);
   const secondResponse = await addToCart(
-    cartAddRequest(product.id, crypto.randomUUID(), cookie),
+    cartAddRequest(product.id, crypto.randomUUID(), cookie, 2),
   );
 
   assert.equal(firstResponse.status, 200);
@@ -710,7 +722,7 @@ test("explicit Add rejects a lower inventory limit with the unchanged Cart", asy
   const cookie = firstResponse.headers.get("set-cookie")?.split(";", 1)[0];
   assert.ok(cookie);
   const rejectedResponse = await addToCart(
-    cartAddRequest(product.id, crypto.randomUUID(), cookie),
+    cartAddRequest(product.id, crypto.randomUUID(), cookie, 2),
   );
 
   assert.equal(rejectedResponse.status, 409);
@@ -760,6 +772,7 @@ test("explicit Add rejects inactive and out-of-stock Products without creating a
       details: {
         cart: {
           id: null,
+          version: 0,
           items: [],
           totalQuantity: 0,
           subtotalMinor: 0,
