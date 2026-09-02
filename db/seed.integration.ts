@@ -368,7 +368,10 @@ test("cleanup removes an expired Guest Session's Cart, Conversation, and Recomme
     await db.select({ content: messages.content }).from(messages),
     [{ content: "active Conversation content" }],
   );
-  assert.equal((await db.select().from(recommendationEvents)).length, 1);
+  assert.equal(
+    (await db.select().from(recommendationEvents)).length,
+    1,
+  );
 });
 
 test("cleanup can be retried after expired Guest Sessions are removed", async () => {
@@ -417,10 +420,7 @@ test("cleanup preserves an immutable Audit Event without retaining its expired G
   assert.deepEqual(await db.select().from(guestSessions), []);
   assert.deepEqual(
     await db
-      .select({
-        id: auditEvents.id,
-        guestSessionId: auditEvents.guestSessionId,
-      })
+      .select({ id: auditEvents.id, guestSessionId: auditEvents.guestSessionId })
       .from(auditEvents)
       .where(eq(auditEvents.id, auditEventId)),
     [{ id: auditEventId, guestSessionId: expiredGuestSessionId }],

@@ -193,30 +193,46 @@ test("Customer uses the same deterministic Add behavior from Product details", a
     attributes: {},
   };
   const requests: string[] = [];
+  let resolveAdd!: (response: Response) => void;
+  const addResponse = new Promise<Response>((resolve) => {
+    resolveAdd = resolve;
+  });
+  let addAttempt = 0;
   globalThis.fetch = async (input, init) => {
     requests.push(`${init?.method ?? "GET"} ${String(input)}`);
     if (init?.method === "POST") {
-      return Response.json({
-        data: {
-          id: "31000000-0000-4000-8000-000000000001",
-          items: [
-            {
-              productId: product.id,
-              productName: product.name,
-              quantity: 2,
-              cartPriceMinor: 349900,
-              subtotalMinor: 699800,
+      addAttempt += 1;
+      if (addAttempt === 1) return addResponse;
+      return Response.json(
+        {
+          error: {
+            code: "CART_RULE_REJECTED",
+            message: "Quiet Buds only has 1 unit in stock.",
+            details: {
+              cart: {
+                id: "31000000-0000-4000-8000-000000000001",
+                items: [
+                  {
+                    productId: product.id,
+                    productName: product.name,
+                    quantity: 1,
+                    cartPriceMinor: 349900,
+                    subtotalMinor: 349900,
+                  },
+                ],
+                totalQuantity: 1,
+                subtotalMinor: 349900,
+                currency: "INR",
+              },
             },
-          ],
-          totalQuantity: 2,
-          subtotalMinor: 699800,
-          currency: "INR",
+          },
         },
-      });
+        { status: 409 },
+      );
     }
     return Response.json({ data: product });
   };
-  const [{ render, cleanup, within }, userEvent, { ShoppingAssistant }] =
+  const [{ render, cleanup, within, act }, userEvent, { ShoppingAssistant }] =
     await Promise.all([
       import("@testing-library/react"),
       import("@testing-library/user-event").then((module) => module.default),
@@ -267,19 +283,53 @@ test("Customer uses the same deterministic Add behavior from Product details", a
     name: "Quiet Buds details",
   });
   const detailView = within(details);
-  await user.click(
-    await detailView.findByRole("button", { name: "Add Quiet Buds to Cart" }),
-  );
+  const add = await detailView.findByRole("button", {
+    name: "Add Quiet Buds to Cart",
+  });
+  await user.click(add);
 
   assert.deepEqual(requests, [
     `GET /api/products/${product.id}`,
     "POST /api/cart",
   ]);
-  assert.ok(await view.findByRole("button", { name: "Cart · 2" }));
+  assert.equal(add.hasAttribute("disabled"), true);
+  assert.ok(view.getByRole("button", { name: "Cart · 0" }));
+
+  await act(async () => {
+    resolveAdd(
+      Response.json({
+        data: {
+          id: "31000000-0000-4000-8000-000000000001",
+          items: [
+            {
+              productId: product.id,
+              productName: product.name,
+              quantity: 1,
+              cartPriceMinor: 349900,
+              subtotalMinor: 349900,
+            },
+          ],
+          totalQuantity: 1,
+          subtotalMinor: 349900,
+          currency: "INR",
+        },
+      }),
+    );
+  });
+
+  assert.ok(await view.findByRole("button", { name: "Cart · 1" }));
   assert.equal(
     detailView.getByRole("status").textContent,
-    "Quiet Buds quantity: 2. Cart subtotal: ₹6,998.",
+    "Quiet Buds quantity: 1. Cart subtotal: ₹3,499.",
   );
+
+  await user.click(add);
+
+  assert.equal(
+    (await detailView.findByRole("alert")).textContent,
+    "Quiet Buds only has 1 unit in stock.",
+  );
+  assert.ok(view.getByRole("button", { name: "Cart · 1" }));
 });
 
 test("returning in the same browser resumes the current Conversation and Cart", async (t) => {
@@ -348,7 +398,10 @@ test("returning in the same browser resumes the current Conversation and Cart", 
     "Show me running shoes",
   );
   assert.ok(await view.findByRole("button", { name: "Cart · 3" }));
-  assert.deepEqual(requests, ["GET /api/agent/conversation", "GET /api/cart"]);
+  assert.deepEqual(requests, [
+    "GET /api/agent/conversation",
+    "GET /api/cart",
+  ]);
 });
 
 test("customer sees the configured Brand in the Storefront", async (t) => {
@@ -560,23 +613,16 @@ test("customer can submit a request and read product results above the persisten
   assert.equal(fetchCalls[0]?.[0], "/api/agent/message");
   const submittedBody = JSON.parse(String(fetchCalls[0]?.[1]?.body));
   assert.match(submittedBody.idempotencyKey, /^[0-9a-f-]{36}$/);
-  assert.deepEqual(
-    { ...submittedBody, idempotencyKey: undefined },
-    {
-      idempotencyKey: undefined,
-      message: "noise cancelling earphones under 5000",
-    },
-  );
+  assert.deepEqual({ ...submittedBody, idempotencyKey: undefined }, {
+    idempotencyKey: undefined,
+    message: "noise cancelling earphones under 5000",
+  });
   assert.ok(form);
   assert.equal(
-    product.compareDocumentPosition(form) &
-      dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+    product.compareDocumentPosition(form) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
     dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
   );
-  assert.equal(
-    view.getByText("I found one precise match.").textContent,
-    "I found one precise match.",
-  );
+  assert.equal(view.getByText("I found one precise match.").textContent, "I found one precise match.");
   assert.equal(
     view.getByText("noise cancelling").textContent?.trim(),
     "noise cancelling",
@@ -727,8 +773,7 @@ test("Customer sees authoritative Commerce Agent messages for zero-Product respo
             result: {
               status: "TEMPORARILY_UNAVAILABLE",
               conversationId: "41000000-0000-4000-8000-000000000001",
-              message:
-                "The Catalog is temporarily unavailable. Please try again.",
+              message: "The Catalog is temporarily unavailable. Please try again.",
               retryable: true,
               products: [],
             },
@@ -1001,18 +1046,12 @@ test("customer can request and read the details of a product", async (t) => {
   );
   assert.equal(detailView.getByText("₹3,499").textContent, "₹3,499");
   assert.equal(detailView.getByText("In stock").textContent, "In stock");
-  assert.equal(
-    detailView.getByText("Battery life").textContent,
-    "Battery life",
-  );
+  assert.equal(detailView.getByText("Battery life").textContent, "Battery life");
   assert.equal(detailView.getByText("30 hours").textContent, "30 hours");
   assert.equal(detailView.getByText("Black, Sand").textContent, "Black, Sand");
 
   await user.click(detailView.getByRole("button", { name: "Close details" }));
-  assert.equal(
-    view.queryByRole("dialog", { name: "Quiet Buds details" }),
-    null,
-  );
+  assert.equal(view.queryByRole("dialog", { name: "Quiet Buds details" }), null);
 });
 
 test("customer sees the status when product details cannot be loaded", async (t) => {
@@ -1180,14 +1219,8 @@ test("customer sees the updated cart after the agent adds a product", async (t) 
     (await view.findByText("Added 2 × Quiet Buds to your cart.")).textContent,
     "Added 2 × Quiet Buds to your cart.",
   );
-  assert.equal(
-    view.getByRole("button", { name: "Cart · 2" }).textContent,
-    " Cart · 2",
-  );
-  assert.equal(
-    view.queryByText("No close matches yet. Try broadening the request."),
-    null,
-  );
+  assert.equal(view.getByRole("button", { name: "Cart · 2" }).textContent, " Cart · 2");
+  assert.equal(view.queryByText("No close matches yet. Try broadening the request."), null);
 });
 
 test("Customer sees a structured Cart panel within the Conversation", async (t) => {
@@ -1271,10 +1304,7 @@ test("Customer sees a structured Cart panel within the Conversation", async (t) 
   assert.ok(cart.getByText("1 × ₹5,299"));
   assert.ok(cart.getByText("2 × ₹3,799"));
   assert.ok(cart.getByText("₹12,897"));
-  assert.equal(
-    view.getByRole("button", { name: "Cart · 3" }).textContent,
-    " Cart · 3",
-  );
+  assert.equal(view.getByRole("button", { name: "Cart · 3" }).textContent, " Cart · 3");
 });
 
 test("Customer sees an empty Cart summary without an empty panel", async (t) => {
@@ -1337,10 +1367,7 @@ test("Customer sees an empty Cart summary without an empty panel", async (t) => 
   await user.click(view.getByRole("button", { name: "Send" }));
 
   assert.ok(await view.findByText("Your Cart is empty."));
-  assert.equal(
-    view.getByRole("button", { name: "Cart · 0" }).textContent,
-    " Cart · 0",
-  );
+  assert.equal(view.getByRole("button", { name: "Cart · 0" }).textContent, " Cart · 0");
   assert.equal(view.queryByRole("region", { name: "Your Cart" }), null);
 });
 
@@ -1370,10 +1397,7 @@ test("Storefront reuses the server conversation identifier on later turns", asyn
       JSON.stringify({
         data: {
           conversationId: "41000000-0000-4000-8000-000000000001",
-          message:
-            turn === 1
-              ? "Here are running shoes."
-              : "Here are waterproof options.",
+          message: turn === 1 ? "Here are running shoes." : "Here are waterproof options.",
           products: [],
         },
       }),
@@ -1604,10 +1628,7 @@ test("Customer can resume and reset the current Conversation without changing th
   const user = userEvent.setup({ document: dom.window.document });
 
   assert.equal(view.getByText("I want shoes").textContent, "I want shoes");
-  assert.equal(
-    view.getByText("Here are shoes.").textContent,
-    "Here are shoes.",
-  );
+  assert.equal(view.getByText("Here are shoes.").textContent, "Here are shoes.");
   const contextSummary = view.getByRole("complementary", {
     name: "Context Summary",
   });
@@ -1634,8 +1655,5 @@ test("Customer can resume and reset the current Conversation without changing th
     "DELETE /api/agent/conversation",
   ]);
   assert.equal(view.queryByText("I want shoes"), null);
-  assert.equal(
-    view.getByRole("button", { name: "Cart · 0" }).textContent,
-    " Cart · 0",
-  );
+  assert.equal(view.getByRole("button", { name: "Cart · 0" }).textContent, " Cart · 0");
 });

@@ -16,7 +16,7 @@ import type {
 } from "./_components/shopping-assistant/types";
 import { formatMoney } from "@/lib/format-money";
 import { cn } from "@/lib/utils";
-import type { CartView } from "@/modules/cart/cart";
+import type { CartSummary, CartView } from "@/modules/cart/cart";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
 import type {
   ProductConstraintKey,
@@ -51,7 +51,7 @@ export function ShoppingAssistant({
   const [selectedProduct, setSelectedProduct] = useState<CatalogProduct | null>(
     null,
   );
-  const [cartQuantity, setCartQuantity] = useState(0);
+  const [cart, setCart] = useState<CartSummary | CartView | null>(null);
   const [addingProductIds, setAddingProductIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -81,13 +81,13 @@ export function ShoppingAssistant({
       .then(async (response) => {
         if (!response.ok) return null;
         const payload = (await response.json()) as {
-          data: { totalQuantity: number };
+          data: CartView;
         };
         return payload.data;
       })
       .then((cart) => {
         if (!active || !cart) return;
-        setCartQuantity(cart.totalQuantity);
+        setCart(cart);
       })
       .catch(() => {});
     return () => {
@@ -140,7 +140,7 @@ export function ShoppingAssistant({
         setConversationId(payload.data.conversationId);
       }
       if (payload.data.cart) {
-        setCartQuantity(payload.data.cart.totalQuantity);
+        setCart(payload.data.cart);
       }
       const nextSummary =
         payload.data.intentBrief?.constraints ?? payload.data.intent;
@@ -209,7 +209,7 @@ export function ShoppingAssistant({
       const payload = (await response.json()) as CartApiResponse;
       if (!response.ok || !("data" in payload)) {
         if ("error" in payload && payload.error.details?.cart) {
-          setCartQuantity(payload.error.details.cart.totalQuantity);
+          setCart(payload.error.details.cart);
         }
         throw new Error(
           "error" in payload
@@ -218,7 +218,7 @@ export function ShoppingAssistant({
         );
       }
 
-      setCartQuantity(payload.data.totalQuantity);
+      setCart(payload.data);
       const item = payload.data.items.find(
         (cartItem) => cartItem.productId === product.id,
       );
@@ -262,7 +262,7 @@ export function ShoppingAssistant({
       <div className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 pb-52 pt-5 sm:px-8 sm:pb-56 sm:pt-7">
         <Header
           brandName={brandName}
-          cartQuantity={cartQuantity}
+          cartQuantity={cart?.totalQuantity ?? 0}
           hasConversation={turns.length > 0}
           onNewConversation={startNewConversation}
         />
