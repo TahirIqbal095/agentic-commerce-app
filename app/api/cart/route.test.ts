@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CartError, type CartModule, type CartView } from "@/modules/cart/cart";
+import {
+  CartConflictError,
+  CartError,
+  type CartModule,
+  type CartView,
+} from "@/modules/cart/cart";
 import type { CatalogModule } from "@/modules/catalog/catalog";
 import {
   createGuestSessionRoute,
@@ -1030,4 +1035,269 @@ test("an expired Guest Session cannot resume its former Cart", async () => {
       currency: "INR",
     },
   });
+});
+
+test("a Cart command the authority cannot reconcile returns a typed conflict", async () => {
+  const productId = "11000000-0000-4000-8000-000000000001";
+  const latestCart: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    version: 7,
+    items: [
+      {
+        productId,
+        productName: "Quiet Buds",
+        quantity: 2,
+        cartPriceMinor: 349900,
+        subtotalMinor: 699800,
+      },
+    ],
+    totalQuantity: 2,
+    subtotalMinor: 699800,
+    currency: "INR",
+  };
+  const route = createUpdateCartItemRoute({
+    store: {
+      async findActive() {
+        return { id: "guest-session-1" };
+      },
+      async create() {
+        throw new Error("The existing Guest Session should be reused");
+      },
+      async refresh() {},
+    },
+    createCart() {
+      return {
+        async inspect() {
+          return latestCart;
+        },
+        async addItem() {
+          throw new Error("Increment must not use the Add Product capability");
+        },
+        async changeItemQuantity() {
+          throw new CartConflictError(
+            "The Cart changed in another tab. Reload the Cart and try again.",
+          );
+        },
+      };
+    },
+  });
+
+  const response = await route(
+    new Request("https://storefront.example/api/cart", {
+      method: "PATCH",
+      headers: {
+        cookie: "guest_session=returning-cart-browser-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "INCREMENT_ITEM",
+        productId,
+        mutationKey: "61000000-0000-4000-8000-000000000012",
+        expectedVersion: 99,
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), {
+    error: {
+      code: "CART_CONFLICT",
+      message: "The Cart changed in another tab. Reload the Cart and try again.",
+      details: { cart: latestCart },
+    },
+  });
+});
+
+test("reusing one mutation key for a different Cart command returns a typed conflict", async () => {
+  const latestCart: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    version: 3,
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  const route = createAddToCartRoute({
+    store: {
+      async findActive() {
+        return { id: "guest-session-1" };
+      },
+      async create() {
+        throw new Error("The existing Guest Session should be reused");
+      },
+      async refresh() {},
+    },
+    catalog: {
+      async search() {
+        throw new Error("not used");
+      },
+      async getProduct() {
+        throw new Error("A reused mutation key must not reread the Catalog");
+      },
+    },
+    createCart() {
+      return {
+        async inspect() {
+          return latestCart;
+        },
+        async addItem() {
+          throw new Error("A reused mutation key must not add the Product");
+        },
+        async replayMutation() {
+          throw new CartConflictError(
+            "The mutation key was already used for another Cart command.",
+          );
+        },
+      };
+    },
+  });
+
+  const response = await route(
+    new Request("https://storefront.example/api/cart", {
+      method: "POST",
+      headers: {
+        cookie: "guest_session=returning-cart-browser-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "ADD_PRODUCT",
+        productId: "11000000-0000-4000-8000-000000000001",
+        mutationKey: "61000000-0000-4000-8000-000000000013",
+        expectedVersion: 3,
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), {
+    error: {
+      code: "CART_CONFLICT",
+      message: "The mutation key was already used for another Cart command.",
+      details: { cart: latestCart },
+    },
+  });
+});
+
+test("removing a Cart Item another tab already removed returns a typed conflict", async () => {
+  const latestCart: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    version: 5,
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  const route = createRemoveCartItemRoute({
+    store: {
+      async findActive() {
+        return { id: "guest-session-1" };
+      },
+      async create() {
+        throw new Error("The existing Guest Session should be reused");
+      },
+      async refresh() {},
+    },
+    createCart() {
+      return {
+        async inspect() {
+          return latestCart;
+        },
+        async addItem() {
+          throw new Error("Remove must not use the Add Product capability");
+        },
+        async removeItem() {
+          throw new CartConflictError("The Cart Item is no longer in the Cart.");
+        },
+      };
+    },
+  });
+
+  const response = await route(
+    new Request("https://storefront.example/api/cart", {
+      method: "DELETE",
+      headers: {
+        cookie: "guest_session=returning-cart-browser-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        type: "REMOVE_ITEM",
+        productId: "11000000-0000-4000-8000-000000000001",
+        mutationKey: "61000000-0000-4000-8000-000000000014",
+        expectedVersion: 5,
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), {
+    error: {
+      code: "CART_CONFLICT",
+      message: "The Cart Item is no longer in the Cart.",
+      details: { cart: latestCart },
+    },
+  });
+});
+
+test("replaying one removal returns its original authoritative result once", async () => {
+  const productId = "11000000-0000-4000-8000-000000000001";
+  const remainingCart: CartView = {
+    id: "31000000-0000-4000-8000-000000000001",
+    version: 4,
+    items: [],
+    totalQuantity: 0,
+    subtotalMinor: 0,
+    currency: "INR",
+  };
+  let removals = 0;
+  const resultsByMutationKey = new Map<string, CartView>();
+  const route = createRemoveCartItemRoute({
+    store: {
+      async findActive() {
+        return { id: "guest-session-1" };
+      },
+      async create() {
+        throw new Error("The existing Guest Session should be reused");
+      },
+      async refresh() {},
+    },
+    createCart() {
+      return {
+        async inspect() {
+          throw new Error("A successful replay returns its stored result");
+        },
+        async addItem() {
+          throw new Error("Remove must not use the Add Product capability");
+        },
+        async removeItem(_productId, _complete, mutation) {
+          const replay = resultsByMutationKey.get(mutation.mutationKey);
+          if (replay) return replay;
+          removals += 1;
+          resultsByMutationKey.set(mutation.mutationKey, remainingCart);
+          return remainingCart;
+        },
+      };
+    },
+  });
+  const command = {
+    type: "REMOVE_ITEM",
+    productId,
+    mutationKey: "61000000-0000-4000-8000-000000000015",
+    expectedVersion: 3,
+  };
+  const removeRequest = () =>
+    new Request("https://storefront.example/api/cart", {
+      method: "DELETE",
+      headers: {
+        cookie: "guest_session=returning-cart-browser-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(command),
+    });
+
+  const first = await route(removeRequest());
+  const replay = await route(removeRequest());
+
+  assert.equal(removals, 1);
+  assert.deepEqual(await first.json(), { data: remainingCart });
+  assert.deepEqual(await replay.json(), { data: remainingCart });
 });

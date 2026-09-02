@@ -2,9 +2,14 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import test, { after } from "node:test";
 import { promisify } from "node:util";
-import { eq } from "drizzle-orm";
+import { and, eq, gt } from "drizzle-orm";
 import { GET } from "@/app/api/products/route";
-import { POST as addToCart } from "@/app/api/cart/route";
+import {
+  DELETE as removeCartItem,
+  GET as readCart,
+  PATCH as updateCartItem,
+  POST as addToCart,
+} from "@/app/api/cart/route";
 import { DELETE as deleteConversation } from "@/app/api/agent/conversation/route";
 import { db } from "@/db";
 import { conversations, messages } from "@/db/schema/agent";
@@ -59,6 +64,48 @@ function cartAddRequest(
     }),
   });
 }
+async function currentCartFor(cookie: string): Promise<CartView> {
+  const response = await readCart(
+    new Request("http://localhost/api/cart", { headers: { cookie } }),
+  );
+  assert.equal(response.status, 200);
+  return ((await response.json()) as { data: CartView }).data;
+}
+
+function cartItemRequest(
+  type: "INCREMENT_ITEM" | "DECREMENT_ITEM" | "REMOVE_ITEM",
+  productId: string,
+  mutationKey: string,
+  cookie: string,
+  expectedVersion: number,
+): Request {
+  return new Request("http://localhost/api/cart", {
+    method: type === "REMOVE_ITEM" ? "DELETE" : "PATCH",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ type, productId, mutationKey, expectedVersion }),
+  });
+}
+
+async function seededProducts(count: number) {
+  const rows = await db
+    .select({ id: products.id, name: products.name })
+    .from(products)
+    .where(and(eq(products.active, true), gt(products.stock, 4)))
+    .orderBy(products.slug)
+    .limit(count);
+  assert.equal(rows.length, count);
+  return rows;
+}
+
+async function startCartWith(productId: string) {
+  const response = await addToCart(cartAddRequest(productId, crypto.randomUUID()));
+  assert.equal(response.status, 200);
+  const cookie = response.headers.get("set-cookie")?.split(";", 1)[0];
+  assert.ok(cookie);
+  const payload = (await response.json()) as { data: CartView };
+  return { cookie, cart: payload.data };
+}
+
 after(async () => {
   await db.$client.end();
 });
@@ -845,4 +892,244 @@ test("database rejects runtime Cart Price changes", async () => {
       .set({ unitPriceSnapshotMinor: product.priceMinor + 1 })
       .where(eq(cartItems.cartId, activeCart.id)),
   );
+});
+
+test("a repeated Add command applies once and returns its original Cart", async () => {
+  await runSeedCommand();
+  const [product] = await seededProducts(1);
+  const mutationKey = crypto.randomUUID();
+
+  const first = await addToCart(cartAddRequest(product.id, mutationKey));
+  const cookie = first.headers.get("set-cookie")?.split(";", 1)[0];
+  assert.ok(cookie);
+  const replay = await addToCart(
+    cartAddRequest(product.id, mutationKey, cookie, 0),
+  );
+
+  assert.equal(first.status, 200);
+  assert.equal(replay.status, 200);
+  const firstPayload = (await first.json()) as { data: CartView };
+  const replayPayload = (await replay.json()) as { data: CartView };
+  assert.deepEqual(replayPayload.data, firstPayload.data);
+  assert.equal(replayPayload.data.totalQuantity, 1);
+  const [storedItem] = await db
+    .select({ quantity: cartItems.quantity })
+    .from(cartItems)
+    .where(
+      and(
+        eq(cartItems.cartId, firstPayload.data.id!),
+        eq(cartItems.productId, product.id),
+      ),
+    );
+  assert.equal(storedItem.quantity, 1);
+});
+
+test("a repeated quantity change applies once and returns its original Cart", async () => {
+  await runSeedCommand();
+  const [product] = await seededProducts(1);
+  const { cookie, cart } = await startCartWith(product.id);
+  const mutationKey = crypto.randomUUID();
+
+  const first = await updateCartItem(
+    cartItemRequest("INCREMENT_ITEM", product.id, mutationKey, cookie, cart.version),
+  );
+  const replay = await updateCartItem(
+    cartItemRequest("INCREMENT_ITEM", product.id, mutationKey, cookie, cart.version),
+  );
+
+  assert.equal(first.status, 200);
+  assert.equal(replay.status, 200);
+  const firstPayload = (await first.json()) as { data: CartView };
+  const replayPayload = (await replay.json()) as { data: CartView };
+  assert.equal(firstPayload.data.totalQuantity, 2);
+  assert.deepEqual(replayPayload.data, firstPayload.data);
+  const [storedItem] = await db
+    .select({ quantity: cartItems.quantity })
+    .from(cartItems)
+    .where(
+      and(
+        eq(cartItems.cartId, firstPayload.data.id!),
+        eq(cartItems.productId, product.id),
+      ),
+    );
+  assert.equal(storedItem.quantity, 2);
+});
+
+test("a repeated removal applies once and returns its original Cart", async () => {
+  await runSeedCommand();
+  const [product] = await seededProducts(1);
+  const { cookie, cart } = await startCartWith(product.id);
+  const mutationKey = crypto.randomUUID();
+
+  const first = await removeCartItem(
+    cartItemRequest("REMOVE_ITEM", product.id, mutationKey, cookie, cart.version),
+  );
+  const replay = await removeCartItem(
+    cartItemRequest("REMOVE_ITEM", product.id, mutationKey, cookie, cart.version),
+  );
+
+  assert.equal(first.status, 200);
+  assert.equal(replay.status, 200);
+  const firstPayload = (await first.json()) as { data: CartView };
+  const replayPayload = (await replay.json()) as { data: CartView };
+  assert.deepEqual(firstPayload.data.items, []);
+  assert.deepEqual(replayPayload.data, firstPayload.data);
+});
+
+test("distinct concurrent Cart commands are all retained", async () => {
+  await runSeedCommand();
+  const [first, second, third] = await seededProducts(3);
+  const { cookie, cart } = await startCartWith(first.id);
+
+  const responses = await Promise.all([
+    addToCart(cartAddRequest(second.id, crypto.randomUUID(), cookie, cart.version)),
+    addToCart(cartAddRequest(third.id, crypto.randomUUID(), cookie, cart.version)),
+    updateCartItem(
+      cartItemRequest(
+        "INCREMENT_ITEM",
+        first.id,
+        crypto.randomUUID(),
+        cookie,
+        cart.version,
+      ),
+    ),
+  ]);
+
+  assert.deepEqual(
+    responses.map((response) => response.status),
+    [200, 200, 200],
+  );
+  const currentCart = await currentCartFor(cookie);
+  assert.equal(currentCart.totalQuantity, 4);
+  assert.deepEqual(
+    [...currentCart.items].map((item) => item.productId).sort(),
+    [first.id, second.id, third.id].sort(),
+  );
+  assert.equal(
+    currentCart.items.find((item) => item.productId === first.id)?.quantity,
+    2,
+  );
+});
+
+test("every concurrent Cart command advances the authoritative Cart version once", async () => {
+  await runSeedCommand();
+  const [first, second] = await seededProducts(2);
+  const { cookie, cart } = await startCartWith(first.id);
+
+  await Promise.all([
+    addToCart(cartAddRequest(second.id, crypto.randomUUID(), cookie, cart.version)),
+    updateCartItem(
+      cartItemRequest(
+        "INCREMENT_ITEM",
+        first.id,
+        crypto.randomUUID(),
+        cookie,
+        cart.version,
+      ),
+    ),
+  ]);
+
+  const currentCart = await currentCartFor(cookie);
+  assert.equal(currentCart.version, cart.version + 2);
+});
+
+test("a Cart command claiming an unknown version returns a typed conflict", async () => {
+  await runSeedCommand();
+  const [product] = await seededProducts(1);
+  const { cookie, cart } = await startCartWith(product.id);
+
+  const response = await updateCartItem(
+    cartItemRequest(
+      "INCREMENT_ITEM",
+      product.id,
+      crypto.randomUUID(),
+      cookie,
+      cart.version + 5,
+    ),
+  );
+
+  assert.equal(response.status, 409);
+  const payload = (await response.json()) as {
+    error: { code: string; details: { cart: CartView } };
+  };
+  assert.equal(payload.error.code, "CART_CONFLICT");
+  assert.equal(payload.error.details.cart.version, cart.version);
+  assert.equal(payload.error.details.cart.totalQuantity, 1);
+});
+
+test("reusing one mutation key for another Cart command returns a typed conflict", async () => {
+  await runSeedCommand();
+  const [product] = await seededProducts(1);
+  const { cookie, cart } = await startCartWith(product.id);
+  const mutationKey = crypto.randomUUID();
+
+  const increment = await updateCartItem(
+    cartItemRequest("INCREMENT_ITEM", product.id, mutationKey, cookie, cart.version),
+  );
+  const reused = await removeCartItem(
+    cartItemRequest("REMOVE_ITEM", product.id, mutationKey, cookie, cart.version),
+  );
+
+  assert.equal(increment.status, 200);
+  assert.equal(reused.status, 409);
+  const payload = (await reused.json()) as {
+    error: { code: string; message: string; details: { cart: CartView } };
+  };
+  assert.equal(payload.error.code, "CART_CONFLICT");
+  assert.equal(
+    payload.error.message,
+    "The mutation key was already used for another Cart command.",
+  );
+  assert.equal(payload.error.details.cart.totalQuantity, 2);
+});
+
+test("a command for a Cart Item another tab removed recovers the authoritative Cart", async () => {
+  await runSeedCommand();
+  const [product] = await seededProducts(1);
+  const { cookie, cart } = await startCartWith(product.id);
+
+  const removal = await removeCartItem(
+    cartItemRequest("REMOVE_ITEM", product.id, crypto.randomUUID(), cookie, cart.version),
+  );
+  const staleIncrement = await updateCartItem(
+    cartItemRequest(
+      "INCREMENT_ITEM",
+      product.id,
+      crypto.randomUUID(),
+      cookie,
+      cart.version,
+    ),
+  );
+
+  assert.equal(removal.status, 200);
+  assert.equal(staleIncrement.status, 409);
+  const payload = (await staleIncrement.json()) as {
+    error: { code: string; message: string; details: { cart: CartView } };
+  };
+  assert.equal(payload.error.code, "CART_CONFLICT");
+  assert.equal(payload.error.message, "The Cart Item is no longer in the Cart.");
+  assert.deepEqual(payload.error.details.cart.items, []);
+  assert.equal(payload.error.details.cart.totalQuantity, 0);
+});
+
+test("a Cart command retried after a lost response applies exactly once", async () => {
+  await runSeedCommand();
+  const [product] = await seededProducts(1);
+  const { cookie, cart } = await startCartWith(product.id);
+  const mutationKey = crypto.randomUUID();
+
+  const lost = await updateCartItem(
+    cartItemRequest("INCREMENT_ITEM", product.id, mutationKey, cookie, cart.version),
+  );
+  const appliedCart = ((await lost.json()) as { data: CartView }).data;
+  const retry = await updateCartItem(
+    cartItemRequest("INCREMENT_ITEM", product.id, mutationKey, cookie, cart.version),
+  );
+
+  assert.equal(retry.status, 200);
+  const retryPayload = (await retry.json()) as { data: CartView };
+  assert.deepEqual(retryPayload.data, appliedCart);
+  const currentCart = await currentCartFor(cookie);
+  assert.equal(currentCart.totalQuantity, 2);
+  assert.equal(currentCart.version, appliedCart.version);
 });

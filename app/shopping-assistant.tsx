@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { Composer } from "./_components/shopping-assistant/composer";
 import type { CartLoadState } from "./_components/shopping-assistant/cart-drawer";
@@ -26,9 +26,45 @@ import type {
 } from "@/modules/agent/intent";
 
 type AgentApiResponse = { data: AgentResult } | { error: { message: string } };
+
 type CartApiResponse =
   | { data: CartView }
-  | { error: { message: string; details?: { cart?: CartView } } };
+  | {
+      error: { code?: string; message: string; details?: { cart?: CartView } };
+    };
+
+/**
+ * Whether the authority decided this Cart command.
+ *
+ * A rejected command was read and refused, so its idempotency key is spent. A
+ * server failure leaves the outcome unknown, so the key must survive for a
+ * retry.
+ */
+function authorityAnsweredCommand(response: Response) {
+  return response.status < 500;
+}
+
+/**
+ * A Cart command the authority refused, carrying whether its answer already
+ * replaced the displayed Cart. When it did, the Storefront must not read the
+ * Cart again to recover.
+ */
+class CartCommandRejection extends Error {
+  constructor(
+    message: string,
+    readonly cartWasReconciled: boolean,
+  ) {
+    super(message);
+    this.name = "CartCommandRejection";
+  }
+}
+
+function wasReconciled(requestError: unknown) {
+  return (
+    requestError instanceof CartCommandRejection &&
+    requestError.cartWasReconciled
+  );
+}
 
 export function ShoppingAssistant({
   brandName,
@@ -69,11 +105,54 @@ export function ShoppingAssistant({
   const [cartItemFeedback, setCartItemFeedback] = useState<
     Record<string, string>
   >({});
+  const mutationKeys = useRef(new Map<string, string>());
 
+  /**
+   * Returns the idempotency key for one logical Cart command.
+   *
+   * The key is minted once per command and kept until the authority answers, so
+   * a Customer retrying a failed or timed-out command replays it instead of
+   * applying it a second time.
+   */
+  function mutationKeyFor(commandKey: string) {
+    const existing = mutationKeys.current.get(commandKey);
+    if (existing) return existing;
+    const issued = crypto.randomUUID();
+    mutationKeys.current.set(commandKey, issued);
+    return issued;
+  }
+
+  /**
+   * Retires the idempotency key once the authority has answered the command,
+   * whether it applied the command or rejected it. A later command is a new
+   * Customer action and receives its own key.
+   */
+  function releaseMutationKey(commandKey: string) {
+    mutationKeys.current.delete(commandKey);
+  }
+
+  /**
+   * Adopts an authoritative Cart returned by a successful read or command.
+   *
+   * Responses can arrive out of order, so a Cart older than the one already
+   * displayed is discarded rather than shown as current.
+   */
   function replaceCartFromAuthority(nextCart: CartView) {
     setCart((current) =>
       current && current.version > nextCart.version ? current : nextCart,
     );
+    setCartState("ready");
+  }
+
+  /**
+   * Adopts the Cart carried by a rejected command.
+   *
+   * The authority read this Cart while refusing the command, so it replaces the
+   * drawer and badge unconditionally — including when another tab emptied the
+   * Cart and lowered its version.
+   */
+  function recoverCartFromConflict(latestCart: CartView) {
+    setCart(latestCart);
     setCartState("ready");
   }
 
@@ -219,9 +298,59 @@ export function ShoppingAssistant({
     setSelectedProduct(null);
   }
 
+  /**
+   * Sends one explicit Cart command and adopts the authority's answer.
+   *
+   * The command carries its idempotency key and the displayed Cart version. A
+   * refusal that carries the authoritative Cart replaces the displayed Cart —
+   * unconditionally for a conflict, which is the latest Cart by definition, and
+   * subject to the version guard for a rule the Customer can correct.
+   *
+   * @returns The authoritative Cart the command produced.
+   * @throws {CartCommandRejection} When the authority refused the command.
+   */
+  async function sendCartCommand(
+    method: "POST" | "PATCH" | "DELETE",
+    commandKey: string,
+    command: { type: string; productId: string },
+    refusalMessage: string,
+  ): Promise<CartView> {
+    const response = await fetch("/api/cart", {
+      method,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...command,
+        mutationKey: mutationKeyFor(commandKey),
+        expectedVersion: cart?.version ?? 0,
+      }),
+    });
+    const payload = (await response.json()) as CartApiResponse;
+
+    if (!response.ok || !("data" in payload)) {
+      if (authorityAnsweredCommand(response)) releaseMutationKey(commandKey);
+      const refusal = "error" in payload ? payload.error : null;
+      const latestCart = refusal?.details?.cart;
+      if (latestCart) {
+        if (refusal?.code === "CART_CONFLICT") {
+          recoverCartFromConflict(latestCart);
+        } else {
+          replaceCartFromAuthority(latestCart);
+        }
+      }
+      throw new CartCommandRejection(
+        refusal?.message ?? refusalMessage,
+        latestCart !== undefined,
+      );
+    }
+
+    releaseMutationKey(commandKey);
+    replaceCartFromAuthority(payload.data);
+    return payload.data;
+  }
+
   async function addProduct(product: CatalogProduct) {
     if (addingProductIds.has(product.id)) return;
-    let cartWasReconciled = false;
+    const refusalMessage = `${product.name} could not be added.`;
     setAddingProductIds((current) => new Set(current).add(product.id));
     setCartFeedback((current) => {
       const next = { ...current };
@@ -230,42 +359,24 @@ export function ShoppingAssistant({
     });
 
     try {
-      const response = await fetch("/api/cart", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          type: "ADD_PRODUCT",
-          productId: product.id,
-          mutationKey: crypto.randomUUID(),
-          expectedVersion: cart?.version ?? 0,
-        }),
-      });
-      const payload = (await response.json()) as CartApiResponse;
-      if (!response.ok || !("data" in payload)) {
-        if ("error" in payload && payload.error.details?.cart) {
-          replaceCartFromAuthority(payload.error.details.cart);
-          cartWasReconciled = true;
-        }
-        throw new Error(
-          "error" in payload
-            ? payload.error.message
-            : `${product.name} could not be added.`,
-        );
-      }
-
-      replaceCartFromAuthority(payload.data);
-      const item = payload.data.items.find(
+      const appliedCart = await sendCartCommand(
+        "POST",
+        `${product.id}:add`,
+        { type: "ADD_PRODUCT", productId: product.id },
+        refusalMessage,
+      );
+      const item = appliedCart.items.find(
         (cartItem) => cartItem.productId === product.id,
       );
       setCartFeedback((current) => ({
         ...current,
         [product.id]: {
           kind: "success",
-          message: `${product.name} quantity: ${item?.quantity ?? 0}. Cart subtotal: ${formatMoney(payload.data.subtotalMinor, payload.data.currency)}.`,
+          message: `${product.name} quantity: ${item?.quantity ?? 0}. Cart subtotal: ${formatMoney(appliedCart.subtotalMinor, appliedCart.currency)}.`,
         },
       }));
     } catch (requestError) {
-      if (!cartWasReconciled) {
+      if (!wasReconciled(requestError)) {
         const reloaded = await reloadCartFromAuthority();
         if (!reloaded && !cart) setCartState("error");
       }
@@ -276,7 +387,7 @@ export function ShoppingAssistant({
           message:
             requestError instanceof Error
               ? requestError.message
-              : `${product.name} could not be added.`,
+              : refusalMessage,
         },
       }));
     } finally {
@@ -291,19 +402,19 @@ export function ShoppingAssistant({
   async function changeCartItem(productId: string, command: CartItemCommand) {
     const pendingKey = `${productId}:${command}`;
     if (pendingCartCommands.has(pendingKey)) return;
+    const refusalMessage = "The Cart Item could not be changed.";
     setPendingCartCommands((current) => new Set(current).add(pendingKey));
     setCartItemFeedback((current) => {
       const next = { ...current };
       delete next[productId];
       return next;
     });
-    let cartWasReconciled = false;
 
     try {
-      const response = await fetch("/api/cart", {
-        method: command === "remove" ? "DELETE" : "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+      await sendCartCommand(
+        command === "remove" ? "DELETE" : "PATCH",
+        pendingKey,
+        {
           type:
             command === "increment"
               ? "INCREMENT_ITEM"
@@ -311,33 +422,17 @@ export function ShoppingAssistant({
                 ? "DECREMENT_ITEM"
                 : "REMOVE_ITEM",
           productId,
-          mutationKey: crypto.randomUUID(),
-          expectedVersion: cart?.version ?? 0,
-        }),
-      });
-      const payload = (await response.json()) as CartApiResponse;
-      if (!response.ok || !("data" in payload)) {
-        if ("error" in payload && payload.error.details?.cart) {
-          replaceCartFromAuthority(payload.error.details.cart);
-          cartWasReconciled = true;
-        }
-        throw new Error(
-          "error" in payload
-            ? payload.error.message
-            : "The Cart Item could not be changed.",
-        );
-      }
-      replaceCartFromAuthority(payload.data);
+        },
+        refusalMessage,
+      );
     } catch (requestError) {
-      if (!cartWasReconciled) {
+      if (!wasReconciled(requestError)) {
         await reloadCartFromAuthority();
       }
       setCartItemFeedback((current) => ({
         ...current,
         [productId]:
-          requestError instanceof Error
-            ? requestError.message
-            : "The Cart Item could not be changed.",
+          requestError instanceof Error ? requestError.message : refusalMessage,
       }));
     } finally {
       setPendingCartCommands((current) => {

@@ -99,7 +99,7 @@ export function createAddToCartRoute(options: AddToCartRouteOptions) {
           const cart = await cartModule.inspect();
           return errorResponse(
             {
-              code: "CART_RULE_REJECTED",
+              code: error.code,
               message: error.message,
               details: { cart },
             },
@@ -149,7 +149,7 @@ export function createUpdateCartItemRoute(options: CartRouteOptions) {
           const cart = await cartModule.inspect();
           return errorResponse(
             {
-              code: "CART_RULE_REJECTED",
+              code: error.code,
               message: error.message,
               details: { cart },
             },
@@ -191,7 +191,7 @@ export function createRemoveCartItemRoute(options: CartRouteOptions) {
           const cart = await cartModule.inspect();
           return errorResponse(
             {
-              code: "CART_RULE_REJECTED",
+              code: error.code,
               message: error.message,
               details: { cart },
             },

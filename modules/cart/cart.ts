@@ -71,10 +71,99 @@ export interface CartModule {
   inspect(): Promise<CartView>;
 }
 
+export type CartErrorCode = "CART_RULE_REJECTED" | "CART_CONFLICT";
+
+/**
+ * A Cart rule the Customer can correct without losing their command, such as a
+ * stock limit or the ten-unit Cart Item limit.
+ */
 export class CartError extends Error {
+  readonly code: CartErrorCode = "CART_RULE_REJECTED";
+
   constructor(message: string) {
     super(message);
     this.name = "CartError";
+  }
+}
+
+/**
+ * A Cart command the authoritative Cart cannot reconcile, because another tab
+ * already changed the Cart, the mutation key belongs to another command, or the
+ * bounded conflict retries were exhausted. Its result is the latest
+ * authoritative Cart rather than a correctable rule.
+ */
+export class CartConflictError extends CartError {
+  override readonly code = "CART_CONFLICT";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "CartConflictError";
+  }
+}
+
+/**
+ * Bounded attempts for one Cart command that loses a database race.
+ *
+ * Cart commands serialize on a per-Guest-Session advisory lock, so a lost race
+ * is rare. When one happens, retrying the whole command keeps every distinct
+ * valid Customer action rather than discarding it.
+ */
+const CART_CONFLICT_RETRY_ATTEMPTS = 3;
+
+const TRANSIENT_CONFLICT_CODES = new Set([
+  "40001", // serialization_failure
+  "40P01", // deadlock_detected
+  // unique_violation on the one-active-Cart or mutation-key index. Retrying
+  // re-enters the replay check first, so a duplicated mutation key resolves to
+  // its original result rather than a second application.
+  "23505",
+]);
+
+/**
+ * Whether the database lost this Cart command to a race it can win on a retry.
+ *
+ * The driver wraps a failed query and carries the Postgres error as its cause,
+ * so the code is read from the cause chain rather than the thrown value. A Cart
+ * rule rejection anywhere in that chain is a decision, never a race.
+ */
+function isTransientCartConflict(error: unknown): boolean {
+  for (let cause = error; cause != null; cause = (cause as { cause?: unknown }).cause) {
+    if (cause instanceof CartError) return false;
+    const code = (cause as { code?: unknown }).code;
+    if (typeof code === "string" && TRANSIENT_CONFLICT_CODES.has(code)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Runs one Cart command, retrying it while the database reports a transient
+ * conflict.
+ *
+ * Cart rule rejections and unrelated failures are answered immediately, because
+ * repeating them cannot change their result. When the bounded attempts are
+ * exhausted the command becomes a typed Cart conflict, so the Customer receives
+ * the latest authoritative Cart instead of an unexplained failure.
+ *
+ * @param runCommand - The Cart command to apply, retried as a whole.
+ * @returns The applied command's authoritative result.
+ * @throws {CartConflictError} When every bounded attempt lost its race.
+ */
+export async function withBoundedCartConflictRetry<Result>(
+  runCommand: () => Promise<Result>,
+): Promise<Result> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await runCommand();
+    } catch (error) {
+      if (!isTransientCartConflict(error)) throw error;
+      if (attempt >= CART_CONFLICT_RETRY_ATTEMPTS) {
+        throw new CartConflictError(
+          "The Cart changed too many times to apply this command. Reload the Cart and try again.",
+        );
+      }
+    }
   }
 }
 
@@ -107,151 +196,159 @@ export function createCartModule(
       }
     }
 
-    return db.transaction(async (transaction) => {
-      await transaction.execute(
-        sql`select pg_advisory_xact_lock(hashtext(${guestSessionId}))`,
-      );
-      if (mutation) {
-        const replay = await findMutationReplay(
-          transaction,
-          mutation,
-          "ADD_PRODUCT",
-          additions[0].product.id,
+    return withBoundedCartConflictRetry(() =>
+      db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${guestSessionId}))`,
         );
-        if (replay) return replay;
-      }
-      const productRows = await transaction
-        .select({
-          id: products.id,
-          name: products.name,
-          priceMinor: products.priceMinor,
-          currency: products.currency,
-          stock: products.stock,
-          active: products.active,
-        })
-        .from(products)
-        .where(inArray(products.id, [...productIds]));
-      const authoritativeById = new Map(
-        productRows.map((product) => [product.id, product]),
-      );
-      const authoritativeAdditions = additions.map(({ product, quantity }) => {
-        const authoritativeProduct = authoritativeById.get(product.id);
-        if (!authoritativeProduct?.active) {
-          throw new CartError(`${product.name} is not available.`);
-        }
-        return { product: authoritativeProduct, quantity };
-      });
-
-      let [activeCart] = await transaction
-        .select({ id: carts.id, currency: carts.currency, version: carts.version })
-        .from(carts)
-        .where(
-          and(
-            eq(carts.guestSessionId, guestSessionId),
-            eq(carts.status, "ACTIVE"),
-          ),
-        )
-        .limit(1);
-      const cartCurrency =
-        activeCart?.currency ?? authoritativeAdditions[0].product.currency;
-      for (const { product } of authoritativeAdditions) {
-        if (product.currency !== cartCurrency) {
-          throw new CartError(
-            `${product.name} uses ${product.currency}, but the Cart uses ${cartCurrency}.`,
+        if (mutation) {
+          const replay = await findMutationReplay(
+            transaction,
+            mutation,
+            "ADD_PRODUCT",
+            additions[0].product.id,
           );
+          if (replay) return replay;
         }
-      }
-
-      if (mutation) {
-        assertMutationVersionIsNotAhead(
-          activeCart?.version ?? 0,
-          mutation.expectedVersion,
+        const productRows = await transaction
+          .select({
+            id: products.id,
+            name: products.name,
+            priceMinor: products.priceMinor,
+            currency: products.currency,
+            stock: products.stock,
+            active: products.active,
+          })
+          .from(products)
+          .where(inArray(products.id, [...productIds]));
+        const authoritativeById = new Map(
+          productRows.map((product) => [product.id, product]),
         );
-      }
-      if (!activeCart) {
-        [activeCart] = await transaction
-          .insert(carts)
-          .values({ guestSessionId, currency: cartCurrency })
-          .returning({
+        const authoritativeAdditions = additions.map(
+          ({ product, quantity }) => {
+            const authoritativeProduct = authoritativeById.get(product.id);
+            if (!authoritativeProduct?.active) {
+              throw new CartError(`${product.name} is not available.`);
+            }
+            return { product: authoritativeProduct, quantity };
+          },
+        );
+
+        let [activeCart] = await transaction
+          .select({
             id: carts.id,
             currency: carts.currency,
             version: carts.version,
-          });
-      }
-      const existingRows = await transaction
-        .select({
-          productId: cartItems.productId,
-          quantity: cartItems.quantity,
-          cartPriceMinor: cartItems.unitPriceSnapshotMinor,
-        })
-        .from(cartItems)
-        .where(
-          and(
-            eq(cartItems.cartId, activeCart.id),
-            inArray(cartItems.productId, [...productIds]),
-          ),
-        );
-      const existingByProductId = new Map(
-        existingRows.map((item) => [item.productId, item]),
-      );
-      const validatedAdditions = authoritativeAdditions.map(
-        ({ product, quantity }) => {
-          const existing = existingByProductId.get(product.id);
-          const nextQuantity = (existing?.quantity ?? 0) + quantity;
-          if (nextQuantity > 10) {
-            throw new CartError(
-              `${product.name} cannot have more than 10 units in the Cart.`,
-            );
-          }
-          if (nextQuantity > product.stock) {
-            throw new CartError(
-              `${product.name} only has ${product.stock} ${product.stock === 1 ? "unit" : "units"} in stock.`,
-            );
-          }
-          return { product, existing, nextQuantity };
-        },
-      );
-
-      for (const { product, nextQuantity } of validatedAdditions) {
-        await transaction
-          .insert(cartItems)
-          .values({
-            cartId: activeCart.id,
-            productId: product.id,
-            quantity: nextQuantity,
-            unitPriceSnapshotMinor: product.priceMinor,
           })
-          .onConflictDoUpdate({
-            target: [cartItems.cartId, cartItems.productId],
-            set: {
-              quantity: nextQuantity,
-              updatedAt: new Date(),
-            },
-          });
-      }
+          .from(carts)
+          .where(
+            and(
+              eq(carts.guestSessionId, guestSessionId),
+              eq(carts.status, "ACTIVE"),
+            ),
+          )
+          .limit(1);
+        const cartCurrency =
+          activeCart?.currency ?? authoritativeAdditions[0].product.currency;
+        for (const { product } of authoritativeAdditions) {
+          if (product.currency !== cartCurrency) {
+            throw new CartError(
+              `${product.name} uses ${product.currency}, but the Cart uses ${cartCurrency}.`,
+            );
+          }
+        }
 
-      const [updatedCart] = await transaction
-        .update(carts)
-        .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
-        .where(eq(carts.id, activeCart.id))
-        .returning({ version: carts.version });
-
-      const cart = await readCart(transaction, {
-        ...activeCart,
-        version: updatedCart.version,
-      });
-      if (mutation) {
-        await recordMutation(
-          transaction,
-          mutation,
-          "ADD_PRODUCT",
-          additions[0].product.id,
-          cart,
+        if (mutation) {
+          assertMutationVersionIsNotAhead(
+            activeCart?.version ?? 0,
+            mutation.expectedVersion,
+          );
+        }
+        if (!activeCart) {
+          [activeCart] = await transaction
+            .insert(carts)
+            .values({ guestSessionId, currency: cartCurrency })
+            .returning({
+              id: carts.id,
+              currency: carts.currency,
+              version: carts.version,
+            });
+        }
+        const existingRows = await transaction
+          .select({
+            productId: cartItems.productId,
+            quantity: cartItems.quantity,
+            cartPriceMinor: cartItems.unitPriceSnapshotMinor,
+          })
+          .from(cartItems)
+          .where(
+            and(
+              eq(cartItems.cartId, activeCart.id),
+              inArray(cartItems.productId, [...productIds]),
+            ),
+          );
+        const existingByProductId = new Map(
+          existingRows.map((item) => [item.productId, item]),
         );
-      }
-      await complete(cart, transaction);
-      return cart;
-    });
+        const validatedAdditions = authoritativeAdditions.map(
+          ({ product, quantity }) => {
+            const existing = existingByProductId.get(product.id);
+            const nextQuantity = (existing?.quantity ?? 0) + quantity;
+            if (nextQuantity > 10) {
+              throw new CartError(
+                `${product.name} cannot have more than 10 units in the Cart.`,
+              );
+            }
+            if (nextQuantity > product.stock) {
+              throw new CartError(
+                `${product.name} only has ${product.stock} ${product.stock === 1 ? "unit" : "units"} in stock.`,
+              );
+            }
+            return { product, existing, nextQuantity };
+          },
+        );
+
+        for (const { product, nextQuantity } of validatedAdditions) {
+          await transaction
+            .insert(cartItems)
+            .values({
+              cartId: activeCart.id,
+              productId: product.id,
+              quantity: nextQuantity,
+              unitPriceSnapshotMinor: product.priceMinor,
+            })
+            .onConflictDoUpdate({
+              target: [cartItems.cartId, cartItems.productId],
+              set: {
+                quantity: nextQuantity,
+                updatedAt: new Date(),
+              },
+            });
+        }
+
+        const [updatedCart] = await transaction
+          .update(carts)
+          .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
+          .where(eq(carts.id, activeCart.id))
+          .returning({ version: carts.version });
+
+        const cart = await readCart(transaction, {
+          ...activeCart,
+          version: updatedCart.version,
+        });
+        if (mutation) {
+          await recordMutation(
+            transaction,
+            mutation,
+            "ADD_PRODUCT",
+            additions[0].product.id,
+            cart,
+          );
+        }
+        await complete(cart, transaction);
+        return cart;
+      }),
+    );
   };
 
   const findMutationReplay = async (
@@ -276,7 +373,7 @@ export function createCartModule(
       .limit(1);
     if (!stored) return null;
     if (stored.commandType !== commandType || stored.productId !== productId) {
-      throw new CartError(
+      throw new CartConflictError(
         "The mutation key was already used for another Cart command.",
       );
     }
@@ -301,7 +398,11 @@ export function createCartModule(
 
   const findActiveCart = async (transaction: DbExecutor) => {
     const [activeCart] = await transaction
-      .select({ id: carts.id, currency: carts.currency, version: carts.version })
+      .select({
+        id: carts.id,
+        currency: carts.currency,
+        version: carts.version,
+      })
       .from(carts)
       .where(
         and(
@@ -310,14 +411,20 @@ export function createCartModule(
         ),
       )
       .limit(1);
-    if (!activeCart) throw new CartError("The Cart Item is no longer in the Cart.");
+    if (!activeCart) {
+      throw new CartConflictError("The Cart Item is no longer in the Cart.");
+    }
     return activeCart;
   };
 
   return {
     async inspect() {
       const [activeCart] = await db
-        .select({ id: carts.id, currency: carts.currency, version: carts.version })
+        .select({
+          id: carts.id,
+          currency: carts.currency,
+          version: carts.version,
+        })
         .from(carts)
         .where(
           and(
@@ -358,140 +465,148 @@ export function createCartModule(
       });
     },
     async changeItemQuantity(productId, change, complete, mutation) {
-      return db.transaction(async (transaction) => {
-        await transaction.execute(
-          sql`select pg_advisory_xact_lock(hashtext(${guestSessionId}))`,
-        );
-        const commandType =
-          change === 1 ? "INCREMENT_ITEM" : "DECREMENT_ITEM";
-        const replay = await findMutationReplay(
-          transaction,
-          mutation,
-          commandType,
-          productId,
-        );
-        if (replay) return replay;
-        const activeCart = await findActiveCart(transaction);
-        assertMutationVersionIsNotAhead(
-          activeCart.version,
-          mutation.expectedVersion,
-        );
-        const [item] = await transaction
-          .select({
-            id: cartItems.id,
-            productName: products.name,
-            quantity: cartItems.quantity,
-            stock: products.stock,
-            active: products.active,
-          })
-          .from(cartItems)
-          .innerJoin(products, eq(products.id, cartItems.productId))
-          .where(
-            and(
-              eq(cartItems.cartId, activeCart.id),
-              eq(cartItems.productId, productId),
-            ),
-          )
-          .limit(1);
-        if (!item) {
-          throw new CartError("The Cart Item is no longer in the Cart.");
-        }
-
-        const nextQuantity = item.quantity + change;
-        if (nextQuantity < 1) {
-          throw new CartError(
-            `${item.productName} quantity cannot be lower than 1. Use Remove instead.`,
+      return withBoundedCartConflictRetry(() =>
+        db.transaction(async (transaction) => {
+          await transaction.execute(
+            sql`select pg_advisory_xact_lock(hashtext(${guestSessionId}))`,
           );
-        }
-        if (change === 1) {
-          if (!item.active) {
-            throw new CartError(`${item.productName} is not available.`);
-          }
-          if (nextQuantity > 10) {
-            throw new CartError(
-              `${item.productName} cannot have more than 10 units in the Cart.`,
+          const commandType =
+            change === 1 ? "INCREMENT_ITEM" : "DECREMENT_ITEM";
+          const replay = await findMutationReplay(
+            transaction,
+            mutation,
+            commandType,
+            productId,
+          );
+          if (replay) return replay;
+          const activeCart = await findActiveCart(transaction);
+          assertMutationVersionIsNotAhead(
+            activeCart.version,
+            mutation.expectedVersion,
+          );
+          const [item] = await transaction
+            .select({
+              id: cartItems.id,
+              productName: products.name,
+              quantity: cartItems.quantity,
+              stock: products.stock,
+              active: products.active,
+            })
+            .from(cartItems)
+            .innerJoin(products, eq(products.id, cartItems.productId))
+            .where(
+              and(
+                eq(cartItems.cartId, activeCart.id),
+                eq(cartItems.productId, productId),
+              ),
+            )
+            .limit(1);
+          if (!item) {
+            throw new CartConflictError(
+              "The Cart Item is no longer in the Cart.",
             );
           }
-          if (nextQuantity > item.stock) {
-            throw new CartError(
-              `${item.productName} only has ${item.stock} ${item.stock === 1 ? "unit" : "units"} in stock.`,
-            );
-          }
-        }
 
-        await transaction
-          .update(cartItems)
-          .set({ quantity: nextQuantity, updatedAt: new Date() })
-          .where(eq(cartItems.id, item.id));
-        const [updatedCart] = await transaction
-          .update(carts)
-          .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
-          .where(eq(carts.id, activeCart.id))
-          .returning({ version: carts.version });
-        const cart = await readCart(transaction, {
-          ...activeCart,
-          version: updatedCart.version,
-        });
-        await recordMutation(
-          transaction,
-          mutation,
-          commandType,
-          productId,
-          cart,
-        );
-        await complete(cart, transaction);
-        return cart;
-      });
+          const nextQuantity = item.quantity + change;
+          if (nextQuantity < 1) {
+            throw new CartError(
+              `${item.productName} quantity cannot be lower than 1. Use Remove instead.`,
+            );
+          }
+          if (change === 1) {
+            if (!item.active) {
+              throw new CartError(`${item.productName} is not available.`);
+            }
+            if (nextQuantity > 10) {
+              throw new CartError(
+                `${item.productName} cannot have more than 10 units in the Cart.`,
+              );
+            }
+            if (nextQuantity > item.stock) {
+              throw new CartError(
+                `${item.productName} only has ${item.stock} ${item.stock === 1 ? "unit" : "units"} in stock.`,
+              );
+            }
+          }
+
+          await transaction
+            .update(cartItems)
+            .set({ quantity: nextQuantity, updatedAt: new Date() })
+            .where(eq(cartItems.id, item.id));
+          const [updatedCart] = await transaction
+            .update(carts)
+            .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
+            .where(eq(carts.id, activeCart.id))
+            .returning({ version: carts.version });
+          const cart = await readCart(transaction, {
+            ...activeCart,
+            version: updatedCart.version,
+          });
+          await recordMutation(
+            transaction,
+            mutation,
+            commandType,
+            productId,
+            cart,
+          );
+          await complete(cart, transaction);
+          return cart;
+        }),
+      );
     },
     async removeItem(productId, complete, mutation) {
-      return db.transaction(async (transaction) => {
-        await transaction.execute(
-          sql`select pg_advisory_xact_lock(hashtext(${guestSessionId}))`,
-        );
-        const replay = await findMutationReplay(
-          transaction,
-          mutation,
-          "REMOVE_ITEM",
-          productId,
-        );
-        if (replay) return replay;
-        const activeCart = await findActiveCart(transaction);
-        assertMutationVersionIsNotAhead(
-          activeCart.version,
-          mutation.expectedVersion,
-        );
-        const removed = await transaction
-          .delete(cartItems)
-          .where(
-            and(
-              eq(cartItems.cartId, activeCart.id),
-              eq(cartItems.productId, productId),
-            ),
-          )
-          .returning({ id: cartItems.id });
-        if (removed.length === 0) {
-          throw new CartError("The Cart Item is no longer in the Cart.");
-        }
+      return withBoundedCartConflictRetry(() =>
+        db.transaction(async (transaction) => {
+          await transaction.execute(
+            sql`select pg_advisory_xact_lock(hashtext(${guestSessionId}))`,
+          );
+          const replay = await findMutationReplay(
+            transaction,
+            mutation,
+            "REMOVE_ITEM",
+            productId,
+          );
+          if (replay) return replay;
+          const activeCart = await findActiveCart(transaction);
+          assertMutationVersionIsNotAhead(
+            activeCart.version,
+            mutation.expectedVersion,
+          );
+          const removed = await transaction
+            .delete(cartItems)
+            .where(
+              and(
+                eq(cartItems.cartId, activeCart.id),
+                eq(cartItems.productId, productId),
+              ),
+            )
+            .returning({ id: cartItems.id });
+          if (removed.length === 0) {
+            throw new CartConflictError(
+              "The Cart Item is no longer in the Cart.",
+            );
+          }
 
-        const [updatedCart] = await transaction
-          .update(carts)
-          .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
-          .where(eq(carts.id, activeCart.id))
-          .returning({ version: carts.version });
-        const cart = await readCart(transaction, {
-          ...activeCart,
-          version: updatedCart.version,
-        });
-        await recordMutation(
-          transaction,
-          mutation,
-          "REMOVE_ITEM",
-          productId,
-          cart,
-        );
-        await complete(cart, transaction);
-        return cart;
-      });
+          const [updatedCart] = await transaction
+            .update(carts)
+            .set({ version: sql`${carts.version} + 1`, updatedAt: new Date() })
+            .where(eq(carts.id, activeCart.id))
+            .returning({ version: carts.version });
+          const cart = await readCart(transaction, {
+            ...activeCart,
+            version: updatedCart.version,
+          });
+          await recordMutation(
+            transaction,
+            mutation,
+            "REMOVE_ITEM",
+            productId,
+            cart,
+          );
+          await complete(cart, transaction);
+          return cart;
+        }),
+      );
     },
   };
 }
@@ -542,7 +657,7 @@ function assertMutationVersionIsNotAhead(
   expectedVersion: number,
 ) {
   if (expectedVersion > currentVersion) {
-    throw new CartError(
+    throw new CartConflictError(
       "The Cart version is newer than the authoritative Cart. Reload the Cart and try again.",
     );
   }
