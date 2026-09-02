@@ -1,0 +1,1 @@
+ALTER TABLE "audit_events" DROP CONSTRAINT "audit_events_guest_session_id_guest_sessions_id_fkey";

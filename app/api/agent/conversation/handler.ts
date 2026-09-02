@@ -1,7 +1,16 @@
 import { dataResponse, unexpectedErrorResponse } from "@/lib/http/responses";
 import type { ConversationState } from "@/modules/agent/conversation-state";
 
-export function createConversationHandler(state: ConversationState) {
+/**
+ * Creates the Conversation lifecycle handlers.
+ *
+ * The handlers depend on Conversation reading and reset alone, so a Customer
+ * Action Entry can only be recorded through the deterministic Storefront
+ * control that produces it.
+ */
+export function createConversationHandler(
+  state: Pick<ConversationState, "loadCurrent" | "resetCurrent">,
+) {
   return {
     async GET(): Promise<Response> {
       try {

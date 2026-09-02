@@ -1,5 +1,3 @@
-import type { CartQuantityChange } from "@/modules/cart/cart";
-
 export type ShoppingAttributes = Record<string, string | number | boolean>;
 
 export type ShoppingIntent = {
@@ -59,47 +57,10 @@ export type IntentAnalysis = {
   missingInformation: string[];
   confidence: number;
   requestedEffects: Array<
-    | "DISCOVER_PRODUCTS"
-    | "ADD_TO_CART"
-    | "INSPECT_CART"
-    | "CHANGE_CART_QUANTITY"
-    | "REMOVE_FROM_CART"
-    | "RESTORE_CART_ITEM"
-    | "CLEAR_CART"
+    "DISCOVER_PRODUCTS" | "PRESENT_ADD_CONTROLS" | "INSPECT_CART"
   >;
   referencedProductIds?: string[];
-  requestedQuantity?: number;
-  requestedAdditions?: RequestedCartAddition[];
-  requestedCartItemReference?: string;
-  requestedCartQuantityChange?: RequestedCartQuantityChange;
-  hasMultipleCartQuantityChanges?: true;
-  requestedCartMutations?: RequestedCartMutation[];
 };
-
-export type RequestedCartAddition = {
-  productId: string;
-  quantity: number;
-};
-
-export type RequestedCartQuantityChange = CartQuantityChange;
-
-export type RequestedCartMutation =
-  | { type: "ADD"; productId: string; quantity: number }
-  | { type: "REMOVE"; reference: string }
-  | {
-      type: "CHANGE_QUANTITY";
-      reference?: string;
-      change: RequestedCartQuantityChange;
-    }
-  | { type: "CLEAR" };
-
-export type AddToCartIntent = {
-  action: "ADD_TO_CART";
-  productName: string;
-  quantity: number;
-};
-
-export type CommerceIntent = ShoppingIntent | AddToCartIntent;
 
 export type IntentBrief = {
   goal: string;
@@ -111,23 +72,9 @@ export type IntentBrief = {
   missingInformation: string[];
   confidence: number;
   requestedEffects: Array<
-    | "DISCOVER_PRODUCTS"
-    | "ADD_TO_CART"
-    | "INSPECT_CART"
-    | "CHANGE_CART_QUANTITY"
-    | "REMOVE_FROM_CART"
-    | "RESTORE_CART_ITEM"
-    | "CLEAR_CART"
+    "DISCOVER_PRODUCTS" | "PRESENT_ADD_CONTROLS" | "INSPECT_CART"
   >;
   referencedProductIds?: string[];
-  requestedQuantity?: number;
-  requestedAdditions?: RequestedCartAddition[];
-  requestedCartItemReference?: string;
-  requestedCartQuantityChange?: RequestedCartQuantityChange;
-  hasMultipleCartQuantityChanges?: true;
-  requestedCartMutations?: RequestedCartMutation[];
-  hasUnresolvedProductReferences?: true;
-  hasConflictingCartRequest?: true;
 };
 
 export interface IntentAnalyzer {
@@ -135,10 +82,6 @@ export interface IntentAnalyzer {
     context: ConversationContext;
     message: string;
   }): Promise<IntentAnalysis>;
-}
-
-export interface IntentInterpreter {
-  interpret(message: string): Promise<CommerceIntent>;
 }
 
 const CLEAR_VALUES: { [Key in ProductConstraintKey]: ShoppingIntent[Key] } = {
@@ -390,33 +333,6 @@ function sameStrings(left: string[], right: string[]): boolean {
   );
 }
 
-export function haveConsistentProductSelections(
-  referencedProductIds: unknown,
-  requestedAdditions: unknown,
-): boolean {
-  if (referencedProductIds === undefined || requestedAdditions === undefined) {
-    return true;
-  }
-  if (!Array.isArray(referencedProductIds) || !Array.isArray(requestedAdditions)) {
-    return false;
-  }
-  const referencedIds = referencedProductIds.filter(
-    (productId): productId is string => typeof productId === "string",
-  );
-  const additionIds = requestedAdditions.flatMap((item) =>
-    typeof item === "object" && item !== null &&
-      typeof (item as Record<string, unknown>).productId === "string"
-      ? [(item as Record<string, string>).productId]
-      : [],
-  );
-  const referencedIdSet = new Set(referencedIds);
-  const additionIdSet = new Set(additionIds);
-  return referencedIds.length === referencedProductIds.length &&
-    additionIds.length === requestedAdditions.length &&
-    referencedIdSet.size === additionIdSet.size &&
-    [...referencedIdSet].every((id) => additionIdSet.has(id));
-}
-
 export function resolveIntentBrief(
   analysis: IntentAnalysis,
   context: ConversationContext,
@@ -427,27 +343,6 @@ export function resolveIntentBrief(
   const referencedProductIds = analysis.referencedProductIds?.filter((id) =>
     currentRecommendationIds.has(id),
   );
-  const requestedAdditions = analysis.requestedAdditions?.filter(
-    ({ productId }) => currentRecommendationIds.has(productId),
-  );
-  const requestedProductIds = [
-    ...(analysis.referencedProductIds ?? []),
-    ...(analysis.requestedAdditions?.map(({ productId }) => productId) ?? []),
-  ];
-  const requestedCartMutations = analysis.requestedCartMutations?.filter(
-    (mutation) =>
-      mutation.type !== "ADD" || currentRecommendationIds.has(mutation.productId),
-  );
-  const requestedMutationProductIds = analysis.requestedCartMutations?.flatMap(
-    (mutation) => mutation.type === "ADD" ? [mutation.productId] : [],
-  ) ?? [];
-  const hasConflictingCartRequest =
-    !haveConsistentProductSelections(
-      analysis.referencedProductIds,
-      analysis.requestedAdditions,
-    ) ||
-    (analysis.requestedQuantity !== undefined &&
-      analysis.requestedAdditions !== undefined);
   return {
     goal: analysis.goal,
     constraints: context.productConstraints,
@@ -456,27 +351,6 @@ export function resolveIntentBrief(
     confidence: analysis.confidence,
     requestedEffects: analysis.requestedEffects,
     ...(referencedProductIds?.length ? { referencedProductIds } : {}),
-    ...(analysis.requestedQuantity === undefined
-      ? {}
-      : { requestedQuantity: analysis.requestedQuantity }),
-    ...(requestedAdditions?.length ? { requestedAdditions } : {}),
-    ...(analysis.requestedCartItemReference === undefined
-      ? {}
-      : { requestedCartItemReference: analysis.requestedCartItemReference }),
-    ...(analysis.requestedCartQuantityChange === undefined
-      ? {}
-      : { requestedCartQuantityChange: analysis.requestedCartQuantityChange }),
-    ...(analysis.hasMultipleCartQuantityChanges
-      ? { hasMultipleCartQuantityChanges: true as const }
-      : {}),
-    ...(requestedCartMutations?.length ? { requestedCartMutations } : {}),
-    ...(requestedProductIds.some((id) => !currentRecommendationIds.has(id)) ||
-      requestedMutationProductIds.some((id) => !currentRecommendationIds.has(id))
-      ? { hasUnresolvedProductReferences: true as const }
-      : {}),
-    ...(hasConflictingCartRequest
-      ? { hasConflictingCartRequest: true as const }
-      : {}),
   };
 }
 

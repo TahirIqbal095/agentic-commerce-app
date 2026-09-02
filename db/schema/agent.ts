@@ -11,10 +11,9 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
-import { carts } from "./cart";
 import { createdAt, id, updatedAt } from "./columns";
 import { agentActionStatusEnum, messageRoleEnum } from "./enums";
-import { users } from "./identity";
+import { guestSessions } from "./identity";
 import type { JsonObject } from "./types";
 import {
   createEmptyConversationContext,
@@ -25,12 +24,9 @@ export const conversations = pgTable(
   "conversations",
   {
     id: id(),
-    userId: uuid("user_id")
+    guestSessionId: uuid("guest_session_id")
       .notNull()
-      .references(() => users.id, { onDelete: "restrict" }),
-    activeCartId: uuid("active_cart_id").references(() => carts.id, {
-      onDelete: "set null",
-    }),
+      .references(() => guestSessions.id, { onDelete: "cascade" }),
     context: jsonb("context")
       .$type<ConversationContext>()
       .notNull()
@@ -40,9 +36,9 @@ export const conversations = pgTable(
     updatedAt: updatedAt(),
   },
   (table) => [
-    index("conversations_customer_idx").on(table.userId),
-    uniqueIndex("conversations_one_current_per_customer_unique")
-      .on(table.userId)
+    index("conversations_guest_session_idx").on(table.guestSessionId),
+    uniqueIndex("conversations_one_current_per_guest_session_unique")
+      .on(table.guestSessionId)
       .where(sql`${table.closedAt} is null`),
   ],
 );
@@ -79,9 +75,9 @@ export const agentActions = pgTable(
     conversationId: uuid("conversation_id")
       .notNull()
       .references(() => conversations.id, { onDelete: "restrict" }),
-    userId: uuid("user_id")
+    guestSessionId: uuid("guest_session_id")
       .notNull()
-      .references(() => users.id, { onDelete: "restrict" }),
+      .references(() => guestSessions.id, { onDelete: "restrict" }),
     actionType: varchar("action_type", { length: 120 }).notNull(),
     toolName: varchar("tool_name", { length: 120 }).notNull(),
     input: jsonb("input").$type<JsonObject>().notNull(),

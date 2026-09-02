@@ -7,21 +7,23 @@ import { createAiIntentAnalyzer } from "@/modules/agent/ai-intent-analyzer";
 import { createConversationModule } from "@/modules/agent/conversation";
 import { createCatalogModule } from "@/modules/catalog/catalog";
 import { createCartModule } from "@/modules/cart/cart";
+import { createCartInspection } from "@/modules/cart/cart-inspection";
 import { requireBrand } from "@/modules/identity/brand";
-import { resolveCustomerContext } from "@/modules/identity/customer-context";
-import { resolveUserContext } from "@/modules/identity/user-context";
-import { createPostHandler } from "./handler";
+import { db } from "@/db";
+import {
+  createDatabaseGuestSessionStore,
+  type GuestSession,
+} from "@/modules/identity/guest-session";
+import { createMessageRoute } from "./route-factory";
 
-async function createAgentForStorefront(): Promise<CommerceAgent> {
-  const [brand, { userId }, { customerId }] = await Promise.all([
-    requireBrand(),
-    resolveUserContext(),
-    resolveCustomerContext(),
-  ]);
+async function createAgentForStorefront(
+  guestSession: GuestSession,
+): Promise<CommerceAgent> {
+  const brand = await requireBrand();
 
   const catalogModule = createCatalogModule();
   const intentAnalyzer = createAiIntentAnalyzer();
-  const conversationModule = createConversationModule(userId);
+  const conversationModule = createConversationModule(guestSession.id);
 
   return createCommerceAgent(
     catalogModule,
@@ -29,9 +31,14 @@ async function createAgentForStorefront(): Promise<CommerceAgent> {
     conversationModule,
     {
       agentLoop: createAiCommerceAgentLoop(),
-      cart: createCartModule(customerId, brand.currency),
+      cartInspection: createCartInspection(guestSession.id, (guestSessionId) =>
+        createCartModule(guestSessionId, brand.currency),
+      ),
     },
   );
 }
 
-export const POST = createPostHandler(createAgentForStorefront);
+export const POST = createMessageRoute({
+  store: createDatabaseGuestSessionStore(db),
+  createAgent: createAgentForStorefront,
+});

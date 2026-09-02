@@ -1,17 +1,34 @@
-import { MessageSquarePlus, ShoppingBag, Sparkles } from "lucide-react";
+import { MessageSquarePlus, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import type { CartView } from "@/modules/cart/cart";
+import type { CartControls } from "./cart-panel";
+import {
+  CartDrawer,
+  type CartLoadState,
+  type CheckoutReadinessControl,
+} from "./cart-drawer";
 
 export function Header({
   brandName,
-  cartQuantity,
+  cart,
+  cartState,
   hasConversation,
   onNewConversation,
+  cartControls,
+  checkoutReadiness,
+  isCartOpen,
+  onCartOpenChange,
 }: {
   brandName: string;
-  cartQuantity: number;
+  cart: CartView | null;
+  cartState: CartLoadState;
   hasConversation: boolean;
   onNewConversation: () => void;
+  cartControls: CartControls;
+  checkoutReadiness: CheckoutReadinessControl;
+  isCartOpen: boolean;
+  onCartOpenChange: (open: boolean) => void;
 }) {
   return (
     <header className="flex items-center justify-between">
@@ -43,14 +60,14 @@ export function Header({
             <MessageSquarePlus /> New conversation
           </Button>
         ) : null}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="rounded-full border-[#1d2a24]/10 bg-white/45 text-[#39483f] shadow-none hover:bg-white"
-        >
-          <ShoppingBag /> Cart · {cartQuantity}
-        </Button>
+        <CartDrawer
+          cart={cart}
+          state={cartState}
+          controls={cartControls}
+          readiness={checkoutReadiness}
+          open={isCartOpen}
+          onOpenChange={onCartOpenChange}
+        />
       </div>
     </header>
   );

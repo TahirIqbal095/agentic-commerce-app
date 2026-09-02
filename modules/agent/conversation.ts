@@ -71,22 +71,22 @@ export class ConversationAccessError extends Error {
  * The returned module owns turn creation, idempotency, access checks, context
  * persistence, recommendation memory, completion, and privacy-safe storage.
  *
- * @param userId - Authenticated Customer who may access the Conversation.
+ * @param guestSessionId - Browser-scoped Guest Session that owns the Conversation.
  * @param repository - Persistence adapter; defaults to PostgreSQL and may be
  * replaced by an in-memory adapter in tests.
  * @returns A Conversation module bound to the Customer.
  */
 export function createConversationModule(
-  userId: string,
+  guestSessionId: string,
   repository: ConversationRepository = postgresConversationRepository,
 ): ConversationModule {
-  const owner = { userId };
+  const owner = { guestSessionId };
   return {
     /**
      * Starts a new Agent turn or restores the result of a duplicate request.
      *
      * For a continuing Conversation, ownership is verified before the redacted
-     * USER message is appended. For a first turn, an open Conversation is
+     * Customer message is appended. For a first turn, an open Conversation is
      * created or reused. The returned turn exposes the persistence operations
      * used while the Commerce Agent processes the Customer message.
      *
@@ -95,7 +95,7 @@ export function createConversationModule(
      * @returns A new in-progress turn, or a no-op turn containing the previous
      * outcome when the request is a duplicate.
      * @throws {ConversationAccessError} When the Conversation is unavailable to
-     * the authenticated Customer.
+     * the current Guest Session.
      */
     async startTurn(input) {
       const duplicateOutcome = await repository.findDuplicate(
@@ -108,21 +108,24 @@ export function createConversationModule(
       }
 
       let conversationId: string;
-      let userMessageId: string;
+      let customerMessageId: string;
       let context: ConversationContext;
       if (input.conversationId) {
         const persisted = await repository.findOwnedContext(
           input.conversationId,
         );
-        if (!persisted || persisted.userId !== userId) {
+        if (
+          !persisted ||
+          persisted.guestSessionId !== guestSessionId
+        ) {
           throw new ConversationAccessError();
         }
         conversationId = input.conversationId;
         context = parseConversationContext(persisted.context);
         try {
-          userMessageId = await repository.append(
+          customerMessageId = await repository.append(
             conversationId,
-            "USER",
+            "CUSTOMER",
             redactSensitiveText(input.message),
             {},
             input.idempotencyKey,
@@ -138,7 +141,7 @@ export function createConversationModule(
         }
       } else {
         try {
-          ({ conversationId, userMessageId, context } = await repository.create(
+          ({ conversationId, customerMessageId, context } = await repository.create(
             owner,
             redactSensitiveText(input.message),
             input.idempotencyKey,
@@ -168,7 +171,10 @@ export function createConversationModule(
          */
         async reloadContext() {
           const persisted = await repository.findOwnedContext(conversationId);
-          if (!persisted || persisted.userId !== userId) {
+          if (
+            !persisted ||
+            persisted.guestSessionId !== guestSessionId
+          ) {
             throw new ConversationAccessError();
           }
           return parseConversationContext(persisted.context);
@@ -185,7 +191,7 @@ export function createConversationModule(
           return repository.saveContextAndMetadata(
             conversationId,
             nextContext,
-            userMessageId,
+            customerMessageId,
             sanitizeRecord({
               intentBrief: minimizeIntentBrief(intentBrief),
             }),
@@ -225,7 +231,7 @@ export function createConversationModule(
           if (repository.finalizeTurn) {
             await repository.finalizeTurn(
               conversationId,
-              userMessageId,
+              customerMessageId,
               message,
               outcome,
               executor,

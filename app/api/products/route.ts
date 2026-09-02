@@ -6,8 +6,9 @@ import {
 } from "@/lib/http/responses";
 import { createCatalogModule } from "@/modules/catalog/catalog";
 import { requireBrand } from "@/modules/identity/brand";
+import { createStorefrontBrowsingRoute } from "@/modules/identity/guest-session";
 
-export async function GET(request: Request): Promise<Response> {
+async function getProducts(request: Request): Promise<Response> {
   const parsedQuery = parseProductSearchQuery(new URL(request.url).searchParams);
   if (!parsedQuery.ok) {
     return errorResponse(parsedQuery.error, 400);
@@ -23,3 +24,5 @@ export async function GET(request: Request): Promise<Response> {
     return unexpectedErrorResponse();
   }
 }
+
+export const GET = createStorefrontBrowsingRoute(getProducts);

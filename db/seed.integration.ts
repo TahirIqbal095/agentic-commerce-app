@@ -2,22 +2,39 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import test, { after } from "node:test";
 import { promisify } from "node:util";
-import { and, eq } from "drizzle-orm";
+import { and, eq, gt } from "drizzle-orm";
 import { GET } from "@/app/api/products/route";
-import { createPostHandler } from "@/app/api/agent/message/handler";
-import { createPostHandler as createCartCommandPostHandler } from "@/app/api/agent/cart-command/handler";
+import {
+  DELETE as removeCartItem,
+  GET as readCart,
+  PATCH as updateCartItem,
+  POST as addToCart,
+} from "@/app/api/cart/route";
+import {
+  DELETE as deleteConversation,
+  GET as readConversation,
+} from "@/app/api/agent/conversation/route";
+import { POST as reviewCheckoutReadiness } from "@/app/api/cart/checkout-readiness/route";
 import { db } from "@/db";
-import { carts } from "@/db/schema/cart";
+import { conversations, messages } from "@/db/schema/agent";
+import { recommendationEvents } from "@/db/schema/analytics";
+import { auditEvents } from "@/db/schema/audit";
+import { cartItems, cartMutations, carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
-import { approvals, checkoutProposals } from "@/db/schema/checkout";
-import { brands } from "@/db/schema/identity";
+import { brands, guestSessions } from "@/db/schema/identity";
 import { createCatalogModule } from "@/modules/catalog/catalog";
-import { createCartModule } from "@/modules/cart/cart";
-import { createCommerceAgent } from "@/modules/agent/commerce-agent";
-import { createConversationModule } from "@/modules/agent/conversation";
-import { DEMO_CUSTOMER_ID } from "@/db/seed";
+import type { CustomerActionEntry } from "@/modules/agent/customer-action-entry";
+import type { CurrentConversation } from "@/modules/agent/conversation-state";
+import { createCartModule, type CartView } from "@/modules/cart/cart";
+import {
+  cleanupExpiredGuestSessions,
+  createDatabaseGuestSessionStore,
+  createGuestSessionBrowsingRoute,
+  createGuestSessionRoute,
+} from "@/modules/identity/guest-session";
 
 const execFileAsync = promisify(execFile);
+const TEST_GUEST_SESSION_ID = "13000000-0000-4000-8000-000000000001";
 const EXPECTED_ACTIVE_PRODUCTS = [
   { slug: "strideflow-daily-running-shoes", inStock: true },
   { slug: "trailcrest-grip-running-shoes", inStock: true },
@@ -32,6 +49,69 @@ const EXPECTED_ACTIVE_PRODUCTS = [
   { slug: "reflective-running-laces", inStock: true },
   { slug: "complete-shoe-care-kit", inStock: true },
 ];
+
+function cartAddRequest(
+  productId: string,
+  mutationKey: string,
+  cookie?: string,
+  expectedVersion = 0,
+): Request {
+  return new Request("http://localhost/api/cart", {
+    method: "POST",
+    headers: {
+      ...(cookie ? { cookie } : {}),
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      type: "ADD_PRODUCT",
+      productId,
+      mutationKey,
+      expectedVersion,
+    }),
+  });
+}
+async function currentCartFor(cookie: string): Promise<CartView> {
+  const response = await readCart(
+    new Request("http://localhost/api/cart", { headers: { cookie } }),
+  );
+  assert.equal(response.status, 200);
+  return ((await response.json()) as { data: CartView }).data;
+}
+
+function cartItemRequest(
+  type: "INCREMENT_ITEM" | "DECREMENT_ITEM" | "REMOVE_ITEM",
+  productId: string,
+  mutationKey: string,
+  cookie: string,
+  expectedVersion: number,
+): Request {
+  return new Request("http://localhost/api/cart", {
+    method: type === "REMOVE_ITEM" ? "DELETE" : "PATCH",
+    headers: { cookie, "content-type": "application/json" },
+    body: JSON.stringify({ type, productId, mutationKey, expectedVersion }),
+  });
+}
+
+async function seededProducts(count: number) {
+  const rows = await db
+    .select({ id: products.id, name: products.name })
+    .from(products)
+    .where(and(eq(products.active, true), gt(products.stock, 4)))
+    .orderBy(products.slug)
+    .limit(count);
+  assert.equal(rows.length, count);
+  return rows;
+}
+
+async function startCartWith(productId: string) {
+  const response = await addToCart(cartAddRequest(productId, crypto.randomUUID()));
+  assert.equal(response.status, 200);
+  const cookie = response.headers.get("set-cookie")?.split(";", 1)[0];
+  assert.ok(cookie);
+  const payload = (await response.json()) as { data: CartView };
+  return { cookie, cart: payload.data };
+}
+
 after(async () => {
   await db.$client.end();
 });
@@ -41,6 +121,18 @@ async function runSeedCommand(): Promise<void> {
     cwd: process.cwd(),
     env: process.env,
   });
+  await db
+    .insert(guestSessions)
+    .values({
+      id: TEST_GUEST_SESSION_ID,
+      tokenHash:
+        "833e5ef61f9ac3d83d4a3e0b2f17cff970507494cc6be1131bb47f221d08521a",
+      expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+    })
+    .onConflictDoUpdate({
+      target: guestSessions.id,
+      set: { expiresAt: new Date("2099-01-01T00:00:00.000Z") },
+    });
 }
 
 async function getProducts(): Promise<Response> {
@@ -115,6 +207,445 @@ test("database rejects a second Brand in one deployment", async () => {
   );
 });
 
+test("database rejects a Brand configured outside INR", async () => {
+  await runSeedCommand();
+  await db.delete(brands);
+
+  await assert.rejects(
+    db.insert(brands).values({
+      name: "Unsupported Currency Brand",
+      slug: "unsupported-currency-brand",
+      description: "A Brand whose currency must be rejected.",
+      currency: "USD",
+    }),
+  );
+
+  await runSeedCommand();
+});
+
+test("Guest Sessions persist a token hash instead of the cookie token", async () => {
+  await db.delete(guestSessions);
+  const route = createGuestSessionRoute(
+    async () => new Response(null, { status: 204 }),
+    {
+      store: createDatabaseGuestSessionStore(db),
+      now: () => new Date("2026-09-01T00:00:00.000Z"),
+      issueToken: () => "database-guest-session-token",
+    },
+  );
+
+  const response = await route(
+    new Request("https://storefront.example/api/stateful", {
+      method: "POST",
+    }),
+  );
+  const [storedSession] = await db.select().from(guestSessions);
+
+  assert.equal(response.status, 204);
+  assert.ok(storedSession);
+  assert.equal(
+    storedSession.tokenHash,
+    "9258ab01a459823c10aa99916dcd338d1fcd7a67c4802f927263b88bcc3d99bd",
+  );
+  assert.equal("token" in storedSession, false);
+  assert.equal(
+    storedSession.expiresAt.toISOString(),
+    "2026-10-01T00:00:00.000Z",
+  );
+});
+
+test("passive Storefront browsing creates no Guest Session", async () => {
+  await runSeedCommand();
+  await db.delete(guestSessions);
+
+  const response = await getProducts();
+  const storedSessions = await db.select().from(guestSessions);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.has("set-cookie"), false);
+  assert.deepEqual(storedSessions, []);
+});
+
+test("meaningful browsing renews an existing Guest Session for 30 days", async () => {
+  await runSeedCommand();
+  await db.delete(guestSessions);
+  const createRoute = createGuestSessionRoute(
+    async () => new Response(null, { status: 204 }),
+    {
+      store: createDatabaseGuestSessionStore(db),
+      now: () => new Date("2026-08-15T00:00:00.000Z"),
+      issueToken: () => "browsing-session-token",
+    },
+  );
+  const creationResponse = await createRoute(
+    new Request("https://storefront.example/api/stateful", { method: "POST" }),
+  );
+  const cookie = creationResponse.headers.get("set-cookie")!.split(";", 1)[0];
+  const browsingRoute = createGuestSessionBrowsingRoute(
+    async () => new Response(null, { status: 204 }),
+    {
+      store: createDatabaseGuestSessionStore(db),
+      now: () => new Date("2026-09-01T00:00:00.000Z"),
+    },
+  );
+
+  const response = await browsingRoute(
+    new Request("https://storefront.example/api/products", {
+      headers: { cookie },
+    }),
+  );
+  const [storedSession] = await db.select().from(guestSessions);
+
+  assert.equal(response.status, 204);
+  assert.match(response.headers.get("set-cookie") ?? "", /^guest_session=/);
+  assert.equal(
+    storedSession.expiresAt.toISOString(),
+    "2026-10-01T00:00:00.000Z",
+  );
+});
+
+test("a state-changing Storefront route creates a Guest Session", async () => {
+  await runSeedCommand();
+  await db.delete(guestSessions);
+
+  const response = await deleteConversation(
+    new Request("https://storefront.example/api/agent/conversation", {
+      method: "DELETE",
+    }),
+  );
+  const storedSessions = await db.select().from(guestSessions);
+
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("set-cookie") ?? "", /^guest_session=/);
+  assert.equal(storedSessions.length, 1);
+});
+
+test("cleanup removes an expired Guest Session's Cart, Conversation, and Recommendation analytics", async () => {
+  await runSeedCommand();
+  await db.delete(guestSessions);
+  const expiredGuestSessionId = "13000000-0000-4000-8000-000000000002";
+  const activeGuestSessionId = "13000000-0000-4000-8000-000000000003";
+  const expiredCartId = "31000000-0000-4000-8000-000000000002";
+  const activeCartId = "31000000-0000-4000-8000-000000000003";
+  const expiredConversationId = "41000000-0000-4000-8000-000000000002";
+  const activeConversationId = "41000000-0000-4000-8000-000000000003";
+  await db.insert(guestSessions).values([
+    {
+      id: expiredGuestSessionId,
+      tokenHash: "a".repeat(64),
+      expiresAt: new Date("2026-09-01T00:00:00.000Z"),
+    },
+    {
+      id: activeGuestSessionId,
+      tokenHash: "b".repeat(64),
+      expiresAt: new Date("2026-09-01T00:00:00.001Z"),
+    },
+  ]);
+  await db.insert(carts).values([
+    {
+      id: expiredCartId,
+      guestSessionId: expiredGuestSessionId,
+      currency: "INR" as const,
+    },
+    {
+      id: activeCartId,
+      guestSessionId: activeGuestSessionId,
+      currency: "INR" as const,
+    },
+  ]);
+  await db.insert(conversations).values([
+    {
+      id: expiredConversationId,
+      guestSessionId: expiredGuestSessionId,
+    },
+    {
+      id: activeConversationId,
+      guestSessionId: activeGuestSessionId,
+    },
+  ]);
+  await db.insert(messages).values([
+    {
+      conversationId: expiredConversationId,
+      role: "CUSTOMER",
+      content: "expired Conversation content",
+    },
+    {
+      conversationId: activeConversationId,
+      role: "CUSTOMER",
+      content: "active Conversation content",
+    },
+  ]);
+  await db.insert(recommendationEvents).values([
+    {
+      guestSessionId: expiredGuestSessionId,
+      cartId: expiredCartId,
+      sourceProductId: null,
+      recommendedProductId: "21000000-0000-4000-8000-000000000001",
+      recommendationType: "CROSS_SELL" as const,
+      cartValueBeforeMinor: 399900,
+      projectedCartValueMinor: 469800,
+      incrementalRevenueMinor: 69900,
+      shownAt: new Date("2026-08-01T00:00:00.000Z"),
+      acceptedAt: null,
+      rejectedAt: null,
+    },
+    {
+      guestSessionId: activeGuestSessionId,
+      cartId: activeCartId,
+      sourceProductId: null,
+      recommendedProductId: "21000000-0000-4000-8000-000000000001",
+      recommendationType: "CROSS_SELL" as const,
+      cartValueBeforeMinor: 399900,
+      projectedCartValueMinor: 469800,
+      incrementalRevenueMinor: 69900,
+      shownAt: new Date("2026-08-01T00:00:00.000Z"),
+      acceptedAt: null,
+      rejectedAt: null,
+    },
+  ]);
+
+  const result = await cleanupExpiredGuestSessions(
+    db,
+    new Date("2026-09-01T00:00:00.000Z"),
+  );
+
+  assert.deepEqual(result, { deletedGuestSessions: 1 });
+  assert.deepEqual(
+    await db.select({ id: guestSessions.id }).from(guestSessions),
+    [{ id: activeGuestSessionId }],
+  );
+  assert.deepEqual(await db.select({ id: carts.id }).from(carts), [
+    { id: activeCartId },
+  ]);
+  assert.deepEqual(
+    await db.select({ id: conversations.id }).from(conversations),
+    [{ id: activeConversationId }],
+  );
+  assert.deepEqual(
+    await db.select({ content: messages.content }).from(messages),
+    [{ content: "active Conversation content" }],
+  );
+  assert.equal(
+    (await db.select().from(recommendationEvents)).length,
+    1,
+  );
+});
+
+test("cleanup can be retried after expired Guest Sessions are removed", async () => {
+  await db.delete(guestSessions);
+  await db.insert(guestSessions).values({
+    id: "13000000-0000-4000-8000-000000000004",
+    tokenHash: "c".repeat(64),
+    expiresAt: new Date("2026-09-01T00:00:00.000Z"),
+  });
+  const cleanupTime = new Date("2026-09-01T00:00:00.000Z");
+
+  const firstResult = await cleanupExpiredGuestSessions(db, cleanupTime);
+  const retryResult = await cleanupExpiredGuestSessions(db, cleanupTime);
+
+  assert.deepEqual(firstResult, { deletedGuestSessions: 1 });
+  assert.deepEqual(retryResult, { deletedGuestSessions: 0 });
+  assert.deepEqual(await db.select().from(guestSessions), []);
+});
+
+test("cleanup preserves an immutable Audit Event without retaining its expired Guest Session", async () => {
+  const expiredGuestSessionId = "13000000-0000-4000-8000-000000000005";
+  const auditEventId = "61000000-0000-4000-8000-000000000001";
+  await db.delete(auditEvents).where(eq(auditEvents.id, auditEventId));
+  await db.delete(guestSessions);
+  await db.insert(guestSessions).values({
+    id: expiredGuestSessionId,
+    tokenHash: "d".repeat(64),
+    expiresAt: new Date("2026-09-01T00:00:00.000Z"),
+  });
+  await db.insert(auditEvents).values({
+    id: auditEventId,
+    guestSessionId: expiredGuestSessionId,
+    entityType: "Guest Session",
+    entityId: expiredGuestSessionId,
+    actorType: "SYSTEM",
+    eventType: "GUEST_SESSION_ACTIVITY_RECORDED",
+    message: "Protected historical fact",
+  });
+
+  const result = await cleanupExpiredGuestSessions(
+    db,
+    new Date("2026-09-01T00:00:00.000Z"),
+  );
+
+  assert.deepEqual(result, { deletedGuestSessions: 1 });
+  assert.deepEqual(await db.select().from(guestSessions), []);
+  assert.deepEqual(
+    await db
+      .select({ id: auditEvents.id, guestSessionId: auditEvents.guestSessionId })
+      .from(auditEvents)
+      .where(eq(auditEvents.id, auditEventId)),
+    [{ id: auditEventId, guestSessionId: expiredGuestSessionId }],
+  );
+});
+
+test("database rejects a Product priced outside INR", async () => {
+  await runSeedCommand();
+
+  await assert.rejects(
+    db.insert(products).values({
+      name: "Unsupported Currency Product",
+      slug: "unsupported-currency-product",
+      description: "A Product whose currency must be rejected.",
+      category: "Footwear",
+      priceMinor: 10000,
+      currency: "USD",
+      stock: 1,
+    }),
+  );
+});
+
+test("database rejects a Cart amount outside INR", async () => {
+  await runSeedCommand();
+  await db.delete(carts).where(eq(carts.guestSessionId, TEST_GUEST_SESSION_ID));
+
+  await assert.rejects(
+    db.insert(carts).values({
+      guestSessionId: TEST_GUEST_SESSION_ID,
+      currency: "USD",
+    }),
+  );
+});
+
+test("Cart inspection rejects a non-INR runtime default", async () => {
+  await runSeedCommand();
+  await db.delete(carts).where(eq(carts.guestSessionId, TEST_GUEST_SESSION_ID));
+
+  assert.throws(() => createCartModule(TEST_GUEST_SESSION_ID, "USD"), {
+    name: "CartError",
+    message: "Cart currency must be INR.",
+  });
+});
+
+test("database rejects runtime Product price changes", async () => {
+  await runSeedCommand();
+  const [product] = await db
+    .select({ id: products.id, priceMinor: products.priceMinor })
+    .from(products)
+    .limit(1);
+  assert.ok(product);
+
+  await assert.rejects(
+    db
+      .update(products)
+      .set({ priceMinor: product.priceMinor + 1 })
+      .where(eq(products.id, product.id)),
+  );
+});
+
+test("database contains no deferred checkout or payment storage", async () => {
+  const deferredTables = [
+    "approvals",
+    "checkout_proposal_items",
+    "checkout_proposals",
+    "order_items",
+    "orders",
+    "payment_attempts",
+    "policies",
+    "policy_evaluations",
+    "webhook_events",
+  ];
+  const result = await db.$client.query<{ table_name: string }>(
+    `select table_name
+       from information_schema.tables
+      where table_schema = 'public'
+        and table_name = any($1::text[])
+      order by table_name`,
+    [deferredTables],
+  );
+  const deferredTypes = [
+    "approval_status",
+    "checkout_proposal_status",
+    "order_status",
+    "payment_provider",
+    "payment_status",
+    "policy_decision",
+  ];
+  const typeResult = await db.$client.query<{ typname: string }>(
+    `select typname
+       from pg_type
+      where typname = any($1::text[])
+      order by typname`,
+    [deferredTypes],
+  );
+
+  assert.deepEqual(result.rows, []);
+  assert.deepEqual(typeResult.rows, []);
+});
+
+test("recommendation analytics are pseudonymous and expose no personal-information fields", async () => {
+  const result = await db.$client.query<{ column_name: string }>(
+    `select column_name
+       from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'recommendation_events'
+      order by column_name`,
+  );
+  const columns = result.rows.map(({ column_name }) => column_name);
+
+  assert.ok(columns.includes("guest_session_id"));
+  assert.equal(columns.includes("user_id"), false);
+  assert.equal(columns.includes("reason"), false);
+  assert.equal(columns.includes("email"), false);
+  assert.equal(columns.includes("name"), false);
+});
+
+test("database exposes no authenticated Customer or Brand Admin identity contract", async () => {
+  const tables = await db.$client.query<{ table_name: string }>(
+    `select table_name
+       from information_schema.tables
+      where table_schema = 'public'
+        and table_name = any($1::text[])
+      order by table_name`,
+    [["brand_admins", "users"]],
+  );
+  const identityColumns = await db.$client.query<{
+    column_name: string;
+    table_name: string;
+  }>(
+    `select table_name, column_name
+       from information_schema.columns
+      where table_schema = 'public'
+        and column_name = any($1::text[])
+      order by table_name, column_name`,
+    [["admin_id", "customer_id", "user_id"]],
+  );
+  const actorTypes = await db.$client.query<{ enumlabel: string }>(
+    `select enumlabel
+       from pg_enum
+       join pg_type on pg_type.oid = pg_enum.enumtypid
+      where pg_type.typname = 'actor_type'
+      order by enumsortorder`,
+  );
+  const messageRoles = await db.$client.query<{ enumlabel: string }>(
+    `select enumlabel
+       from pg_enum
+       join pg_type on pg_type.oid = pg_enum.enumtypid
+      where pg_type.typname = 'message_role'
+      order by enumsortorder`,
+  );
+
+  assert.deepEqual(
+    {
+      tables: tables.rows,
+      identityColumns: identityColumns.rows,
+      actorTypes: actorTypes.rows.map(({ enumlabel }) => enumlabel),
+      messageRoles: messageRoles.rows.map(({ enumlabel }) => enumlabel),
+    },
+    {
+      tables: [],
+      identityColumns: [],
+      actorTypes: ["AGENT", "SYSTEM", "RAZORPAY"],
+      messageRoles: ["CUSTOMER", "ASSISTANT", "TOOL", "SYSTEM"],
+    },
+  );
+});
+
 test("catalog search matches related footwear product types", async () => {
   await runSeedCommand();
   const catalog = createCatalogModule();
@@ -159,117 +690,10 @@ test("catalog retrieval combines intent, commerce, and availability criteria", a
   );
 });
 
-test("POST adds multiple identified Products through one real atomic Cart mutation", async () => {
+test("concurrent Customer turns retain every authoritative Cart addition", async () => {
   await runSeedCommand();
-  await db.delete(approvals).where(eq(approvals.userId, DEMO_CUSTOMER_ID));
-  await db
-    .delete(checkoutProposals)
-    .where(eq(checkoutProposals.userId, DEMO_CUSTOMER_ID));
-  await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
+  await db.delete(carts).where(eq(carts.guestSessionId, TEST_GUEST_SESSION_ID));
 
-  const catalog = createCatalogModule();
-  const selected = (await catalog.search({
-    queries: ["running shoes"],
-    category: "Footwear",
-    limit: 2,
-  })).products;
-  assert.equal(selected.length, 2);
-
-  const agent = createCommerceAgent(
-    catalog,
-    {
-      async analyze({ message }) {
-        if (message === "Show me running shoes") {
-          return {
-            goal: "Find running shoes",
-            constraintDelta: {
-              set: { productTypes: ["running shoes"], category: "Footwear" },
-              clear: [],
-            },
-            knownEntities: [],
-            missingInformation: [],
-            confidence: 0.99,
-            requestedEffects: ["DISCOVER_PRODUCTS"],
-          };
-        }
-        return {
-          goal: "Add both running shoes",
-          constraintDelta: { set: {}, clear: [] },
-          knownEntities: [],
-          missingInformation: [],
-          confidence: 0.99,
-          requestedEffects: ["ADD_TO_CART"],
-          referencedProductIds: selected.map(({ id }) => id),
-          requestedAdditions: [
-            { productId: selected[0].id, quantity: 2 },
-            { productId: selected[1].id, quantity: 1 },
-          ],
-        };
-      },
-    },
-    createConversationModule(DEMO_CUSTOMER_ID),
-    {
-      agentLoop: {
-        async run({ capabilities }) {
-          const result = await capabilities.searchProducts?.({
-            queries: ["running shoes"],
-            category: "Footwear",
-            limit: 2,
-          });
-          assert.ok(result);
-          return {
-            status: "COMPLETED",
-            message: "Two running shoes.",
-            productIds: result.products.map(({ id }) => id),
-          };
-        },
-      },
-      cart: createCartModule(DEMO_CUSTOMER_ID),
-    },
-  );
-  const POST = createPostHandler(async () => agent);
-  const post = (body: Record<string, unknown>) => POST(new Request(
-    "http://localhost/api/agent/message",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    },
-  ));
-
-  const discovery = await post({
-    message: "Show me running shoes",
-    idempotencyKey: "61000000-0000-4000-8000-000000000001",
-  });
-  const discoveryOutcome = (await discovery.json()).data;
-  const addition = await post({
-    conversationId: discoveryOutcome.conversationId,
-    message: "Add two of the first and one of the second",
-    idempotencyKey: "61000000-0000-4000-8000-000000000002",
-  });
-  const outcome = (await addition.json()).data;
-
-  assert.equal(outcome.status, "COMPLETED");
-  assert.deepEqual(
-    outcome.cart.items.map((item: { productId: string; quantity: number }) => ({
-      productId: item.productId,
-      quantity: item.quantity,
-    })),
-    [
-      { productId: selected[0].id, quantity: 2 },
-      { productId: selected[1].id, quantity: 1 },
-    ],
-  );
-  assert.equal(outcome.cart.totalQuantity, 3);
-});
-
-async function prepareCart() {
-  await runSeedCommand();
-  await db.delete(approvals).where(eq(approvals.userId, DEMO_CUSTOMER_ID));
-  await db
-    .delete(checkoutProposals)
-    .where(eq(checkoutProposals.userId, DEMO_CUSTOMER_ID));
-  await db.delete(carts).where(eq(carts.userId, DEMO_CUSTOMER_ID));
   const catalog = createCatalogModule();
   const result = await catalog.search({
     query: "StrideFlow Daily Running Shoes",
@@ -277,972 +701,603 @@ async function prepareCart() {
   });
   const product = result.products[0];
   assert.ok(product);
-  return { cart: createCartModule(DEMO_CUSTOMER_ID), product };
-}
 
-test("Cart clearing removes every Cart Item and returns the authoritative empty Cart", async () => {
-  const { cart, product } = await prepareCart();
-  const catalog = createCatalogModule();
-  const [secondProduct] = (await catalog.search({
-    query: "TrailCrest Grip Running Shoes",
-    limit: 1,
-  })).products;
-  assert.ok(secondProduct);
-  await cart.addItems([
-    { product, quantity: 2 },
-    { product: secondProduct, quantity: 1 },
-  ], async () => {});
-
-  const cleared = await cart.applyMutations!([{ type: "CLEAR" }], async () => {});
-
-  assert.deepEqual(cleared.items, []);
-  assert.equal(cleared.totalQuantity, 0);
-  assert.equal(cleared.subtotalMinor, 0);
-  assert.deepEqual(await cart.inspect(), cleared);
-});
-
-test("one Cart Mutation batch atomically adds, removes, and changes quantities", async () => {
-  const { cart, product: strideFlow } = await prepareCart();
-  const catalog = createCatalogModule();
-  const getProduct = async (query: string) => {
-    const [product] = (await catalog.search({ query, limit: 1 })).products;
-    assert.ok(product);
-    return product;
-  };
-  const trailCrest = await getProduct("TrailCrest Grip Running Shoes");
-  const flexForge = await getProduct("FlexForge Training Shoes");
-  const courtLine = await getProduct("CourtLine Casual Sneakers");
-  await cart.addItems([
-    { product: strideFlow, quantity: 2 },
-    { product: trailCrest, quantity: 1 },
-    { product: flexForge, quantity: 2 },
-  ], async () => {});
-
-  const updated = await cart.applyMutations!([
-    { type: "ADD", product: courtLine, quantity: 1 },
-    { type: "REMOVE", reference: trailCrest.name },
-    {
-      type: "CHANGE_QUANTITY",
-      reference: strideFlow.name,
-      change: { mode: "RELATIVE", quantity: 1 },
-    },
-    {
-      type: "CHANGE_QUANTITY",
-      reference: flexForge.name,
-      change: { mode: "EXACT", quantity: 3 },
-    },
-  ], async () => {});
-
-  assert.deepEqual(
-    updated.items.map(({ productId, quantity }) => ({ productId, quantity })),
-    [
-      { productId: strideFlow.id, quantity: 3 },
-      { productId: flexForge.id, quantity: 3 },
-      { productId: courtLine.id, quantity: 1 },
-    ],
-  );
-  assert.equal(updated.totalQuantity, 7);
-});
-
-test("Cart command HTTP decrement uses the latest quantity when stock fell below the Cart quantity", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 5, async () => {});
-  await db
-    .update(products)
-    .set({ stock: 2 })
-    .where(eq(products.id, product.id));
-
-  const conversation = createConversationModule(DEMO_CUSTOMER_ID);
-  const setupTurn = await conversation.startTurn({
-    idempotencyKey: crypto.randomUUID(),
-    message: "Show my Cart",
-  });
-  const POST = createCartCommandPostHandler(async () => ({
-    cart,
-    conversation: createConversationModule(DEMO_CUSTOMER_ID),
-  }));
-  const response = await POST(new Request("http://localhost/api/agent/cart-command", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      conversationId: setupTurn.conversationId,
-      idempotencyKey: crypto.randomUUID(),
-      command: {
-        type: "CHANGE_CART_ITEM_QUANTITY",
-        productId: product.id,
-        mode: "RELATIVE",
-        quantity: -1,
-      },
-    }),
-  }));
-  const updated = (await response.json()).data.cart;
-
-  assert.equal(response.status, 200);
-  assert.equal(updated.items[0].quantity, 4);
-  assert.deepEqual(updated.items[0].availabilityWarning, {
-    reason: "INSUFFICIENT_STOCK",
-    availableQuantity: 2,
-  });
-});
-
-test("a mixed batch resolves an unqualified change against its sole untargeted Cart Item", async () => {
-  const { cart, product: strideFlow } = await prepareCart();
-  const [trailCrest] = (await createCatalogModule().search({
-    query: "TrailCrest Grip Running Shoes",
-    limit: 1,
-  })).products;
-  assert.ok(trailCrest);
-  await cart.addItems([
-    { product: strideFlow, quantity: 2 },
-    { product: trailCrest, quantity: 1 },
-  ], async () => {});
-
-  const updated = await cart.applyMutations!([
-    { type: "REMOVE", reference: trailCrest.name },
-    {
-      type: "CHANGE_QUANTITY",
-      change: { mode: "RELATIVE", quantity: 1 },
-    },
-  ], async () => {});
-
-  assert.deepEqual(
-    updated.items.map(({ productId, quantity }) => ({ productId, quantity })),
-    [{ productId: strideFlow.id, quantity: 3 }],
-  );
-});
-
-test("unqualified mixed Cart Item resolution does not depend on operation order", async () => {
-  const { cart, product: strideFlow } = await prepareCart();
-  const [trailCrest] = (await createCatalogModule().search({
-    query: "TrailCrest Grip Running Shoes",
-    limit: 1,
-  })).products;
-  assert.ok(trailCrest);
-  await cart.addItems([
-    { product: strideFlow, quantity: 2 },
-    { product: trailCrest, quantity: 1 },
-  ], async () => {});
-
-  const updated = await cart.applyMutations!([
-    {
-      type: "CHANGE_QUANTITY",
-      change: { mode: "RELATIVE", quantity: 1 },
-    },
-    { type: "REMOVE", reference: trailCrest.name },
-  ], async () => {});
-
-  assert.deepEqual(
-    updated.items.map(({ productId, quantity }) => ({ productId, quantity })),
-    [{ productId: strideFlow.id, quantity: 3 }],
-  );
-});
-
-test("an invalid Cart Mutation rolls back every operation in its batch", async () => {
-  const { cart, product: strideFlow } = await prepareCart();
-  const [courtLine] = (await createCatalogModule().search({
-    query: "CourtLine Casual Sneakers",
-    limit: 1,
-  })).products;
-  assert.ok(courtLine);
-  await cart.addItem(strideFlow, 2, async () => {});
-  const before = await cart.inspect();
-
-  await assert.rejects(
-    cart.applyMutations!([
-      { type: "ADD", product: courtLine, quantity: 1 },
-      {
-        type: "CHANGE_QUANTITY",
-        reference: strideFlow.name,
-        change: { mode: "EXACT", quantity: 11 },
-      },
-    ], async () => {}),
-    /cannot have more than 10 units/,
-  );
-
-  assert.deepEqual(await cart.inspect(), before);
-});
-
-test("a Cart Mutation batch rolls back when Conversation Turn completion fails", async () => {
-  const { cart, product: strideFlow } = await prepareCart();
-  const [courtLine] = (await createCatalogModule().search({
-    query: "CourtLine Casual Sneakers",
-    limit: 1,
-  })).products;
-  assert.ok(courtLine);
-  await cart.addItem(strideFlow, 2, async () => {});
-  const before = await cart.inspect();
-
-  await assert.rejects(
-    cart.applyMutations!([
-      { type: "ADD", product: courtLine, quantity: 1 },
-      {
-        type: "CHANGE_QUANTITY",
-        reference: strideFlow.name,
-        change: { mode: "RELATIVE", quantity: 1 },
-      },
-    ], async () => {
-      throw new Error("Conversation Turn completion failed");
-    }),
-    /Conversation Turn completion failed/,
-  );
-
-  assert.deepEqual(await cart.inspect(), before);
-});
-
-test("duplicate, contradictory, and ambiguous Cart Mutation batches have no partial effects", async () => {
-  const { cart, product: strideFlow } = await prepareCart();
-  const catalog = createCatalogModule();
-  const [trailCrest] = (await catalog.search({
-    query: "TrailCrest Grip Running Shoes",
-    limit: 1,
-  })).products;
-  const [courtLine] = (await catalog.search({
-    query: "CourtLine Casual Sneakers",
-    limit: 1,
-  })).products;
-  assert.ok(trailCrest);
-  assert.ok(courtLine);
-  await cart.addItems([
-    { product: strideFlow, quantity: 2 },
-    { product: trailCrest, quantity: 1 },
-  ], async () => {});
-
-  const original = await cart.inspect();
-  await assert.rejects(
-    cart.applyMutations!([
-      { type: "ADD", product: courtLine, quantity: 1 },
-      { type: "ADD", product: courtLine, quantity: 1 },
-    ], async () => {}),
-    /same Product cannot be added more than once/,
-  );
-  assert.deepEqual(await cart.inspect(), original);
-
-  await assert.rejects(
-    cart.applyMutations!([
-      { type: "REMOVE", reference: strideFlow.name },
-      {
-        type: "CHANGE_QUANTITY",
-        reference: strideFlow.name,
-        change: { mode: "RELATIVE", quantity: 1 },
-      },
-    ], async () => {}),
-    /duplicate or contradictory/,
-  );
-  assert.deepEqual(await cart.inspect(), original);
-
-  await db
-    .update(products)
-    .set({ name: strideFlow.name })
-    .where(eq(products.id, trailCrest.id));
-  const ambiguous = await cart.inspect();
-  await assert.rejects(
-    cart.applyMutations!([
-      { type: "ADD", product: courtLine, quantity: 1 },
-      { type: "REMOVE", reference: strideFlow.name },
-    ], async () => {}),
-    /More than one Cart Item matches/,
-  );
-  assert.deepEqual(await cart.inspect(), ambiguous);
-});
-
-test("POST safely clears an already-empty Cart and replays its original result", async () => {
-  const { cart } = await prepareCart();
-  let analyses = 0;
-  const agent = createCommerceAgent(
-    createCatalogModule(),
-    {
-      async analyze() {
-        analyses += 1;
-        return {
-          goal: "Clear the Cart",
-          constraintDelta: { set: {}, clear: [] },
-          knownEntities: [],
-          missingInformation: [],
-          confidence: 0.99,
-          requestedEffects: ["CLEAR_CART" as const],
-        };
-      },
-    },
-    createConversationModule(DEMO_CUSTOMER_ID),
-    {
-      agentLoop: { async run() { throw new Error("not used"); } },
-      cart,
-    },
-  );
-  const POST = createPostHandler(async () => agent);
-  const request = new Request("http://localhost/api/agent/message", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      message: "Clear my Cart",
-      idempotencyKey: crypto.randomUUID(),
-    }),
-  });
-
-  const first = await POST(request.clone());
-  const second = await POST(request.clone());
-
-  assert.deepEqual(await second.json(), await first.json());
-  assert.equal(analyses, 1);
-  assert.deepEqual((await cart.inspect()).items, []);
-});
-
-test("a successful Cart Mutation batch advances one version and invalidates stale checkout state", async () => {
-  const { cart, product } = await prepareCart();
-  const [courtLine] = (await createCatalogModule().search({
-    query: "CourtLine Casual Sneakers",
-    limit: 1,
-  })).products;
-  assert.ok(courtLine);
-  await cart.addItem(product, 2, async () => {});
-  const [before] = await db
-    .select({ id: carts.id, version: carts.version })
-    .from(carts)
-    .where(and(eq(carts.userId, DEMO_CUSTOMER_ID), eq(carts.status, "ACTIVE")))
-    .limit(1);
-  const [proposal] = await db
-    .insert(checkoutProposals)
-    .values({
-      cartId: before.id,
-      userId: DEMO_CUSTOMER_ID,
-      cartVersion: before.version,
-      status: "APPROVAL_PENDING",
-      policyDecision: "REQUIRES_APPROVAL",
-      subtotalMinor: product.priceMinor * 2,
-      discountMinor: 0,
-      shippingMinor: 0,
-      taxMinor: 0,
-      totalMinor: product.priceMinor * 2,
-      currency: product.currency,
-      expiresAt: new Date(Date.now() + 60_000),
-    })
-    .returning({ id: checkoutProposals.id });
-  await db.insert(approvals).values({
-    proposalId: proposal.id,
-    userId: DEMO_CUSTOMER_ID,
-    actionType: "PLACE_ORDER",
-    amountMinor: product.priceMinor * 2,
-    currency: product.currency,
-    reason: "Customer Approval required",
-    status: "PENDING",
-    expiresAt: new Date(Date.now() + 60_000),
-  });
-
-  await cart.applyMutations!([
-    { type: "ADD", product: courtLine, quantity: 1 },
-    {
-      type: "CHANGE_QUANTITY",
-      reference: product.name,
-      change: { mode: "RELATIVE", quantity: 1 },
-    },
-  ], async () => {});
-
-  const [afterBatch] = await db
-    .select({ version: carts.version })
-    .from(carts)
-    .where(eq(carts.id, before.id));
-  const [invalidatedProposal] = await db
-    .select({ status: checkoutProposals.status })
-    .from(checkoutProposals)
-    .where(eq(checkoutProposals.id, proposal.id));
-  const [invalidatedApproval] = await db
-    .select({ status: approvals.status })
-    .from(approvals)
-    .where(eq(approvals.proposalId, proposal.id));
-  assert.equal(afterBatch.version, before.version + 1);
-  assert.equal(invalidatedProposal.status, "INVALIDATED");
-  assert.equal(invalidatedApproval.status, "INVALIDATED");
-});
-
-function createQuantityChangePost(
-  productName: string | undefined,
-  cart = createCartModule(DEMO_CUSTOMER_ID),
-) {
-  const agent = createCommerceAgent(
-    createCatalogModule(),
-    {
-      async analyze({ message }) {
-        const exact = message.match(/exact (-?\d+(?:\.\d+)?)/i);
-        const relative = message.match(/relative (-?\d+(?:\.\d+)?)/i);
-        return {
-          goal: "Change a Cart Item quantity",
-          constraintDelta: { set: {}, clear: [] },
-          knownEntities: productName
-            ? [{ type: "PRODUCT" as const, value: productName }]
-            : [],
-          missingInformation: [],
-          confidence: 0.99,
-          requestedEffects: ["CHANGE_CART_QUANTITY" as const],
-          ...(productName ? { requestedCartItemReference: productName } : {}),
-          ...((exact || relative)
-            ? {
-                requestedCartQuantityChange: {
-                  mode: exact ? ("EXACT" as const) : ("RELATIVE" as const),
-                  quantity: Number((exact ?? relative)![1]),
-                },
-              }
-            : {}),
-        };
-      },
-    },
-    createConversationModule(DEMO_CUSTOMER_ID),
-    {
-      agentLoop: { async run() { throw new Error("not used"); } },
-      cart,
-    },
-  );
-  const POST = createPostHandler(async () => agent);
-  return (body: Record<string, unknown>) => POST(new Request(
-    "http://localhost/api/agent/message",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    },
-  ));
-}
-
-test("POST serializes relative Cart Quantity Changes and exact changes replace current quantity", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 2, async () => {});
-  const post = createQuantityChangePost(product.name, cart);
-  const initial = await post({
-    message: "exact 2",
-    idempotencyKey: crypto.randomUUID(),
-  });
-  const conversationId = (await initial.json()).data.conversationId;
-
-  const [first, second] = await Promise.all([
-    post({
-      conversationId,
-      message: "relative 1",
-      idempotencyKey: crypto.randomUUID(),
-    }),
-    post({
-      conversationId,
-      message: "relative 1",
-      idempotencyKey: crypto.randomUUID(),
-    }),
-  ]);
-
-  assert.equal(first.status, 200);
-  assert.equal(second.status, 200);
-  assert.equal((await cart.inspect()).items[0].quantity, 4);
-
-  const exact = await post({
-    conversationId,
-    message: "exact 3",
-    idempotencyKey: crypto.randomUUID(),
-  });
-  assert.equal((await exact.json()).data.cart.items[0].quantity, 3);
-});
-
-test("POST reprices an increased Cart Item at the current Product price and discloses it", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 2, async () => {});
-  await db
-    .update(products)
-    .set({ priceMinor: 429900 })
-    .where(eq(products.id, product.id));
-  const response = await createQuantityChangePost(product.name, cart)({
-    message: "relative 1",
-    idempotencyKey: crypto.randomUUID(),
-  });
-  const outcome = (await response.json()).data;
-
-  assert.equal(outcome.status, "COMPLETED");
-  assert.equal(
-    outcome.message,
-    "Changed StrideFlow Daily Running Shoes quantity to 3. Its Cart Price increased from ₹3,999.00 to ₹4,299.00.",
-  );
-  assert.equal(outcome.cart.items[0].cartPriceMinor, 429900);
-  assert.equal(outcome.cart.items[0].subtotalMinor, 1289700);
-});
-
-test("POST decreases an inactive Cart Item without repricing or removing it", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 3, async () => {});
-  await db
-    .update(products)
-    .set({ active: false, stock: 0, priceMinor: 429900 })
-    .where(eq(products.id, product.id));
-  const response = await createQuantityChangePost(product.name, cart)({
-    message: "relative -1",
-    idempotencyKey: crypto.randomUUID(),
-  });
-  const outcome = (await response.json()).data;
-
-  assert.equal(outcome.status, "COMPLETED");
-  assert.equal(outcome.cart.items[0].quantity, 2);
-  assert.equal(outcome.cart.items[0].cartPriceMinor, 399900);
-  assert.equal(outcome.cart.items[0].subtotalMinor, 799800);
-  assert.deepEqual(outcome.cart.items[0].availabilityWarning, {
-    reason: "INACTIVE",
-  });
-  assert.equal(outcome.cart.priceChanges, undefined);
-});
-
-test("POST returns the unchanged authoritative Cart for quantity, stock, and inactivity failures", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 5, async () => {});
-  const post = createQuantityChangePost(product.name, cart);
-  const unqualifiedPost = createQuantityChangePost(undefined, cart);
-  const invalidLimit = await post({
-    message: "exact 11",
-    idempotencyKey: crypto.randomUUID(),
-  });
-  assert.equal((await invalidLimit.json()).data.status, "NEEDS_INPUT");
-  assert.equal((await cart.inspect()).items[0].quantity, 5);
-
-  const unqualifiedLimit = await unqualifiedPost({
-    message: "exact 11",
-    idempotencyKey: crypto.randomUUID(),
-  });
-  assert.match(
-    (await unqualifiedLimit.json()).data.message,
-    /StrideFlow Daily Running Shoes cannot have more than 10 units/,
-  );
-
-  await db.update(products).set({ stock: 2 }).where(eq(products.id, product.id));
-  const aboveStockDecrease = await post({
-    message: "relative -1",
-    idempotencyKey: crypto.randomUUID(),
-  });
-  assert.match((await aboveStockDecrease.json()).data.message, /2 units in stock/);
-  assert.equal((await cart.inspect()).items[0].quantity, 5);
-
-  const insufficientStock = await post({
-    message: "relative 1",
-    idempotencyKey: crypto.randomUUID(),
-  });
-  assert.match((await insufficientStock.json()).data.message, /2 units in stock/);
-  assert.equal((await cart.inspect()).items[0].quantity, 5);
-
-  await db
-    .update(products)
-    .set({ active: false, stock: 10 })
-    .where(eq(products.id, product.id));
-  const inactive = await post({
-    message: "relative 1",
-    idempotencyKey: crypto.randomUUID(),
-  });
-  assert.match((await inactive.json()).data.message, /inactive/);
-  assert.equal((await cart.inspect()).items[0].quantity, 5);
-
-  const implicitRemoval = await post({
-    message: "relative -5",
-    idempotencyKey: crypto.randomUUID(),
-  });
-  assert.match((await implicitRemoval.json()).data.message, /Remove the Cart Item explicitly/);
-  assert.equal((await cart.inspect()).items[0].quantity, 5);
-});
-
-test("POST applies a retried relative Cart Quantity Change only once", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 2, async () => {});
-  const post = createQuantityChangePost(product.name, cart);
-  const request = {
-    message: "relative 1",
-    idempotencyKey: crypto.randomUUID(),
-  };
-
-  const first = await post(request);
-  const second = await post(request);
-
-  assert.deepEqual(await second.json(), await first.json());
-  assert.equal((await cart.inspect()).items[0].quantity, 3);
-});
-
-test("POST atomically invalidates checkout state with a Cart Quantity Change", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 2, async () => {});
-  const [activeCart] = await db
-    .select({ id: carts.id, version: carts.version })
-    .from(carts)
-    .where(and(eq(carts.userId, DEMO_CUSTOMER_ID), eq(carts.status, "ACTIVE")))
-    .limit(1);
-  const [proposal] = await db
-    .insert(checkoutProposals)
-    .values({
-      cartId: activeCart.id,
-      userId: DEMO_CUSTOMER_ID,
-      cartVersion: activeCart.version,
-      status: "APPROVAL_PENDING",
-      policyDecision: "REQUIRES_APPROVAL",
-      subtotalMinor: product.priceMinor * 2,
-      discountMinor: 0,
-      shippingMinor: 0,
-      taxMinor: 0,
-      totalMinor: product.priceMinor * 2,
-      currency: product.currency,
-      expiresAt: new Date(Date.now() + 60_000),
-    })
-    .returning({ id: checkoutProposals.id });
-  await db.insert(approvals).values({
-    proposalId: proposal.id,
-    userId: DEMO_CUSTOMER_ID,
-    actionType: "PLACE_ORDER",
-    amountMinor: product.priceMinor * 2,
-    currency: product.currency,
-    reason: "Customer Approval required",
-    status: "PENDING",
-    expiresAt: new Date(Date.now() + 60_000),
-  });
-
-  const response = await createQuantityChangePost(product.name, cart)({
-    message: "exact 3",
-    idempotencyKey: crypto.randomUUID(),
-  });
-  assert.equal((await response.json()).data.status, "COMPLETED");
-
-  const [invalidatedProposal] = await db
-    .select({ status: checkoutProposals.status })
-    .from(checkoutProposals)
-    .where(eq(checkoutProposals.id, proposal.id));
-  const [invalidatedApproval] = await db
-    .select({ status: approvals.status })
-    .from(approvals)
-    .where(eq(approvals.proposalId, proposal.id));
-  assert.equal(invalidatedProposal.status, "INVALIDATED");
-  assert.equal(invalidatedApproval.status, "INVALIDATED");
-});
-
-test("POST rolls back a Cart Quantity Change when Conversation Turn completion fails", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 2, async () => {});
-  const agent = createCommerceAgent(
-    createCatalogModule(),
-    {
-      async analyze() {
-        return {
-          goal: "Change a Cart Item quantity",
-          constraintDelta: { set: {}, clear: [] },
-          knownEntities: [{ type: "PRODUCT" as const, value: product.name }],
-          missingInformation: [],
-          confidence: 0.99,
-          requestedEffects: ["CHANGE_CART_QUANTITY" as const],
-          requestedCartItemReference: product.name,
-          requestedCartQuantityChange: { mode: "EXACT" as const, quantity: 3 },
-        };
-      },
-    },
-    {
-      async startTurn() {
-        return {
-          conversationId: "41000000-0000-4000-8000-000000000016",
-          async recordIntentBrief() {},
-          async complete() {
-            throw new Error("Conversation Turn completion failed");
-          },
-        };
-      },
-    },
-    {
-      agentLoop: { async run() { throw new Error("not used"); } },
-      cart,
-    },
-  );
-  const POST = createPostHandler(async () => agent);
-  const response = await POST(new Request("http://localhost/api/agent/message", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      message: "exact 3",
-      idempotencyKey: crypto.randomUUID(),
-    }),
-  }));
-
-  assert.equal(response.status, 200);
-  assert.equal((await response.json()).data.status, "TEMPORARILY_UNAVAILABLE");
-  assert.equal((await cart.inspect()).items[0].quantity, 2);
-});
-
-test("Cart additions do not reserve Product stock", async () => {
-  const { cart, product } = await prepareCart();
-  const [stockBeforeAddition] = await db
-    .select({ stock: products.stock })
-    .from(products)
-    .where(eq(products.id, product.id));
+  const cart = createCartModule(TEST_GUEST_SESSION_ID);
   await Promise.all([
-    cart.addItem(product, 1, async () => {}),
-    cart.addItem(product, 1, async () => {}),
+    cart.addItem(product, 1, async () => {}, {
+      mutationKey: "61000000-0000-4000-8000-000000000101",
+      expectedVersion: 0,
+    }),
+    cart.addItem(product, 1, async () => {}, {
+      mutationKey: "61000000-0000-4000-8000-000000000102",
+      expectedVersion: 0,
+    }),
   ]);
-  const [stockAfterAddition] = await db
-    .select({ stock: products.stock })
-    .from(products)
-    .where(eq(products.id, product.id));
+  const summary = await cart.inspect();
 
-  assert.equal(stockAfterAddition.stock, stockBeforeAddition.stock);
-  assert.equal((await cart.inspect()).totalQuantity, 2);
+  assert.equal(summary.totalQuantity, 2);
+  assert.equal(summary.subtotalMinor, 799800);
+  assert.equal(summary.currency, "INR");
 });
 
-test("Cart Item Removal invalidates its unconsumed Checkout Proposal and pending Approval", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 1, async () => {});
-  const [activeCart] = await db
-    .select({ id: carts.id, version: carts.version })
-    .from(carts)
-    .where(and(eq(carts.userId, DEMO_CUSTOMER_ID), eq(carts.status, "ACTIVE")))
-    .limit(1);
-  assert.ok(activeCart);
-  const [proposal] = await db
-    .insert(checkoutProposals)
-    .values({
-      cartId: activeCart.id,
-      userId: DEMO_CUSTOMER_ID,
-      cartVersion: activeCart.version,
-      status: "APPROVAL_PENDING",
-      policyDecision: "REQUIRES_APPROVAL",
-      subtotalMinor: product.priceMinor,
-      discountMinor: 0,
-      shippingMinor: 0,
-      taxMinor: 0,
-      totalMinor: product.priceMinor,
-      currency: product.currency,
-      expiresAt: new Date(Date.now() + 60_000),
-    })
-    .returning({ id: checkoutProposals.id });
-  await db.insert(approvals).values({
-    proposalId: proposal.id,
-    userId: DEMO_CUSTOMER_ID,
-    actionType: "PLACE_ORDER",
-    amountMinor: product.priceMinor,
-    currency: product.currency,
-    reason: "Customer Approval required",
-    status: "PENDING",
-    expiresAt: new Date(Date.now() + 60_000),
+test("repeated explicit Add commands increment one Cart Item without repricing it", async () => {
+  await runSeedCommand();
+  const catalog = createCatalogModule();
+  const result = await catalog.search({
+    query: "StrideFlow Daily Running Shoes",
+    limit: 1,
   });
+  const product = result.products[0];
+  assert.ok(product);
 
-  await cart.removeItemByProductId!(product.id, async () => {});
+  const firstResponse = await addToCart(
+    cartAddRequest(product.id, crypto.randomUUID()),
+  );
+  const cookie = firstResponse.headers.get("set-cookie")?.split(";", 1)[0];
+  assert.ok(cookie);
+  const secondResponse = await addToCart(
+    cartAddRequest(product.id, crypto.randomUUID(), cookie, 2),
+  );
 
-  const [invalidatedProposal] = await db
-    .select({ status: checkoutProposals.status })
-    .from(checkoutProposals)
-    .where(eq(checkoutProposals.id, proposal.id));
-  const [invalidatedApproval] = await db
-    .select({ status: approvals.status })
-    .from(approvals)
-    .where(eq(approvals.proposalId, proposal.id));
-  assert.equal(invalidatedProposal.status, "INVALIDATED");
-  assert.equal(invalidatedApproval.status, "INVALIDATED");
-});
-
-test("Cart Item Removal remains allowed when its Product is inactive and out of stock", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 2, async () => {});
-  await db
-    .update(products)
-    .set({ active: false, stock: 0 })
-    .where(eq(products.id, product.id));
-
-  const removed = await cart.removeItem!(product.name, async () => {});
-
-  assert.ok(removed);
-  assert.deepEqual(removed.items, []);
-  assert.equal(removed.totalQuantity, 0);
-  assert.equal(removed.subtotalMinor, 0);
-});
-
-test("structured Cart Item Removal targets the stable Product ID", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 1, async () => {});
-
-  const removed = await cart.removeItemByProductId!(product.id, async () => {});
-
-  assert.deepEqual(removed.items, []);
-  assert.equal(removed.totalQuantity, 0);
-  assert.equal(removed.subtotalMinor, 0);
-});
-
-test("Undo restores the removed Product with its exact prior quantity and Cart Price", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 2, async () => {});
-  const removalId = crypto.randomUUID();
-  let offeredUndo:
-    | { removalId: string; productId: string; productName: string; expiresAt: string }
-    | undefined;
-
-  await cart.removeItemByProductId!(
-    product.id,
-    async (_removedCart, _transaction, details) => {
-      offeredUndo = details?.cartItemRemovalUndo;
+  assert.equal(firstResponse.status, 200);
+  assert.equal(secondResponse.status, 200);
+  const payload = (await secondResponse.json()) as {
+    data: CartView;
+  };
+  assert.deepEqual(payload.data.items, [
+    {
+      productId: product.id,
+      productName: product.name,
+      quantity: 2,
+      cartPriceMinor: product.priceMinor,
+      subtotalMinor: product.priceMinor * 2,
     },
-    removalId,
-  );
-  await db
-    .update(products)
-    .set({ priceMinor: product.priceMinor + 50_000 })
-    .where(eq(products.id, product.id));
-  const restored = await cart.restoreItemRemoval!(removalId, async () => {});
-
-  assert.equal(offeredUndo?.removalId, removalId);
-  assert.equal(offeredUndo?.productId, product.id);
-  assert.equal(offeredUndo?.productName, product.name);
-  assert.ok(Date.parse(offeredUndo?.expiresAt ?? "") > Date.now());
-  assert.equal(restored.items[0].productId, product.id);
-  assert.equal(restored.items[0].quantity, 2);
-  assert.equal(restored.items[0].cartPriceMinor, product.priceMinor);
-  assert.equal(restored.items[0].subtotalMinor, product.priceMinor * 2);
+  ]);
+  assert.equal(payload.data.totalQuantity, 2);
 });
 
-test("Undo expires ten seconds after Cart Item Removal without changing the Cart", async () => {
-  const { cart: setupCart, product } = await prepareCart();
-  await setupCart.addItem(product, 1, async () => {});
-  let currentTime = new Date("2026-09-01T06:30:00.000Z");
-  const cart = createCartModule(DEMO_CUSTOMER_ID, "INR", () => currentTime);
-  const removalId = crypto.randomUUID();
-  await cart.removeItemByProductId!(
-    product.id,
-    async () => {},
-    removalId,
-  );
-
-  currentTime = new Date("2026-09-01T06:30:10.000Z");
-
-  await assert.rejects(
-    cart.restoreItemRemoval!(removalId, async () => {}),
-    /Undo expired after ten seconds\./,
-  );
-  assert.deepEqual((await cart.inspect()).items, []);
-});
-
-test("Undo leaves the Cart unchanged when the removed Product is no longer available", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 1, async () => {});
-  const removalId = crypto.randomUUID();
-  await cart.removeItemByProductId!(
-    product.id,
-    async () => {},
-    removalId,
-  );
-  await db
-    .update(products)
-    .set({ active: false })
-    .where(eq(products.id, product.id));
-
-  await assert.rejects(
-    cart.restoreItemRemoval!(removalId, async () => {}),
-    new RegExp(`${product.name} is no longer available\\.`),
-  );
-  assert.deepEqual((await cart.inspect()).items, []);
-});
-
-test("Undo leaves the Cart unchanged when stock no longer covers the removed quantity", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 2, async () => {});
-  const removalId = crypto.randomUUID();
-  await cart.removeItemByProductId!(
-    product.id,
-    async () => {},
-    removalId,
-  );
+test("explicit Add rejects a lower inventory limit with the unchanged Cart", async () => {
+  await runSeedCommand();
+  const [product] = await db
+    .select({ id: products.id, name: products.name })
+    .from(products)
+    .where(eq(products.active, true))
+    .limit(1);
+  assert.ok(product);
   await db
     .update(products)
     .set({ stock: 1 })
     .where(eq(products.id, product.id));
 
-  await assert.rejects(
-    cart.restoreItemRemoval!(removalId, async () => {}),
-    new RegExp(`${product.name} only has 1 unit in stock\\.`),
+  const firstResponse = await addToCart(
+    cartAddRequest(product.id, crypto.randomUUID()),
   );
-  assert.deepEqual((await cart.inspect()).items, []);
-});
-
-test("Cart Item Removal rolls back when Conversation Turn completion fails", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 1, async () => {});
-
-  await assert.rejects(
-    cart.removeItemByProductId!(product.id, async () => {
-      throw new Error("Conversation Turn completion failed");
-    }),
-    /Conversation Turn completion failed/,
+  const cookie = firstResponse.headers.get("set-cookie")?.split(";", 1)[0];
+  assert.ok(cookie);
+  const rejectedResponse = await addToCart(
+    cartAddRequest(product.id, crypto.randomUUID(), cookie, 2),
   );
 
-  const unchanged = await cart.inspect();
-  assert.equal(unchanged.items[0].productId, product.id);
-  assert.equal(unchanged.items[0].quantity, 1);
+  assert.equal(rejectedResponse.status, 409);
+  const payload = (await rejectedResponse.json()) as {
+    error: { message: string; details: { cart: CartView } };
+  };
+  assert.equal(
+    payload.error.message,
+    `${product.name} only has 1 unit in stock.`,
+  );
+  assert.equal(payload.error.details.cart.totalQuantity, 1);
+  assert.equal(payload.error.details.cart.items[0]?.quantity, 1);
 });
 
-test("Cart inspection discloses base price changes without repricing", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 2, async () => {});
-
-  await db
-    .update(products)
-    .set({ priceMinor: 429900 })
-    .where(eq(products.id, product.id));
-  const inspected = await cart.inspect();
-
-  assert.equal(inspected.items[0].cartPriceMinor, 399900);
-  assert.equal(inspected.items[0].subtotalMinor, 799800);
-  assert.equal(inspected.subtotalMinor, 799800);
-  assert.deepEqual(inspected.items[0].priceComparison, {
-    currentBasePriceMinor: 429900,
-    direction: "INCREASED",
-  });
-
-  await db
-    .update(products)
-    .set({ priceMinor: 379900 })
-    .where(eq(products.id, product.id));
-  const decreased = await cart.inspect();
-
-  assert.equal(decreased.items[0].cartPriceMinor, 399900);
-  assert.equal(decreased.subtotalMinor, 799800);
-  assert.deepEqual(decreased.items[0].priceComparison, {
-    currentBasePriceMinor: 379900,
-    direction: "DECREASED",
-  });
-});
-
-test("adding a Product again reprices its entire Cart Item", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 2, async () => {});
-  await db
-    .update(products)
-    .set({ priceMinor: 429900 })
-    .where(eq(products.id, product.id));
-
-  const repriced = await cart.addItem(product, 1, async () => {});
-
-  assert.equal(repriced.items[0].quantity, 3);
-  assert.equal(repriced.items[0].cartPriceMinor, 429900);
-  assert.equal(repriced.items[0].subtotalMinor, 1289700);
-  assert.deepEqual(repriced.priceChanges, [
-    {
-      productId: product.id,
-      previousCartPriceMinor: 399900,
-      currentCartPriceMinor: 429900,
-      direction: "INCREASED",
-    },
-  ]);
-});
-
-test("Cart inspection warns about current Product availability", async () => {
-  const { cart, product } = await prepareCart();
-  await cart.addItem(product, 3, async () => {});
-
-  await db
-    .update(products)
-    .set({ stock: 2 })
-    .where(eq(products.id, product.id));
-  const insufficientStock = await cart.inspect();
-
-  assert.deepEqual(insufficientStock.items[0].availabilityWarning, {
-    reason: "INSUFFICIENT_STOCK",
-    availableQuantity: 2,
-  });
-  assert.equal(insufficientStock.items[0].quantity, 3);
-
+test("explicit Add rejects inactive and out-of-stock Products without creating a Cart", async () => {
+  await runSeedCommand();
+  const availableProducts = await db
+    .select({ id: products.id })
+    .from(products)
+    .where(eq(products.active, true))
+    .limit(2);
+  const inactiveProduct = availableProducts[0];
+  const outOfStockProduct = availableProducts[1];
+  assert.ok(inactiveProduct);
+  assert.ok(outOfStockProduct);
   await db
     .update(products)
     .set({ active: false })
-    .where(eq(products.id, product.id));
-  const inactive = await cart.inspect();
+    .where(eq(products.id, inactiveProduct.id));
+  await db
+    .update(products)
+    .set({ stock: 0 })
+    .where(eq(products.id, outOfStockProduct.id));
 
-  assert.deepEqual(inactive.items[0].availabilityWarning, {
-    reason: "INACTIVE",
+  const inactiveResponse = await addToCart(
+    cartAddRequest(inactiveProduct.id, crypto.randomUUID()),
+  );
+  const outOfStockResponse = await addToCart(
+    cartAddRequest(outOfStockProduct.id, crypto.randomUUID()),
+  );
+
+  assert.equal(inactiveResponse.status, 409);
+  assert.deepEqual(await inactiveResponse.json(), {
+    error: {
+      code: "PRODUCT_UNAVAILABLE",
+      message: "The Product is not available.",
+      details: {
+        cart: {
+          id: null,
+          version: 0,
+          items: [],
+          totalQuantity: 0,
+          subtotalMinor: 0,
+          currency: "INR",
+        },
+      },
+    },
   });
-  assert.equal(inactive.items[0].quantity, 3);
+  assert.equal(outOfStockResponse.status, 409);
+  const outOfStockPayload = (await outOfStockResponse.json()) as {
+    error: { message: string; details: { cart: CartView } };
+  };
+  assert.match(outOfStockPayload.error.message, /only has 0 units in stock/);
+  assert.equal(outOfStockPayload.error.details.cart.id, null);
+});
+
+test("Cart additions retain an existing Cart Price", async () => {
+  await runSeedCommand();
+  await db.delete(carts).where(eq(carts.guestSessionId, TEST_GUEST_SESSION_ID));
+  const catalog = createCatalogModule();
+  const result = await catalog.search({
+    query: "StrideFlow Daily Running Shoes",
+    limit: 1,
+  });
+  const product = result.products[0];
+  assert.ok(product);
+
+  const [activeCart] = await db
+    .insert(carts)
+    .values({ guestSessionId: TEST_GUEST_SESSION_ID, currency: "INR" })
+    .returning({ id: carts.id });
+  await db.insert(cartItems).values({
+    cartId: activeCart.id,
+    productId: product.id,
+    quantity: 2,
+    unitPriceSnapshotMinor: 389900,
+  });
+
+  const cart = createCartModule(TEST_GUEST_SESSION_ID);
+  const updated = await cart.addItem(product, 1, async () => {});
+
+  assert.equal(updated.items[0].quantity, 3);
+  assert.equal(updated.items[0].cartPriceMinor, 389900);
+  assert.equal(updated.items[0].subtotalMinor, 1169700);
+  assert.equal("priceChange" in updated, false);
+});
+
+test("database rejects runtime Cart Price changes", async () => {
+  await runSeedCommand();
+  await db.delete(carts).where(eq(carts.guestSessionId, TEST_GUEST_SESSION_ID));
+  const [product] = await db
+    .select({ id: products.id, priceMinor: products.priceMinor })
+    .from(products)
+    .limit(1);
+  assert.ok(product);
+  const [activeCart] = await db
+    .insert(carts)
+    .values({ guestSessionId: TEST_GUEST_SESSION_ID, currency: "INR" })
+    .returning({ id: carts.id });
+  await db.insert(cartItems).values({
+    cartId: activeCart.id,
+    productId: product.id,
+    quantity: 1,
+    unitPriceSnapshotMinor: product.priceMinor,
+  });
+
+  await assert.rejects(
+    db
+      .update(cartItems)
+      .set({ unitPriceSnapshotMinor: product.priceMinor + 1 })
+      .where(eq(cartItems.cartId, activeCart.id)),
+  );
+});
+
+test("a repeated Add command applies once and returns its original Cart", async () => {
+  await runSeedCommand();
+  const [product] = await seededProducts(1);
+  const mutationKey = crypto.randomUUID();
+
+  const first = await addToCart(cartAddRequest(product.id, mutationKey));
+  const cookie = first.headers.get("set-cookie")?.split(";", 1)[0];
+  assert.ok(cookie);
+  const replay = await addToCart(
+    cartAddRequest(product.id, mutationKey, cookie, 0),
+  );
+
+  assert.equal(first.status, 200);
+  assert.equal(replay.status, 200);
+  const firstPayload = (await first.json()) as { data: CartView };
+  const replayPayload = (await replay.json()) as { data: CartView };
+  assert.deepEqual(replayPayload.data, firstPayload.data);
+  assert.equal(replayPayload.data.totalQuantity, 1);
+  const [storedItem] = await db
+    .select({ quantity: cartItems.quantity })
+    .from(cartItems)
+    .where(
+      and(
+        eq(cartItems.cartId, firstPayload.data.id!),
+        eq(cartItems.productId, product.id),
+      ),
+    );
+  assert.equal(storedItem.quantity, 1);
+});
+
+test("a repeated quantity change applies once and returns its original Cart", async () => {
+  await runSeedCommand();
+  const [product] = await seededProducts(1);
+  const { cookie, cart } = await startCartWith(product.id);
+  const mutationKey = crypto.randomUUID();
+
+  const first = await updateCartItem(
+    cartItemRequest("INCREMENT_ITEM", product.id, mutationKey, cookie, cart.version),
+  );
+  const replay = await updateCartItem(
+    cartItemRequest("INCREMENT_ITEM", product.id, mutationKey, cookie, cart.version),
+  );
+
+  assert.equal(first.status, 200);
+  assert.equal(replay.status, 200);
+  const firstPayload = (await first.json()) as { data: CartView };
+  const replayPayload = (await replay.json()) as { data: CartView };
+  assert.equal(firstPayload.data.totalQuantity, 2);
+  assert.deepEqual(replayPayload.data, firstPayload.data);
+  const [storedItem] = await db
+    .select({ quantity: cartItems.quantity })
+    .from(cartItems)
+    .where(
+      and(
+        eq(cartItems.cartId, firstPayload.data.id!),
+        eq(cartItems.productId, product.id),
+      ),
+    );
+  assert.equal(storedItem.quantity, 2);
+});
+
+test("a repeated removal applies once and returns its original Cart", async () => {
+  await runSeedCommand();
+  const [product] = await seededProducts(1);
+  const { cookie, cart } = await startCartWith(product.id);
+  const mutationKey = crypto.randomUUID();
+
+  const first = await removeCartItem(
+    cartItemRequest("REMOVE_ITEM", product.id, mutationKey, cookie, cart.version),
+  );
+  const replay = await removeCartItem(
+    cartItemRequest("REMOVE_ITEM", product.id, mutationKey, cookie, cart.version),
+  );
+
+  assert.equal(first.status, 200);
+  assert.equal(replay.status, 200);
+  const firstPayload = (await first.json()) as { data: CartView };
+  const replayPayload = (await replay.json()) as { data: CartView };
+  assert.deepEqual(firstPayload.data.items, []);
+  assert.deepEqual(replayPayload.data, firstPayload.data);
+});
+
+test("distinct concurrent Cart commands are all retained", async () => {
+  await runSeedCommand();
+  const [first, second, third] = await seededProducts(3);
+  const { cookie, cart } = await startCartWith(first.id);
+
+  const responses = await Promise.all([
+    addToCart(cartAddRequest(second.id, crypto.randomUUID(), cookie, cart.version)),
+    addToCart(cartAddRequest(third.id, crypto.randomUUID(), cookie, cart.version)),
+    updateCartItem(
+      cartItemRequest(
+        "INCREMENT_ITEM",
+        first.id,
+        crypto.randomUUID(),
+        cookie,
+        cart.version,
+      ),
+    ),
+  ]);
+
+  assert.deepEqual(
+    responses.map((response) => response.status),
+    [200, 200, 200],
+  );
+  const currentCart = await currentCartFor(cookie);
+  assert.equal(currentCart.totalQuantity, 4);
+  assert.deepEqual(
+    [...currentCart.items].map((item) => item.productId).sort(),
+    [first.id, second.id, third.id].sort(),
+  );
+  assert.equal(
+    currentCart.items.find((item) => item.productId === first.id)?.quantity,
+    2,
+  );
+});
+
+test("every concurrent Cart command advances the authoritative Cart version once", async () => {
+  await runSeedCommand();
+  const [first, second] = await seededProducts(2);
+  const { cookie, cart } = await startCartWith(first.id);
+
+  await Promise.all([
+    addToCart(cartAddRequest(second.id, crypto.randomUUID(), cookie, cart.version)),
+    updateCartItem(
+      cartItemRequest(
+        "INCREMENT_ITEM",
+        first.id,
+        crypto.randomUUID(),
+        cookie,
+        cart.version,
+      ),
+    ),
+  ]);
+
+  const currentCart = await currentCartFor(cookie);
+  assert.equal(currentCart.version, cart.version + 2);
+});
+
+test("a Cart command claiming an unknown version returns a typed conflict", async () => {
+  await runSeedCommand();
+  const [product] = await seededProducts(1);
+  const { cookie, cart } = await startCartWith(product.id);
+
+  const response = await updateCartItem(
+    cartItemRequest(
+      "INCREMENT_ITEM",
+      product.id,
+      crypto.randomUUID(),
+      cookie,
+      cart.version + 5,
+    ),
+  );
+
+  assert.equal(response.status, 409);
+  const payload = (await response.json()) as {
+    error: { code: string; details: { cart: CartView } };
+  };
+  assert.equal(payload.error.code, "CART_CONFLICT");
+  assert.equal(payload.error.details.cart.version, cart.version);
+  assert.equal(payload.error.details.cart.totalQuantity, 1);
+});
+
+test("reusing one mutation key for another Cart command returns a typed conflict", async () => {
+  await runSeedCommand();
+  const [product] = await seededProducts(1);
+  const { cookie, cart } = await startCartWith(product.id);
+  const mutationKey = crypto.randomUUID();
+
+  const increment = await updateCartItem(
+    cartItemRequest("INCREMENT_ITEM", product.id, mutationKey, cookie, cart.version),
+  );
+  const reused = await removeCartItem(
+    cartItemRequest("REMOVE_ITEM", product.id, mutationKey, cookie, cart.version),
+  );
+
+  assert.equal(increment.status, 200);
+  assert.equal(reused.status, 409);
+  const payload = (await reused.json()) as {
+    error: { code: string; message: string; details: { cart: CartView } };
+  };
+  assert.equal(payload.error.code, "CART_CONFLICT");
+  assert.equal(
+    payload.error.message,
+    "The mutation key was already used for another Cart command.",
+  );
+  assert.equal(payload.error.details.cart.totalQuantity, 2);
+});
+
+test("a command for a Cart Item another tab removed recovers the authoritative Cart", async () => {
+  await runSeedCommand();
+  const [product] = await seededProducts(1);
+  const { cookie, cart } = await startCartWith(product.id);
+
+  const removal = await removeCartItem(
+    cartItemRequest("REMOVE_ITEM", product.id, crypto.randomUUID(), cookie, cart.version),
+  );
+  const staleIncrement = await updateCartItem(
+    cartItemRequest(
+      "INCREMENT_ITEM",
+      product.id,
+      crypto.randomUUID(),
+      cookie,
+      cart.version,
+    ),
+  );
+
+  assert.equal(removal.status, 200);
+  assert.equal(staleIncrement.status, 409);
+  const payload = (await staleIncrement.json()) as {
+    error: { code: string; message: string; details: { cart: CartView } };
+  };
+  assert.equal(payload.error.code, "CART_CONFLICT");
+  assert.equal(payload.error.message, "The Cart Item is no longer in the Cart.");
+  assert.deepEqual(payload.error.details.cart.items, []);
+  assert.equal(payload.error.details.cart.totalQuantity, 0);
+});
+
+test("a Cart command retried after a lost response applies exactly once", async () => {
+  await runSeedCommand();
+  const [product] = await seededProducts(1);
+  const { cookie, cart } = await startCartWith(product.id);
+  const mutationKey = crypto.randomUUID();
+
+  const lost = await updateCartItem(
+    cartItemRequest("INCREMENT_ITEM", product.id, mutationKey, cookie, cart.version),
+  );
+  const appliedCart = ((await lost.json()) as { data: CartView }).data;
+  const retry = await updateCartItem(
+    cartItemRequest("INCREMENT_ITEM", product.id, mutationKey, cookie, cart.version),
+  );
+
+  assert.equal(retry.status, 200);
+  const retryPayload = (await retry.json()) as { data: CartView };
+  assert.deepEqual(retryPayload.data, appliedCart);
+  const currentCart = await currentCartFor(cookie);
+  assert.equal(currentCart.totalQuantity, 2);
+  assert.equal(currentCart.version, appliedCart.version);
+});
+
+async function reviewCartFor(cookie: string): Promise<CustomerActionEntry> {
+  const response = await reviewCheckoutReadiness(
+    new Request("http://localhost/api/cart/checkout-readiness", {
+      method: "POST",
+      headers: { cookie },
+    }),
+  );
+  assert.equal(response.status, 200);
+  return ((await response.json()) as { data: CustomerActionEntry }).data;
+}
+
+async function transcriptFor(cookie: string): Promise<CurrentConversation> {
+  const response = await readConversation(
+    new Request("http://localhost/api/agent/conversation", {
+      headers: { cookie },
+    }),
+  );
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as { data: CurrentConversation };
+  assert.ok(payload.data);
+  return payload.data;
+}
+
+/**
+ * Puts one seeded Product in a fresh Guest Session's Cart at `quantity`, so a
+ * readiness test can then change the authoritative Catalog under it.
+ */
+async function cartHolding(quantity: number) {
+  const [product] = await seededProducts(1);
+  const { cookie, cart } = await startCartWith(product.id);
+  let currentCart = cart;
+  for (let added = 1; added < quantity; added += 1) {
+    const response = await addToCart(
+      cartAddRequest(
+        product.id,
+        crypto.randomUUID(),
+        cookie,
+        currentCart.version,
+      ),
+    );
+    assert.equal(response.status, 200);
+    currentCart = ((await response.json()) as { data: CartView }).data;
+  }
+  return { product, cookie, cart: currentCart };
+}
+
+test("Checkout Readiness blocks a Cart holding a Product the Catalog withdrew", async () => {
+  await runSeedCommand();
+  const { product, cookie } = await cartHolding(1);
+  await db.update(products).set({ active: false }).where(eq(products.id, product.id));
+
+  const entry = await reviewCartFor(cookie);
+
+  assert.equal(entry.readiness.status, "NOT_READY");
+  assert.deepEqual(entry.readiness.blockers, [
+    {
+      code: "PRODUCT_UNAVAILABLE",
+      productId: product.id,
+      productName: product.name,
+      message: `${product.name} is no longer available. Remove it from the Cart to continue.`,
+    },
+  ]);
+  assert.equal(entry.readiness.cart.items[0]?.productId, product.id);
+});
+
+test("Checkout Readiness blocks a Cart quantity the current stock cannot supply", async () => {
+  await runSeedCommand();
+  const { product, cookie } = await cartHolding(3);
+  await db.update(products).set({ stock: 2 }).where(eq(products.id, product.id));
+
+  const entry = await reviewCartFor(cookie);
+
+  assert.equal(entry.readiness.status, "NOT_READY");
+  assert.deepEqual(entry.readiness.blockers, [
+    {
+      code: "INSUFFICIENT_STOCK",
+      productId: product.id,
+      productName: product.name,
+      message: `${product.name} only has 2 units in stock. Reduce the quantity to 2, or remove it from the Cart.`,
+    },
+  ]);
+  assert.equal(entry.readiness.cart.items[0]?.quantity, 3);
+});
+
+test("a corrected Cart produces a fresh ready result at its new Cart version", async () => {
+  await runSeedCommand();
+  const { product, cookie, cart } = await cartHolding(3);
+  await db.update(products).set({ stock: 2 }).where(eq(products.id, product.id));
+  const blocked = await reviewCartFor(cookie);
+
+  const correction = await updateCartItem(
+    cartItemRequest(
+      "DECREMENT_ITEM",
+      product.id,
+      crypto.randomUUID(),
+      cookie,
+      cart.version,
+    ),
+  );
+  assert.equal(correction.status, 200);
+  const corrected = await reviewCartFor(cookie);
+
+  assert.equal(blocked.readiness.status, "NOT_READY");
+  assert.equal(corrected.readiness.status, "READY");
+  assert.deepEqual(corrected.readiness.blockers, []);
+  assert.equal(corrected.readiness.cart.items[0]?.quantity, 2);
+  assert.ok(corrected.readiness.cart.version > blocked.readiness.cart.version);
+});
+
+test("a Checkout Readiness review reserves no inventory and records no Cart mutation", async () => {
+  await runSeedCommand();
+  const { product, cookie, cart } = await cartHolding(2);
+  const [stockedProduct] = await db
+    .select({ stock: products.stock })
+    .from(products)
+    .where(eq(products.id, product.id));
+  const mutationsBefore = await db
+    .select({ id: cartMutations.id })
+    .from(cartMutations);
+
+  const entry = await reviewCartFor(cookie);
+  const [reviewedProduct] = await db
+    .select({ stock: products.stock, active: products.active })
+    .from(products)
+    .where(eq(products.id, product.id));
+  const mutationsAfter = await db
+    .select({ id: cartMutations.id })
+    .from(cartMutations);
+
+  assert.equal(entry.readiness.status, "READY");
+  assert.equal(reviewedProduct.stock, stockedProduct.stock);
+  assert.equal(reviewedProduct.active, true);
+  assert.equal(mutationsAfter.length, mutationsBefore.length);
+  assert.deepEqual(await currentCartFor(cookie), cart);
+  assert.equal(entry.readiness.cart.version, cart.version);
+});
+
+test("a readiness card persists as history at the Cart version it evaluated", async () => {
+  await runSeedCommand();
+  const { product, cookie, cart } = await cartHolding(2);
+  const entry = await reviewCartFor(cookie);
+
+  const mutation = await removeCartItem(
+    cartItemRequest(
+      "REMOVE_ITEM",
+      product.id,
+      crypto.randomUUID(),
+      cookie,
+      cart.version,
+    ),
+  );
+  assert.equal(mutation.status, 200);
+  const transcript = await transcriptFor(cookie);
+
+  assert.deepEqual(transcript.transcript, [entry]);
+  const [persisted] = transcript.transcript;
+  assert.ok("readiness" in persisted);
+  assert.equal(persisted.readiness.cart.version, cart.version);
+  assert.equal(persisted.readiness.cart.items.length, 1);
+  assert.equal((await currentCartFor(cookie)).version, cart.version + 1);
 });

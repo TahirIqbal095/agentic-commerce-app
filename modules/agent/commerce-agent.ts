@@ -1,11 +1,5 @@
 import type { CatalogModule } from "@/modules/catalog/catalog";
-import type { DbExecutor } from "@/db";
-import {
-  CartError,
-  type CartModule,
-  type CartMutationDetails,
-  type CartView,
-} from "@/modules/cart/cart";
+import type { CartInspection } from "@/modules/cart/cart-inspection";
 import type {
   CatalogProduct,
   CatalogSearch,
@@ -74,7 +68,8 @@ export const MAX_COMMERCE_AGENT_TOOL_PRODUCTS = 8;
 
 type CommerceAgentOptions = {
   agentLoop: CommerceAgentLoop;
-  cart?: CartModule;
+  /** Read-only Cart capability; absent when the Cart cannot be inspected. */
+  cartInspection?: CartInspection;
   limits?: CommerceAgentLimits;
 };
 
@@ -160,149 +155,12 @@ export function createCommerceAgent(
           });
         }
       }
-      const hasUnstructuredClear =
-        intentBrief.requestedEffects.includes("CLEAR_CART") &&
-        !intentBrief.requestedCartMutations?.length;
-      if (hasUnstructuredClear && intentBrief.requestedEffects.some((effect) =>
-        ["ADD_TO_CART", "REMOVE_FROM_CART", "CHANGE_CART_QUANTITY"].includes(effect)
-      )) {
-        return needsInputWithCurrentCart({
-          turn,
-          cart: options.cart,
-          intentBrief,
-          message: "Clearing the Cart cannot be combined with another Cart Mutation.",
-          question: "Would you like me to clear the Cart or apply the other changes?",
-          missingInformation: ["One unambiguous Cart Mutation batch"],
-        });
-      }
-      const requestedCartMutations = intentBrief.requestedCartMutations ??
-        (hasUnstructuredClear ? [{ type: "CLEAR" as const }] : undefined);
-      if (requestedCartMutations?.length) {
-        const mutationEffects = new Set<string>(requestedCartMutations.map((mutation) => {
-          switch (mutation.type) {
-            case "ADD": return "ADD_TO_CART";
-            case "REMOVE": return "REMOVE_FROM_CART";
-            case "CHANGE_QUANTITY": return "CHANGE_CART_QUANTITY";
-            case "CLEAR": return "CLEAR_CART";
-          }
-        }));
-        const requestedMutationEffects = intentBrief.requestedEffects.filter(
-          (effect) => [
-            "ADD_TO_CART",
-            "REMOVE_FROM_CART",
-            "CHANGE_CART_QUANTITY",
-            "CLEAR_CART",
-          ].includes(effect),
-        );
-        const hasLegacyMutationDetails =
-          intentBrief.referencedProductIds !== undefined ||
-          intentBrief.requestedQuantity !== undefined ||
-          intentBrief.requestedAdditions !== undefined ||
-          intentBrief.requestedCartItemReference !== undefined ||
-          intentBrief.requestedCartQuantityChange !== undefined ||
-          intentBrief.hasMultipleCartQuantityChanges === true ||
-          intentBrief.hasConflictingCartRequest === true;
-        if (
-          hasLegacyMutationDetails ||
-          requestedMutationEffects.length !== mutationEffects.size ||
-          requestedMutationEffects.some((effect) => !mutationEffects.has(effect))
-        ) {
-          return needsInputWithCurrentCart({
-            turn,
-            cart: options.cart,
-            intentBrief,
-            message:
-              "The requested Cart Mutations cannot be combined because their details conflict.",
-            question: "Which exact Cart Mutations would you like me to apply together?",
-            missingInformation: ["Consistent Cart Mutations"],
-          });
-        }
-        if (intentBrief.hasUnresolvedProductReferences) {
-          return needsInputWithCurrentCart({
-            turn,
-            cart: options.cart,
-            intentBrief,
-            message:
-              "One requested Product is no longer in the latest Recommendation Set.",
-            question: "Which current Products should I use for these Cart Mutations?",
-            missingInformation: ["Current Product references"],
-          });
-        }
-        try {
-          if (!options.cart?.applyMutations) {
-            throw new Error("Cart Mutation batch capability unavailable");
-          }
-          const additions = requestedCartMutations.filter(
-            (mutation) => mutation.type === "ADD",
-          );
-          const productResults = await Promise.all(
-            additions.map((mutation) => catalog.getProduct(mutation.productId)),
-          );
-          const productsById = new Map(
-            productResults.map((result, index) => {
-              if (!result.ok) {
-                throw new CartError(
-                  `${additions[index].productId} is not available.`,
-                );
-              }
-              return [result.value.id, result.value] as const;
-            }),
-          );
-          const mutations = requestedCartMutations.map((mutation) =>
-            mutation.type === "ADD"
-              ? {
-                  type: "ADD" as const,
-                  product: productsById.get(mutation.productId)!,
-                  quantity: mutation.quantity,
-                }
-              : mutation,
-          );
-          let completedOutcome: AgentOutcome | undefined;
-          await options.cart.applyMutations(
-            mutations,
-            async (updatedCart, transaction) => {
-              const outcome: AgentOutcome = {
-                status: "COMPLETED",
-                conversationId: turn.conversationId,
-                message:
-                  updatedCart.items.length === 0
-                    ? "Your Cart is empty."
-                    : "Updated your Cart.",
-                intentBrief,
-                products: [],
-                cart: updatedCart,
-              };
-              await turn.complete(outcome.message, outcome, transaction);
-              completedOutcome = outcome;
-            },
-          );
-          if (completedOutcome) return completedOutcome;
-          throw new Error("Atomic Cart completion was not invoked");
-        } catch (error) {
-          if (error instanceof CartError) {
-            return needsInputWithCurrentCart({
-              turn,
-              cart: options.cart,
-              intentBrief,
-              message: error.message,
-              question: "How should I correct these Cart Mutations?",
-              missingInformation: ["Valid Cart Mutations"],
-            });
-          }
-          return completeTurn(turn, {
-            status: "TEMPORARILY_UNAVAILABLE",
-            conversationId: turn.conversationId,
-            message: "I couldn't update your Cart right now. Please try again.",
-            retryable: true,
-            intentBrief,
-            products: [],
-          });
-        }
-      }
       if (intentBrief.requestedEffects.includes("INSPECT_CART")) {
         try {
-          if (!options.cart) throw new Error("Cart capability unavailable");
-          const cart = await options.cart.inspect();
+          if (!options.cartInspection) {
+            throw new Error("Cart inspection is unavailable.");
+          }
+          const cart = await options.cartInspection.inspectCart();
           return completeTurn(turn, {
             status: "COMPLETED",
             conversationId: turn.conversationId,
@@ -325,190 +183,34 @@ export function createCommerceAgent(
           });
         }
       }
-      if (intentBrief.requestedEffects.includes("CHANGE_CART_QUANTITY")) {
-        const reference = intentBrief.requestedCartItemReference?.trim();
-        const change = intentBrief.requestedCartQuantityChange;
-        if (
-          intentBrief.hasMultipleCartQuantityChanges ||
-          intentBrief.requestedEffects.some((effect) =>
-            ["ADD_TO_CART", "REMOVE_FROM_CART"].includes(effect),
-          )
-        ) {
-          return needsInputWithCurrentCart({
-            turn,
-            cart: options.cart,
-            intentBrief,
-            message:
-              "I couldn't safely apply multiple kinds of Cart Mutation together.",
-            question: "Which Cart Mutation would you like me to apply first?",
-            missingInformation: ["One Cart Mutation kind"],
-          });
-        }
-        if (intentBrief.requestedQuantity === 0 ||
-          (change?.mode === "EXACT" && change.quantity === 0)) {
-          return needsInputWithCurrentCart({
-            turn,
-            cart: options.cart,
-            intentBrief,
-            message:
-              "Cart Item quantity must be between 1 and 10. Remove the Cart Item explicitly instead.",
-            question: "Would you like to remove that Cart Item?",
-            missingInformation: ["Explicit Cart Item Removal"],
-          });
-        }
-        if (!change) {
-          return needsInputWithCurrentCart({
-            turn,
-            cart: options.cart,
-            intentBrief,
-            message: "I need one specific Cart Item and a clear quantity change.",
-            question: "Which Cart Item and quantity would you like?",
-            missingInformation: ["Unambiguous Cart Item", "Clear quantity change"],
-          });
-        }
-        try {
-          if (!options.cart?.changeItemQuantity) {
-            throw new Error("Cart Quantity Change capability unavailable");
-          }
-          let completedOutcome: AgentOutcome | undefined;
-          await options.cart.changeItemQuantity(
-            reference,
-            change,
-            async (updatedCart, transaction) => {
-              const item = updatedCart.items.find(
-                ({ productName }) =>
-                  reference !== undefined &&
-                  productName.trim().toLocaleLowerCase() ===
-                    reference.toLocaleLowerCase(),
-              ) ?? (reference === undefined ? updatedCart.items[0] : undefined);
-              const outcome: AgentOutcome = {
-                status: "COMPLETED",
-                conversationId: turn.conversationId,
-                message: cartQuantityChangeMessage(
-                  item?.productName ?? reference ?? "Cart Item",
-                  item?.quantity ?? change.quantity,
-                  updatedCart,
-                ),
-                intentBrief,
-                products: [],
-                cart: updatedCart,
-              };
-              await turn.complete(outcome.message, outcome, transaction);
-              completedOutcome = outcome;
-            },
-          );
-          if (completedOutcome) return completedOutcome;
-          throw new Error("Atomic Cart completion was not invoked");
-        } catch (error) {
-          if (error instanceof CartError) {
-            return needsInputWithCurrentCart({
-              turn,
-              cart: options.cart,
-              intentBrief,
-              message: error.message,
-              question: "Which Cart Item and quantity would you like?",
-              missingInformation: ["Valid Cart Quantity Change"],
-            });
-          }
-          return completeTurn(turn, {
-            status: "TEMPORARILY_UNAVAILABLE",
-            conversationId: turn.conversationId,
-            message: "I couldn't update your Cart right now. Please try again.",
-            retryable: true,
-            intentBrief,
-            products: [],
-          });
-        }
-      }
-      if (intentBrief.requestedEffects.includes("REMOVE_FROM_CART")) {
-        const reference = intentBrief.requestedCartItemReference?.trim();
-        if (!reference) {
-          return needsInputWithCurrentCart({
-            turn,
-            cart: options.cart,
-            intentBrief,
-            message: "I need one specific Cart Item to remove.",
-            question: "Which Cart Item would you like to remove?",
-            missingInformation: ["Unambiguous Cart Item"],
-          });
-        }
-        try {
-          if (!options.cart?.removeItem) {
-            throw new Error("Cart Item Removal capability unavailable");
-          }
-          let completedOutcome: AgentOutcome | undefined;
-          const completeRemoval = async (updatedCart: CartView, transaction: DbExecutor, details?: CartMutationDetails) => {
-            const outcome: AgentOutcome = {
+      if (intentBrief.requestedEffects.includes("PRESENT_ADD_CONTROLS")) {
+        const referencedProductIds = intentBrief.referencedProductIds ?? [];
+        if (referencedProductIds.length > 0) {
+          const selectedProducts = (
+            await Promise.all(
+              referencedProductIds.map((productId) =>
+                catalog.getProduct(productId),
+              ),
+            )
+          ).flatMap((result) => (result.ok ? [result.value] : []));
+          if (selectedProducts.length === 1) {
+            return completeTurn(turn, {
               status: "COMPLETED",
               conversationId: turn.conversationId,
-              message:
-                updatedCart.items.length === 0
-                  ? `Removed ${reference} from your Cart. Your Cart is now empty.`
-                  : `Removed ${reference} from your Cart.`,
+              message: `I can’t change your Cart. Use Add to Cart on ${selectedProducts[0].name} to add it yourself.`,
               intentBrief,
-              products: [],
-              cart: updatedCart,
-              ...(details?.cartItemRemovalUndo
-                ? { cartItemRemovalUndo: details.cartItemRemovalUndo }
-                : {}),
-            };
-            await turn.complete(outcome.message, outcome, transaction);
-            completedOutcome = outcome;
-          };
-          await options.cart.removeItem(
-            reference,
-            completeRemoval,
-            turn.idempotencyKey,
-          );
-          if (completedOutcome) return completedOutcome;
-          throw new Error("Atomic Cart completion was not invoked");
-        } catch (error) {
-          if (error instanceof CartError) {
-            return needsInputWithCurrentCart({
-              turn,
-              cart: options.cart,
-              intentBrief,
-              message: error.message,
-              question: "Which Cart Item would you like to remove?",
-              missingInformation: ["Unambiguous Cart Item"],
+              products: selectedProducts,
             });
           }
           return completeTurn(turn, {
-            status: "TEMPORARILY_UNAVAILABLE",
+            status: "NEEDS_INPUT",
             conversationId: turn.conversationId,
-            message: "I couldn't update your Cart right now. Please try again.",
-            retryable: true,
-            intentBrief,
-            products: [],
-          });
-        }
-      }
-      if (intentBrief.requestedEffects.includes("ADD_TO_CART")) {
-        const requestedAdditions = intentBrief.requestedAdditions;
-        const referencedProductIds =
-          requestedAdditions?.map(({ productId }) => productId) ??
-          intentBrief.referencedProductIds ??
-          [];
-        if (intentBrief.hasUnresolvedProductReferences) {
-          return needsInputWithCurrentCart({
-            turn,
-            cart: options.cart,
-            intentBrief,
             message:
-              "One requested Product is no longer in the latest Recommendation Set.",
-            question:
-              "Which current recommended Products would you like to add?",
-            missingInformation: ["Current Product references"],
-          });
-        }
-        if (intentBrief.hasConflictingCartRequest) {
-          return needsInputWithCurrentCart({
-            turn,
-            cart: options.cart,
+              "I can’t change your Cart. Choose a Product, then use its Add to Cart control.",
+            question: "Which Product did you mean?",
+            missingInformation: ["Unambiguous Product"],
             intentBrief,
-            message: "The requested Products and quantities do not match.",
-            question: "Which Products and quantities would you like to add?",
-            missingInformation: ["Consistent Product quantities"],
+            products: selectedProducts,
           });
         }
         let directlyMatchedProduct: CatalogProduct | undefined;
@@ -567,148 +269,44 @@ export function createCommerceAgent(
               products: [],
             });
           }
-          return needsInputWithCurrentCart({
-            turn,
-            cart: options.cart,
+          return completeTurn(turn, {
+            status: "NEEDS_INPUT",
+            conversationId: turn.conversationId,
             intentBrief,
-            message: "I found multiple Products matching that Cart request.",
-            question: "Which Product would you like to add?",
+            message:
+              "I can’t change your Cart. Choose a Product, then use its Add to Cart control.",
+            question: "Which Product did you mean?",
             missingInformation: ["Unambiguous Product"],
             products: directlyMatchedProducts,
           });
         }
         if (resolvesDirectRequest && directlyMatchedProducts.length === 0) {
-          try {
-            if (!options.cart) throw new Error("Cart capability unavailable");
-            const cart = await options.cart.inspect();
-            return completeTurn(turn, {
-              status: "COMPLETED",
-              conversationId: turn.conversationId,
-              message: "I couldn't find a Product matching that Cart request.",
-              intentBrief,
-              products: [],
-              cart,
-            });
-          } catch {
-            return completeTurn(turn, {
-              status: "TEMPORARILY_UNAVAILABLE",
-              conversationId: turn.conversationId,
-              message: "I couldn't read your Cart right now. Please try again.",
-              retryable: true,
-              intentBrief,
-              products: [],
-            });
-          }
+          return completeTurn(turn, {
+            status: "COMPLETED",
+            conversationId: turn.conversationId,
+            message: "I couldn't find a matching Product to present.",
+            intentBrief,
+            products: [],
+          });
+        }
+        if (directlyMatchedProduct) {
+          return completeTurn(turn, {
+            status: "COMPLETED",
+            conversationId: turn.conversationId,
+            message: `I can’t change your Cart. Use Add to Cart on ${directlyMatchedProduct.name} to add it yourself.`,
+            intentBrief,
+            products: [directlyMatchedProduct],
+          });
         }
         if (!directlyMatchedProduct && referencedProductIds.length === 0) {
-          return needsInputWithCurrentCart({
-            turn,
-            cart: options.cart,
+          return completeTurn(turn, {
+            status: "NEEDS_INPUT",
+            conversationId: turn.conversationId,
             intentBrief,
             message:
               "I need one specific Product from the latest Recommendations.",
-            question: "Which recommended Product would you like to add?",
+            question: "Which recommended Product did you mean?",
             missingInformation: ["Unambiguous Product"],
-          });
-        }
-        const quantity = intentBrief.requestedQuantity ?? 1;
-        const quantities = requestedAdditions?.map((item) => item.quantity) ?? [
-          quantity,
-        ];
-        const invalidQuantityIndex = quantities.findIndex(
-          (requested) =>
-            !Number.isInteger(requested) || requested < 1 || requested > 10,
-        );
-        if (invalidQuantityIndex !== -1) {
-          const invalidProductId = referencedProductIds[invalidQuantityIndex];
-          const invalidProductName =
-            directlyMatchedProduct?.name ??
-            resolvedContext.latestRecommendationSet.find(
-              ({ productId }) => productId === invalidProductId,
-            )?.name ??
-            "Product";
-          return needsInputWithCurrentCart({
-            turn,
-            cart: options.cart,
-            intentBrief,
-            message: `${invalidProductName} quantity must be between 1 and 10.`,
-            question: `How many units of ${invalidProductName} would you like, from 1 to 10?`,
-            missingInformation: ["Valid Cart quantity"],
-          });
-        }
-        try {
-          if (!options.cart) throw new Error("Cart capability unavailable");
-          const productResults = directlyMatchedProduct
-            ? [{ ok: true as const, value: directlyMatchedProduct }]
-            : await Promise.all(
-                referencedProductIds.map((productId) =>
-                  catalog.getProduct(productId),
-                ),
-              );
-          const selectedProducts = productResults.map(
-            (productResult, index) => {
-              if (!productResult.ok) {
-                const productId = referencedProductIds[index];
-                const productName =
-                  resolvedContext.latestRecommendationSet.find(
-                    (reference) => reference.productId === productId,
-                  )?.name ?? "Product";
-                throw new CartError(`${productName} is not available.`);
-              }
-              return productResult.value;
-            },
-          );
-          const additions = selectedProducts.map((product) => ({
-            product,
-            quantity:
-              requestedAdditions?.find((item) => item.productId === product.id)
-                ?.quantity ?? quantity,
-          }));
-          let completedOutcome: AgentOutcome | undefined;
-          const completeAddition: Parameters<CartModule["addItem"]>[2] = async (
-            updatedCart,
-            transaction,
-          ) => {
-            const outcome: AgentOutcome = {
-              status: "COMPLETED",
-              conversationId: turn.conversationId,
-              message: cartAdditionsMessage(additions, updatedCart),
-              intentBrief,
-              products: [],
-              cart: updatedCart,
-            };
-            await turn.complete(outcome.message, outcome, transaction);
-            completedOutcome = outcome;
-          };
-          if (additions.length === 1) {
-            await options.cart.addItem(
-              additions[0].product,
-              additions[0].quantity,
-              completeAddition,
-            );
-          } else {
-            await options.cart.addItems(additions, completeAddition);
-          }
-          if (completedOutcome) return completedOutcome;
-          throw new Error("Atomic Cart completion was not invoked");
-        } catch (error) {
-          if (error instanceof CartError) {
-            return needsInputWithCurrentCart({
-              turn,
-              cart: options.cart,
-              intentBrief,
-              message: error.message,
-              question:
-                "Would you like to choose a different Product or quantity?",
-              missingInformation: ["Valid Cart addition"],
-            });
-          }
-          return completeTurn(turn, {
-            status: "TEMPORARILY_UNAVAILABLE",
-            conversationId: turn.conversationId,
-            message: "I couldn't update your Cart right now. Please try again.",
-            retryable: true,
-            intentBrief,
             products: [],
           });
         }
@@ -833,99 +431,6 @@ function contextConflictOutcome(conversationId: string): AgentOutcome {
     retryable: true,
     products: [],
   };
-}
-
-function cartAdditionMessage(
-  quantity: number,
-  productName: string,
-  cart: Awaited<ReturnType<CartModule["addItem"]>>,
-): string {
-  const confirmation = `Added ${quantity} × ${productName} to your Cart.`;
-  const priceChange = cart.priceChanges?.[0];
-  if (!priceChange) return confirmation;
-  return `${confirmation} Its Cart Price ${priceChange.direction.toLowerCase()} from ${formatCartPrice(priceChange.previousCartPriceMinor, cart.currency)} to ${formatCartPrice(priceChange.currentCartPriceMinor, cart.currency)}.`;
-}
-
-function cartQuantityChangeMessage(
-  productName: string,
-  quantity: number,
-  cart: Awaited<ReturnType<CartModule["addItem"]>>,
-): string {
-  const confirmation = `Changed ${productName} quantity to ${quantity}.`;
-  const priceChange = cart.priceChanges?.[0];
-  if (!priceChange) return confirmation;
-  return `${confirmation} Its Cart Price ${priceChange.direction.toLowerCase()} from ${formatCartPrice(priceChange.previousCartPriceMinor, cart.currency)} to ${formatCartPrice(priceChange.currentCartPriceMinor, cart.currency)}.`;
-}
-
-function cartAdditionsMessage(
-  additions: Array<{ product: CatalogProduct; quantity: number }>,
-  cart: Awaited<ReturnType<CartModule["addItem"]>>,
-): string {
-  if (additions.length === 1) {
-    const [{ product, quantity }] = additions;
-    return cartAdditionMessage(quantity, product.name, cart);
-  }
-  const selections = additions.map(
-    ({ product, quantity }) => `${quantity} × ${product.name}`,
-  );
-  const confirmation = `Added ${selections.slice(0, -1).join(", ")} and ${selections.at(-1)} to your Cart.`;
-  if (!cart.priceChanges?.length) return confirmation;
-  const productNames = new Map(
-    additions.map(({ product }) => [product.id, product.name]),
-  );
-  const changes = cart.priceChanges.map((change) => {
-    return `${productNames.get(change.productId) ?? "Product"} ${change.direction.toLowerCase()} from ${formatCartPrice(change.previousCartPriceMinor, cart.currency)} to ${formatCartPrice(change.currentCartPriceMinor, cart.currency)}`;
-  });
-  return `${confirmation} Cart Price changes: ${changes.join("; ")}.`;
-}
-
-function formatCartPrice(priceMinor: number, currency: string): string {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency,
-  }).format(priceMinor / 100);
-}
-
-async function needsInputWithCurrentCart({
-  turn,
-  cart,
-  intentBrief,
-  message,
-  question,
-  missingInformation,
-  products,
-}: {
-  turn: AgentTurn;
-  cart: CartModule | undefined;
-  intentBrief: IntentBrief;
-  message: string;
-  question: string;
-  missingInformation: string[];
-  products?: CatalogProduct[];
-}): Promise<AgentOutcome> {
-  try {
-    if (!cart) throw new Error("Cart capability unavailable");
-    const currentCart = await cart.inspect();
-    return completeTurn(turn, {
-      status: "NEEDS_INPUT",
-      conversationId: turn.conversationId,
-      message,
-      question,
-      missingInformation,
-      intentBrief,
-      products: products ?? [],
-      cart: currentCart,
-    });
-  } catch {
-    return completeTurn(turn, {
-      status: "TEMPORARILY_UNAVAILABLE",
-      conversationId: turn.conversationId,
-      message: "I couldn't read your Cart right now. Please try again.",
-      retryable: true,
-      intentBrief,
-      products: [],
-    });
-  }
 }
 
 function resolveCapabilities({

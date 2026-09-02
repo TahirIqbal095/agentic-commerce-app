@@ -5,13 +5,20 @@ import { useReducedMotion } from "motion/react";
 import { Button } from "@/components/ui/button";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
 import { ProductCard } from "./product-card";
+import type { CartFeedback } from "./types";
 
 export function RecommendationCarousel({
   products,
   onViewProduct,
+  onAddProduct,
+  addingProductIds,
+  cartFeedback,
 }: {
   products: CatalogProduct[];
   onViewProduct: (product: CatalogProduct) => void;
+  onAddProduct: (product: CatalogProduct) => void;
+  addingProductIds: ReadonlySet<string>;
+  cartFeedback: Record<string, CartFeedback>;
 }) {
   const viewportRef = useRef<HTMLElement>(null);
   const reduceMotion = useReducedMotion();
@@ -88,6 +95,9 @@ export function RecommendationCarousel({
               product={product}
               index={index}
               onView={() => onViewProduct(product)}
+              onAdd={() => onAddProduct(product)}
+              isAdding={addingProductIds.has(product.id)}
+              cartFeedback={cartFeedback[product.id]}
             />
           </div>
         ))}

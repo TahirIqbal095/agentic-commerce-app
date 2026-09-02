@@ -42,6 +42,22 @@ export function createPostHandler(createAgent: AgentFactory) {
       );
     }
 
+    const identityField = Object.keys(body).find((field) =>
+      /^(?:(?:user|customer|admin|brandAdmin)(?:Id|Identifier)|(?:user|customer|admin|brand_admin)_id)$/.test(
+        field,
+      ),
+    );
+    if (identityField) {
+      return errorResponse(
+        {
+          code: "INVALID_IDENTITY_FIELD",
+          message: "Runtime identity fields are not accepted.",
+          details: { field: identityField },
+        },
+        400,
+      );
+    }
+
     const conversationId =
       "conversationId" in body ? body.conversationId : undefined;
     if (

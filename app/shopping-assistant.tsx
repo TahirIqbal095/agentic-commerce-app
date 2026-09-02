@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { Composer } from "./_components/shopping-assistant/composer";
+import type { CartLoadState } from "./_components/shopping-assistant/cart-drawer";
+import type { CartItemCommand } from "./_components/shopping-assistant/cart-panel";
 import { ContextSummary } from "./_components/shopping-assistant/context-summary";
 import { Header } from "./_components/shopping-assistant/header";
 import { Hero } from "./_components/shopping-assistant/hero";
@@ -10,46 +12,93 @@ import { ProductDetails } from "./_components/shopping-assistant/product-details
 import { ResultArea } from "./_components/shopping-assistant/result-area";
 import type {
   AgentResult,
-  ConversationTurn,
+  CartFeedback,
+  CustomerActionEntry,
+  TranscriptEntry,
   CurrentConversation,
 } from "./_components/shopping-assistant/types";
+import { isCustomerActionEntry } from "@/modules/agent/customer-action-entry";
+import { formatMoney } from "@/lib/format-money";
 import { cn } from "@/lib/utils";
+import type { CartView } from "@/modules/cart/cart";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
 import type {
   ProductConstraintKey,
   ShoppingIntent,
 } from "@/modules/agent/intent";
-import type {
-  CartItemRemovalUndo,
-  CartQuantityChange,
-  CartView,
-} from "@/modules/cart/cart";
-import type { CartControlCommand } from "@/modules/cart/cart-control-command";
 
 type AgentApiResponse = { data: AgentResult } | { error: { message: string } };
-type ConversationApiResponse =
-  | { data: CurrentConversation | null }
+
+type CheckoutReadinessApiResponse =
+  | { data: CustomerActionEntry }
   | { error: { message: string } };
-function latestInspectedCart(turns: ConversationTurn[]): CartView | null {
-  const cart = [...turns]
-    .reverse()
-    .find((turn) => turn.result?.cart && "items" in turn.result.cart)
-    ?.result?.cart;
-  return cart && "items" in cart ? cart : null;
+
+type CartApiResponse =
+  | { data: CartView }
+  | {
+      error: { code?: string; message: string; details?: { cart?: CartView } };
+    };
+
+/**
+ * Whether the authority decided this Cart command.
+ *
+ * A rejected command was read and refused, so its idempotency key is spent. A
+ * server failure leaves the outcome unknown, so the key must survive for a
+ * retry.
+ */
+function authorityAnsweredCommand(response: Response) {
+  return response.status < 500;
+}
+
+/**
+ * A Cart command the authority refused, carrying whether its answer already
+ * replaced the displayed Cart. When it did, the Storefront must not read the
+ * Cart again to recover.
+ */
+class CartCommandRejection extends Error {
+  constructor(
+    message: string,
+    readonly cartWasReconciled: boolean,
+  ) {
+    super(message);
+    this.name = "CartCommandRejection";
+  }
+}
+
+/**
+ * Whether this Transcript entry is the Conversation Turn awaiting `turnId`.
+ *
+ * A Customer Action Entry shares the Transcript but never carries a Turn
+ * result, so it is left untouched when a Turn resolves.
+ */
+function isTurn(
+  entry: TranscriptEntry,
+  turnId: string,
+): entry is Extract<TranscriptEntry, { customerMessage: string }> {
+  return entry.id === turnId && !isCustomerActionEntry(entry);
+}
+
+function wasReconciled(requestError: unknown) {
+  return (
+    requestError instanceof CartCommandRejection &&
+    requestError.cartWasReconciled
+  );
 }
 
 export function ShoppingAssistant({
   brandName,
   initialConversation = null,
+  resumeConversation = false,
 }: {
   brandName: string;
   initialConversation?: CurrentConversation | null;
+  resumeConversation?: boolean;
 }) {
   const [prompt, setPrompt] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(
     initialConversation?.conversationId ?? null,
   );
-  const [turns, setTurns] = useState<ConversationTurn[]>(
+  const [entries, setEntries] = useState<TranscriptEntry[]>(
     initialConversation?.transcript ?? [],
   );
   const [contextSummary, setContextSummary] = useState<ShoppingIntent | null>(
@@ -59,19 +108,125 @@ export function ShoppingAssistant({
   const [selectedProduct, setSelectedProduct] = useState<CatalogProduct | null>(
     null,
   );
-  const [cartQuantity, setCartQuantity] = useState(() => {
-    const latestCart = [...(initialConversation?.transcript ?? [])]
-      .reverse()
-      .find((turn) => turn.result?.cart)?.result?.cart;
-    return latestCart?.totalQuantity ?? 0;
-  });
-  const [pendingCartCommand, setPendingCartCommand] = useState<{
-    productId?: string;
-  } | null>(null);
-  const [cartCommandError, setCartCommandError] = useState<{
-    productId: string;
-    message: string;
-  } | null>(null);
+  const [cart, setCart] = useState<CartView | null>(null);
+  const [cartState, setCartState] = useState<CartLoadState>(
+    resumeConversation ? "loading" : "error",
+  );
+  const [addingProductIds, setAddingProductIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [cartFeedback, setCartFeedback] = useState<
+    Record<string, CartFeedback>
+  >({});
+  const [pendingCartCommands, setPendingCartCommands] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [cartItemFeedback, setCartItemFeedback] = useState<
+    Record<string, string>
+  >({});
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const mutationKeys = useRef(new Map<string, string>());
+
+  /**
+   * Returns the idempotency key for one logical Cart command.
+   *
+   * The key is minted once per command and kept until the authority answers, so
+   * a Customer retrying a failed or timed-out command replays it instead of
+   * applying it a second time.
+   */
+  function mutationKeyFor(commandKey: string) {
+    const existing = mutationKeys.current.get(commandKey);
+    if (existing) return existing;
+    const issued = crypto.randomUUID();
+    mutationKeys.current.set(commandKey, issued);
+    return issued;
+  }
+
+  /**
+   * Retires the idempotency key once the authority has answered the command,
+   * whether it applied the command or rejected it. A later command is a new
+   * Customer action and receives its own key.
+   */
+  function releaseMutationKey(commandKey: string) {
+    mutationKeys.current.delete(commandKey);
+  }
+
+  /**
+   * Adopts an authoritative Cart returned by a successful read or command.
+   *
+   * Responses can arrive out of order, so a Cart older than the one already
+   * displayed is discarded rather than shown as current.
+   */
+  function replaceCartFromAuthority(nextCart: CartView) {
+    setCart((current) =>
+      current && current.version > nextCart.version ? current : nextCart,
+    );
+    setCartState("ready");
+  }
+
+  /**
+   * Adopts the Cart carried by a rejected command.
+   *
+   * The authority read this Cart while refusing the command, so it replaces the
+   * drawer and badge unconditionally — including when another tab emptied the
+   * Cart and lowered its version.
+   */
+  function recoverCartFromConflict(latestCart: CartView) {
+    setCart(latestCart);
+    setCartState("ready");
+  }
+
+  async function reloadCartFromAuthority() {
+    try {
+      const response = await fetch("/api/cart");
+      if (!response.ok) return false;
+      const payload = (await response.json()) as { data: CartView };
+      replaceCartFromAuthority(payload.data);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  useEffect(() => {
+    if (!resumeConversation) return;
+    let active = true;
+    void fetch("/api/agent/conversation")
+      .then(async (response) => {
+        if (!response.ok) return null;
+        const payload = (await response.json()) as {
+          data: CurrentConversation | null;
+        };
+        return payload.data;
+      })
+      .then((conversation) => {
+        if (!active || !conversation) return;
+        setConversationId(conversation.conversationId);
+        setEntries(conversation.transcript);
+        setContextSummary(conversation.contextSummary);
+      })
+      .catch(() => {});
+    void fetch("/api/cart")
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Cart unavailable");
+        const payload = (await response.json()) as {
+          data: CartView;
+        };
+        return payload.data;
+      })
+      .then((cart) => {
+        if (!active) return;
+        replaceCartFromAuthority(cart);
+      })
+      .catch(() => {
+        if (active) setCartState("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [resumeConversation]);
 
   async function submitPrompt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -83,9 +238,8 @@ export function ShoppingAssistant({
 
   async function sendMessage(message: string) {
     const turnId = crypto.randomUUID();
-    setCartCommandError(null);
-    setTurns((currentTurns) => [
-      ...currentTurns,
+    setEntries((currentEntries) => [
+      ...currentEntries,
       { id: turnId, customerMessage: message, result: null, error: null },
     ]);
     setIsLoading(true);
@@ -110,16 +264,16 @@ export function ShoppingAssistant({
         );
       }
 
-      setTurns((currentTurns) =>
-        currentTurns.map((turn) =>
-          turn.id === turnId ? { ...turn, result: payload.data } : turn,
+      setEntries((currentEntries) =>
+        currentEntries.map((entry) =>
+          isTurn(entry, turnId) ? { ...entry, result: payload.data } : entry,
         ),
       );
       if (payload.data.conversationId) {
         setConversationId(payload.data.conversationId);
       }
-      if (payload.data.cart) {
-        setCartQuantity(payload.data.cart.totalQuantity);
+      if (payload.data.cart && "items" in payload.data.cart) {
+        replaceCartFromAuthority(payload.data.cart);
       }
       const nextSummary =
         payload.data.intentBrief?.constraints ?? payload.data.intent;
@@ -129,9 +283,9 @@ export function ShoppingAssistant({
         requestError instanceof Error
           ? requestError.message
           : "The assistant could not respond.";
-      setTurns((currentTurns) =>
-        currentTurns.map((turn) =>
-          turn.id === turnId ? { ...turn, error: message } : turn,
+      setEntries((currentEntries) =>
+        currentEntries.map((entry) =>
+          isTurn(entry, turnId) ? { ...entry, error: message } : entry,
         ),
       );
     } finally {
@@ -154,150 +308,6 @@ export function ShoppingAssistant({
     void sendMessage(messages[key]);
   }
 
-  async function removeCartItem(productId: string) {
-    if (!conversationId || pendingCartCommand) return;
-    const currentCart = latestInspectedCart(turns);
-    const item = currentCart && "items" in currentCart
-      ? currentCart.items.find((candidate) => candidate.productId === productId)
-      : undefined;
-    if (!item) return;
-
-    await submitCartCommand({
-      command: { type: "REMOVE_CART_ITEM", productId },
-      customerMessage: `Remove ${item.productName} from my Cart`,
-      fallbackMessage: "The Cart Item could not be removed.",
-      productId,
-    });
-  }
-
-  async function undoCartItemRemoval(undo: CartItemRemovalUndo) {
-    if (!conversationId || pendingCartCommand) return;
-    await submitCartCommand({
-      command: { type: "UNDO_CART_ITEM_REMOVAL", removalId: undo.removalId },
-      customerMessage: "Undo the recent Cart Item Removal",
-      fallbackMessage: `${undo.productName} could not be restored.`,
-    });
-  }
-
-  async function changeCartItemQuantity(
-    productId: string,
-    change: CartQuantityChange,
-  ) {
-    if (!conversationId || pendingCartCommand) return;
-    const currentCart = latestInspectedCart(turns);
-    const item = currentCart && "items" in currentCart
-      ? currentCart.items.find((candidate) => candidate.productId === productId)
-      : undefined;
-    if (!item) return;
-
-    const customerMessage = change.mode === "RELATIVE"
-      ? `${change.quantity > 0 ? "Increase" : "Decrease"} ${item.productName} quantity by ${Math.abs(change.quantity)}`
-      : `Set ${item.productName} quantity to ${change.quantity}`;
-    await submitCartCommand({
-      command: { type: "CHANGE_CART_ITEM_QUANTITY", productId, ...change },
-      customerMessage,
-      fallbackMessage: "The Cart Item quantity could not be changed.",
-      productId,
-    });
-  }
-
-  async function clearCart() {
-    if (!conversationId || pendingCartCommand) return;
-    if (!window.confirm("Clear every Cart Item?")) return;
-
-    await submitCartCommand({
-      command: { type: "CLEAR_CART" },
-      customerMessage: "Clear my Cart",
-      fallbackMessage: "The Cart could not be cleared.",
-    });
-  }
-
-  async function submitCartCommand({
-    command,
-    customerMessage,
-    fallbackMessage,
-    productId,
-  }: {
-    command: CartControlCommand;
-    customerMessage: string;
-    fallbackMessage: string;
-    productId?: string;
-  }) {
-    if (!conversationId || pendingCartCommand) return;
-    const turnId = crypto.randomUUID();
-    setCartCommandError(null);
-    setPendingCartCommand(productId ? { productId } : {});
-    setTurns((currentTurns) => [
-      ...currentTurns,
-      { id: turnId, customerMessage, result: null, error: null },
-    ]);
-    try {
-      const response = await fetch("/api/agent/cart-command", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ conversationId, idempotencyKey: turnId, command }),
-      });
-      const payload = (await response.json()) as AgentApiResponse;
-      if (!response.ok || !("data" in payload)) {
-        throw new Error("error" in payload ? payload.error.message : fallbackMessage);
-      }
-      setTurns((currentTurns) =>
-        currentTurns.map((turn) =>
-          turn.id === turnId ? { ...turn, result: payload.data } : turn,
-        ),
-      );
-      if (payload.data.cart) setCartQuantity(payload.data.cart.totalQuantity);
-    } catch (requestError) {
-      const message = requestError instanceof Error
-        ? requestError.message
-        : fallbackMessage;
-      const restoredConversation = await loadCurrentConversation();
-      if (restoredConversation) {
-        setConversationId(restoredConversation.conversationId);
-        setContextSummary(restoredConversation.contextSummary);
-        const restoredCart = latestInspectedCart(restoredConversation.transcript);
-        if (restoredCart) setCartQuantity(restoredCart.totalQuantity);
-        const persistedTurn = restoredConversation.transcript.find(
-          (turn) => turn.idempotencyKey === turnId,
-        );
-        const commandWasPersisted = Boolean(
-          persistedTurn &&
-          (persistedTurn.result !== null || persistedTurn.error !== null),
-        );
-        if (commandWasPersisted) {
-          setTurns(restoredConversation.transcript);
-        } else if (productId) {
-          setTurns(restoredConversation.transcript);
-          setCartCommandError({ productId, message });
-        } else {
-          setTurns([
-            ...restoredConversation.transcript,
-            { id: turnId, customerMessage, result: null, error: message },
-          ]);
-        }
-      } else {
-        if (productId) setCartCommandError({ productId, message });
-        setTurns((currentTurns) =>
-          currentTurns.map((turn) =>
-            turn.id === turnId ? { ...turn, error: message } : turn,
-          ),
-        );
-      }
-    } finally {
-      setPendingCartCommand(null);
-    }
-  }
-
-  async function loadCurrentConversation(): Promise<CurrentConversation | null> {
-    try {
-      const response = await fetch("/api/agent/conversation");
-      const payload = (await response.json()) as ConversationApiResponse;
-      return response.ok && "data" in payload ? payload.data : null;
-    } catch {
-      return null;
-    }
-  }
-
   async function startNewConversation() {
     if (isLoading) return;
     const response = await fetch("/api/agent/conversation", {
@@ -305,10 +315,204 @@ export function ShoppingAssistant({
     });
     if (!response.ok) return;
     setConversationId(null);
-    setTurns([]);
+    setEntries([]);
     setContextSummary(null);
     setSelectedProduct(null);
   }
+
+  /**
+   * Sends one explicit Cart command and adopts the authority's answer.
+   *
+   * The command carries its idempotency key and the displayed Cart version. A
+   * refusal that carries the authoritative Cart replaces the displayed Cart —
+   * unconditionally for a conflict, which is the latest Cart by definition, and
+   * subject to the version guard for a rule the Customer can correct.
+   *
+   * @returns The authoritative Cart the command produced.
+   * @throws {CartCommandRejection} When the authority refused the command.
+   */
+  async function sendCartCommand(
+    method: "POST" | "PATCH" | "DELETE",
+    commandKey: string,
+    command: { type: string; productId: string },
+    refusalMessage: string,
+  ): Promise<CartView> {
+    const response = await fetch("/api/cart", {
+      method,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...command,
+        mutationKey: mutationKeyFor(commandKey),
+        expectedVersion: cart?.version ?? 0,
+      }),
+    });
+    const payload = (await response.json()) as CartApiResponse;
+
+    if (!response.ok || !("data" in payload)) {
+      if (authorityAnsweredCommand(response)) releaseMutationKey(commandKey);
+      const refusal = "error" in payload ? payload.error : null;
+      const latestCart = refusal?.details?.cart;
+      if (latestCart) {
+        if (refusal?.code === "CART_CONFLICT") {
+          recoverCartFromConflict(latestCart);
+        } else {
+          replaceCartFromAuthority(latestCart);
+        }
+      }
+      throw new CartCommandRejection(
+        refusal?.message ?? refusalMessage,
+        latestCart !== undefined,
+      );
+    }
+
+    releaseMutationKey(commandKey);
+    replaceCartFromAuthority(payload.data);
+    return payload.data;
+  }
+
+  async function addProduct(product: CatalogProduct) {
+    if (addingProductIds.has(product.id)) return;
+    const refusalMessage = `${product.name} could not be added.`;
+    setAddingProductIds((current) => new Set(current).add(product.id));
+    setCartFeedback((current) => {
+      const next = { ...current };
+      delete next[product.id];
+      return next;
+    });
+
+    try {
+      const appliedCart = await sendCartCommand(
+        "POST",
+        `${product.id}:add`,
+        { type: "ADD_PRODUCT", productId: product.id },
+        refusalMessage,
+      );
+      const item = appliedCart.items.find(
+        (cartItem) => cartItem.productId === product.id,
+      );
+      setCartFeedback((current) => ({
+        ...current,
+        [product.id]: {
+          kind: "success",
+          message: `${product.name} quantity: ${item?.quantity ?? 0}. Cart subtotal: ${formatMoney(appliedCart.subtotalMinor, appliedCart.currency)}.`,
+        },
+      }));
+    } catch (requestError) {
+      if (!wasReconciled(requestError)) {
+        const reloaded = await reloadCartFromAuthority();
+        if (!reloaded && !cart) setCartState("error");
+      }
+      setCartFeedback((current) => ({
+        ...current,
+        [product.id]: {
+          kind: "error",
+          message:
+            requestError instanceof Error
+              ? requestError.message
+              : refusalMessage,
+        },
+      }));
+    } finally {
+      setAddingProductIds((current) => {
+        const next = new Set(current);
+        next.delete(product.id);
+        return next;
+      });
+    }
+  }
+
+  async function changeCartItem(productId: string, command: CartItemCommand) {
+    const pendingKey = `${productId}:${command}`;
+    if (pendingCartCommands.has(pendingKey)) return;
+    const refusalMessage = "The Cart Item could not be changed.";
+    setPendingCartCommands((current) => new Set(current).add(pendingKey));
+    setCartItemFeedback((current) => {
+      const next = { ...current };
+      delete next[productId];
+      return next;
+    });
+
+    try {
+      await sendCartCommand(
+        command === "remove" ? "DELETE" : "PATCH",
+        pendingKey,
+        {
+          type:
+            command === "increment"
+              ? "INCREMENT_ITEM"
+              : command === "decrement"
+                ? "DECREMENT_ITEM"
+                : "REMOVE_ITEM",
+          productId,
+        },
+        refusalMessage,
+      );
+    } catch (requestError) {
+      if (!wasReconciled(requestError)) {
+        await reloadCartFromAuthority();
+      }
+      setCartItemFeedback((current) => ({
+        ...current,
+        [productId]:
+          requestError instanceof Error ? requestError.message : refusalMessage,
+      }));
+    } finally {
+      setPendingCartCommands((current) => {
+        const next = new Set(current);
+        next.delete(pendingKey);
+        return next;
+      });
+    }
+  }
+
+  /**
+   * Reviews the authoritative Cart for Checkout Readiness.
+   *
+   * The review is deterministic: it never reaches the Commerce Agent, never
+   * changes the Cart, and shows nothing until the authority answers. A
+   * successful review appends the recorded Customer Action Entry to the
+   * Transcript and closes the drawer so the Customer sees the card it produced.
+   */
+  async function reviewCheckoutReadiness() {
+    if (isReviewing) return;
+    setIsReviewing(true);
+    setReviewError(null);
+
+    try {
+      const response = await fetch("/api/cart/checkout-readiness", {
+        method: "POST",
+      });
+      const payload = (await response.json()) as CheckoutReadinessApiResponse;
+      if (!response.ok || !("data" in payload)) {
+        throw new Error(
+          "error" in payload
+            ? payload.error.message
+            : "The Cart could not be reviewed.",
+        );
+      }
+      setEntries((currentEntries) => [...currentEntries, payload.data]);
+      replaceCartFromAuthority(payload.data.readiness.cart);
+      setIsCartOpen(false);
+    } catch {
+      setReviewError(
+        "The Cart could not be reviewed for checkout. Try again shortly.",
+      );
+    } finally {
+      setIsReviewing(false);
+    }
+  }
+
+  /**
+   * The deterministic Cart Item controls, shared by every surface that may
+   * change the Cart. The Cart drawer and a blocked readiness card offer the
+   * same commands, so correcting a blocker is the Customer action it already
+   * was rather than a second, readiness-only path into the Cart.
+   */
+  const cartControls = {
+    onCommand: changeCartItem,
+    pendingCommands: pendingCartCommands,
+    itemFeedback: cartItemFeedback,
+  };
 
   return (
     <main className="min-h-screen bg-[#f4f1eb] text-[#1d2a24]">
@@ -323,18 +527,27 @@ export function ShoppingAssistant({
       <div className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 pb-52 pt-5 sm:px-8 sm:pb-56 sm:pt-7">
         <Header
           brandName={brandName}
-          cartQuantity={cartQuantity}
-          hasConversation={turns.length > 0}
+          cart={cart}
+          cartState={cartState}
+          hasConversation={entries.length > 0}
           onNewConversation={startNewConversation}
+          cartControls={cartControls}
+          checkoutReadiness={{
+            onReview: reviewCheckoutReadiness,
+            isReviewing,
+            error: reviewError,
+          }}
+          isCartOpen={isCartOpen}
+          onCartOpenChange={setIsCartOpen}
         />
 
         <div
           className={cn(
             "mx-auto flex w-full max-w-4xl flex-1 flex-col py-14 sm:py-20",
-            turns.length === 0 ? "justify-center" : "justify-start",
+            entries.length === 0 ? "justify-center" : "justify-start",
           )}
         >
-          {turns.length === 0 ? (
+          {entries.length === 0 ? (
             <Hero brandName={brandName} onSuggestion={setPrompt} />
           ) : (
             <>
@@ -347,18 +560,13 @@ export function ShoppingAssistant({
               ) : null}
               <ResultArea
                 isLoading={isLoading}
-                cartCommandPending={Boolean(pendingCartCommand)}
-                cartCommandError={cartCommandError}
-                onDiscoverProducts={() => void sendMessage("Show me Products")}
-                onRemoveCartItem={(productId) => void removeCartItem(productId)}
-                onUndoCartItemRemoval={(undo) =>
-                  void undoCartItemRemoval(undo)}
-                onChangeCartItemQuantity={(productId, change) =>
-                  void changeCartItemQuantity(productId, change)}
-                onClearCart={() => void clearCart()}
                 onViewProduct={setSelectedProduct}
-                pendingCartProductId={pendingCartCommand?.productId ?? null}
-                turns={turns}
+                onAddProduct={addProduct}
+                addingProductIds={addingProductIds}
+                cartFeedback={cartFeedback}
+                entries={entries}
+                currentCart={cart}
+                cartControls={cartControls}
               />
             </>
           )}
@@ -369,6 +577,9 @@ export function ShoppingAssistant({
         <ProductDetails
           product={selectedProduct}
           onClose={() => setSelectedProduct(null)}
+          onAdd={() => addProduct(selectedProduct)}
+          isAdding={addingProductIds.has(selectedProduct.id)}
+          cartFeedback={cartFeedback[selectedProduct.id]}
         />
       ) : null}
 

@@ -3,23 +3,24 @@ import {
   check,
   index,
   integer,
+  jsonb,
   pgTable,
-  timestamp,
+  text,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 import { products } from "./catalog";
 import { createdAt, currency, id, money, updatedAt } from "./columns";
 import { cartStatusEnum } from "./enums";
-import { users } from "./identity";
+import { guestSessions } from "./identity";
 
 export const carts = pgTable(
   "carts",
   {
     id: id(),
-    userId: uuid("user_id")
+    guestSessionId: uuid("guest_session_id")
       .notNull()
-      .references(() => users.id, { onDelete: "restrict" }),
+      .references(() => guestSessions.id, { onDelete: "cascade" }),
     status: cartStatusEnum("status").notNull().default("ACTIVE"),
     currency: currency(),
     version: integer("version").notNull().default(1),
@@ -28,9 +29,10 @@ export const carts = pgTable(
   },
   (table) => [
     uniqueIndex("carts_one_active_per_customer")
-      .on(table.userId)
+      .on(table.guestSessionId)
       .where(sql`${table.status} = 'ACTIVE'`),
-    index("carts_user_idx").on(table.userId),
+    index("carts_guest_session_idx").on(table.guestSessionId),
+    check("carts_currency_inr", sql`${table.currency} = 'INR'`),
     check("carts_version_positive", sql`${table.version} > 0`),
   ],
 );
@@ -67,31 +69,30 @@ export const cartItems = pgTable(
   ],
 );
 
-export const cartItemRemovals = pgTable(
-  "cart_item_removals",
+export const cartMutations = pgTable(
+  "cart_mutations",
   {
-    id: uuid("id").primaryKey(),
-    cartId: uuid("cart_id")
+    id: id(),
+    guestSessionId: uuid("guest_session_id")
       .notNull()
-      .references(() => carts.id, { onDelete: "cascade" }),
+      .references(() => guestSessions.id, { onDelete: "cascade" }),
+    mutationKey: uuid("mutation_key").notNull(),
+    commandType: text("command_type").notNull(),
     productId: uuid("product_id")
       .notNull()
       .references(() => products.id, { onDelete: "restrict" }),
-    quantity: integer("quantity").notNull(),
-    unitPriceSnapshotMinor: money("unit_price_snapshot_minor"),
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    restoredAt: timestamp("restored_at", { withTimezone: true }),
+    result: jsonb("result").notNull(),
     createdAt: createdAt(),
   },
   (table) => [
-    index("cart_item_removals_cart_idx").on(table.cartId),
-    check(
-      "cart_item_removals_quantity_range",
-      sql`${table.quantity} between 1 and 10`,
+    uniqueIndex("cart_mutations_guest_key_unique").on(
+      table.guestSessionId,
+      table.mutationKey,
     ),
+    index("cart_mutations_guest_session_idx").on(table.guestSessionId),
     check(
-      "cart_item_removals_snapshot_nonnegative",
-      sql`${table.unitPriceSnapshotMinor} >= 0`,
+      "cart_mutations_command_type_valid",
+      sql`${table.commandType} in ('ADD_PRODUCT', 'INCREMENT_ITEM', 'DECREMENT_ITEM', 'REMOVE_ITEM')`,
     ),
   ],
 );

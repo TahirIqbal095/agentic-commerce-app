@@ -2,8 +2,8 @@
 
 A reusable agentic commerce Storefront for exactly one Brand per deployment.
 The Commerce Agent helps Customers discover the Brand's Products, manage a
-Cart, approve exact checkout terms, place an Order, and pay through the Brand's
-connected Payment Account.
+Cart, and prepare for a future checkout flow. Checkout, Orders, and payments
+are not implemented in the current scope.
 
 This application is not a Marketplace. Supporting multiple Brands, sellers, or
 shared commerce data in one deployment is intentionally out of scope.
@@ -23,17 +23,16 @@ The database must contain exactly one Brand. Storefront APIs fail with a
 configuration error when the Brand record is missing; clients and models cannot
 select a different Brand.
 
-Conversations resolve the current User on the server. Set `USER_ID` to the User
-UUID. It can be omitted when the database contains exactly one User.
-
-Cart actions resolve a Customer from `CUSTOMER_ID`. It can be omitted when the
-database contains exactly one User. The demo seed creates a Customer, Arc, and
-Arc's Product Catalog.
+The demo seed creates Arc and its INR-only Product Catalog. A browser-scoped
+Guest Session owns each Customer's Conversation and Cart. The server lazily
+issues a secure, HTTP-only `guest_session` cookie on the first state-changing
+request; Catalog browsing creates no Guest Session.
 
 The Catalog endpoints are:
 
 - `GET /api/products`
 - `GET /api/products/:productId`
+- `GET /api/cart`
 
 ## Commerce Agent
 
@@ -69,7 +68,7 @@ The same endpoint accepts explicit Cart requests:
 }
 ```
 
-Customers can inspect the Cart, add identified Products, change Cart Item
-quantities relatively or exactly, and explicitly remove a named Cart Item
-through the same endpoint. Checkout preparation, Order, Brand Payment Account,
-and captured-payment capabilities remain planned.
+Cart inspection and one-Product additions are implemented. Product prices are
+immutable and Cart Prices remain stable. Checkout behavior is planned from the
+future Checkout Readiness boundary; no speculative checkout or payment schema
+is retained.

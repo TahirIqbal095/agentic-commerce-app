@@ -92,39 +92,18 @@ test("returns an INSPECT_CART effect for a conversational Cart-inspection reques
   );
 });
 
-test("returns an explicit standalone Cart clearing operation", async () => {
-  const clearing = {
-    goal: "Clear the Cart",
+test("resolves a conversational Add request as a read-only Product presentation", async () => {
+  const productPresentation = {
+    goal: "Present a recommended Product with its Add control",
     constraintDelta: { set: {}, clear: [] },
     knownEntities: [],
     missingInformation: [],
     confidence: 0.99,
-    requestedEffects: ["CLEAR_CART"],
-    requestedCartMutations: [{ type: "CLEAR" }],
-  };
-  const analyzer = createAiIntentAnalyzer(new MockLanguageModelV4({
-    doGenerate: async () => modelResponse(clearing),
-  }));
-
-  assert.deepEqual(await analyzer.analyze({
-    context: createEmptyConversationContext(),
-    message: "Clear my Cart",
-  }), clearing);
-});
-
-test("returns an explicit Cart quantity for application validation", async () => {
-  const explicitQuantity = {
-    goal: "Add a recommended Product",
-    constraintDelta: { set: {}, clear: [] },
-    knownEntities: [],
-    missingInformation: [],
-    confidence: 0.99,
-    requestedEffects: ["ADD_TO_CART"],
+    requestedEffects: ["PRESENT_ADD_CONTROLS"],
     referencedProductIds: ["71000000-0000-4000-8000-000000000001"],
-    requestedQuantity: 2,
   };
   const model = new MockLanguageModelV4({
-    doGenerate: async () => modelResponse(explicitQuantity),
+    doGenerate: async () => modelResponse(productPresentation),
   });
 
   const analyzer = createAiIntentAnalyzer(model);
@@ -134,142 +113,8 @@ test("returns an explicit Cart quantity for application validation", async () =>
       context: createEmptyConversationContext(),
       message: "Add two of the first one",
     }),
-    explicitQuantity,
+    productPresentation,
   );
-});
-
-test("returns an explicit Cart Item Removal reference", async () => {
-  const removal = {
-    goal: "Remove a Cart Item",
-    constraintDelta: { set: {}, clear: [] },
-    knownEntities: [{ type: "PRODUCT", value: "Trail One" }],
-    missingInformation: [],
-    confidence: 0.99,
-    requestedEffects: ["REMOVE_FROM_CART"],
-    requestedCartItemReference: "Trail One",
-  };
-  const model = new MockLanguageModelV4({
-    doGenerate: async () => modelResponse(removal),
-  });
-
-  const analyzer = createAiIntentAnalyzer(model);
-
-  assert.deepEqual(
-    await analyzer.analyze({
-      context: createEmptyConversationContext(),
-      message: "Remove Trail One from my Cart",
-    }),
-    removal,
-  );
-});
-
-test("returns a relative Cart Quantity Change", async () => {
-  const change = {
-    goal: "Increase a Cart Item quantity",
-    constraintDelta: { set: {}, clear: [] },
-    knownEntities: [{ type: "PRODUCT", value: "Trail One" }],
-    missingInformation: [],
-    confidence: 0.99,
-    requestedEffects: ["CHANGE_CART_QUANTITY"],
-    requestedCartItemReference: "Trail One",
-    requestedCartQuantityChange: { mode: "RELATIVE", quantity: 1 },
-  };
-  const analyzer = createAiIntentAnalyzer(new MockLanguageModelV4({
-    doGenerate: async () => modelResponse(change),
-  }));
-
-  assert.deepEqual(await analyzer.analyze({
-    context: createEmptyConversationContext(),
-    message: "Add one more Trail One",
-  }), change);
-});
-
-test("returns an exact Cart Quantity Change", async () => {
-  const change = {
-    goal: "Set a Cart Item quantity",
-    constraintDelta: { set: {}, clear: [] },
-    knownEntities: [{ type: "PRODUCT", value: "Trail One" }],
-    missingInformation: [],
-    confidence: 0.99,
-    requestedEffects: ["CHANGE_CART_QUANTITY"],
-    requestedCartItemReference: "Trail One",
-    requestedCartQuantityChange: { mode: "EXACT", quantity: 3 },
-  };
-  const analyzer = createAiIntentAnalyzer(new MockLanguageModelV4({
-    doGenerate: async () => modelResponse(change),
-  }));
-
-  assert.deepEqual(await analyzer.analyze({
-    context: createEmptyConversationContext(),
-    message: "Make Trail One three",
-  }), change);
-});
-
-test("returns an ordered batch of mixed Cart Mutations", async () => {
-  const mutations = {
-    goal: "Apply several Cart Mutations",
-    constraintDelta: { set: {}, clear: [] },
-    knownEntities: [],
-    missingInformation: [],
-    confidence: 0.99,
-    requestedEffects: [
-      "ADD_TO_CART",
-      "REMOVE_FROM_CART",
-      "CHANGE_CART_QUANTITY",
-    ],
-    requestedCartMutations: [
-      {
-        type: "ADD",
-        productId: "71000000-0000-4000-8000-000000000001",
-        quantity: 2,
-      },
-      { type: "REMOVE", reference: "Trail One" },
-      {
-        type: "CHANGE_QUANTITY",
-        reference: "Court Three",
-        change: { mode: "RELATIVE", quantity: 1 },
-      },
-      {
-        type: "CHANGE_QUANTITY",
-        reference: "Gym Four",
-        change: { mode: "EXACT", quantity: 3 },
-      },
-    ],
-  };
-  const analyzer = createAiIntentAnalyzer(new MockLanguageModelV4({
-    doGenerate: async () => modelResponse(mutations),
-  }));
-
-  assert.deepEqual(await analyzer.analyze({
-    context: createEmptyConversationContext(),
-    message: "Add two Road Two, remove Trail One, add one Court Three, and make Gym Four three",
-  }), mutations);
-});
-
-test("allows an unqualified quantity change in a mixed Cart Mutation batch", async () => {
-  const mutations = {
-    goal: "Remove one Cart Item and change the sole remaining quantity",
-    constraintDelta: { set: {}, clear: [] },
-    knownEntities: [],
-    missingInformation: [],
-    confidence: 0.9,
-    requestedEffects: ["REMOVE_FROM_CART", "CHANGE_CART_QUANTITY"],
-    requestedCartMutations: [
-      { type: "REMOVE", reference: "Trail One" },
-      {
-        type: "CHANGE_QUANTITY",
-        change: { mode: "RELATIVE", quantity: 1 },
-      },
-    ],
-  };
-  const analyzer = createAiIntentAnalyzer(new MockLanguageModelV4({
-    doGenerate: async () => modelResponse(mutations),
-  }));
-
-  assert.deepEqual(await analyzer.analyze({
-    context: createEmptyConversationContext(),
-    message: "Remove Trail One and add one more to the only other Cart Item",
-  }), mutations);
 });
 
 test("retries malformed Intent Brief output once", async () => {

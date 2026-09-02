@@ -1,10 +1,11 @@
 import { sql } from "drizzle-orm";
 import {
   check,
+  index,
   pgTable,
   text,
+  timestamp,
   uniqueIndex,
-  uuid,
   varchar,
 } from "drizzle-orm/pg-core";
 import { createdAt, currency, id, updatedAt } from "./columns";
@@ -27,29 +28,22 @@ export const brands = pgTable(
   (table) => [
     uniqueIndex("brands_singleton_unique").on(table.singletonKey),
     uniqueIndex("brands_slug_unique").on(table.slug),
+    check("brands_currency_inr", sql`${table.currency} = 'INR'`),
     check("brands_singleton_key", sql`${table.singletonKey} = 'BRAND'`),
   ],
 );
 
-export const users = pgTable(
-  "users",
+export const guestSessions = pgTable(
+  "guest_sessions",
   {
     id: id(),
-    email: varchar("email", { length: 320 }).notNull(),
-    name: varchar("name", { length: 160 }).notNull(),
+    tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (table) => [uniqueIndex("users_email_unique").on(table.email)],
-);
-
-export const brandAdmins = pgTable(
-  "brand_admins",
-  {
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    createdAt: createdAt(),
-  },
-  (table) => [uniqueIndex("brand_admins_user_unique").on(table.userId)],
+  (table) => [
+    uniqueIndex("guest_sessions_token_hash_unique").on(table.tokenHash),
+    index("guest_sessions_expiry_idx").on(table.expiresAt),
+  ],
 );

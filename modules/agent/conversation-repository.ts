@@ -16,7 +16,7 @@ import {
   type RecommendationReference,
 } from "./intent";
 
-type ConversationOwner = { userId: string };
+type ConversationOwner = { guestSessionId: string };
 export interface ConversationRepository {
   /**
    * Returns the completed outcome for a turn with the same idempotency key, if
@@ -28,15 +28,15 @@ export interface ConversationRepository {
     idempotencyKey: string,
   ): Promise<AgentOutcome | null>;
   /**
-   * Creates or reuses an open Conversation and records its first USER message.
+   * Creates or reuses an open Conversation and records its first Customer message.
    */
   create(
     owner: ConversationOwner,
-    userMessage: string,
+    customerMessage: string,
     idempotencyKey: string,
   ): Promise<{
     conversationId: string;
-    userMessageId: string;
+    customerMessageId: string;
     context: ConversationContext;
   }>;
   /** Loads the owner and parsed context for an open Conversation. */
@@ -44,7 +44,7 @@ export interface ConversationRepository {
     conversationId: string,
   ): Promise<(ConversationOwner & { context: ConversationContext }) | null>;
   /**
-   * Saves the next Context revision and current USER-message metadata
+   * Saves the next Context revision and current Customer-message metadata
    * atomically, returning `false` when optimistic concurrency fails.
    */
   saveContextAndMetadata(
@@ -56,7 +56,7 @@ export interface ConversationRepository {
   /** Appends a message and returns its generated ID. */
   append(
     conversationId: string,
-    role: "USER" | "ASSISTANT",
+    role: "CUSTOMER" | "ASSISTANT",
     content: string,
     metadata?: JsonObject,
     idempotencyKey?: string,
@@ -64,7 +64,7 @@ export interface ConversationRepository {
   /** Atomically stores a completed ASSISTANT turn and its typed outcome. */
   finalizeTurn?(
     conversationId: string,
-    userMessageId: string,
+    customerMessageId: string,
     content: string,
     outcome: AgentOutcome,
     executor?: DbExecutor,
@@ -107,7 +107,7 @@ export const postgresConversationRepository: ConversationRepository = {
         .innerJoin(conversations, eq(messages.conversationId, conversations.id))
         .where(
           and(
-            eq(conversations.userId, owner.userId),
+            eq(conversations.guestSessionId, owner.guestSessionId),
             isNull(conversations.closedAt),
             eq(messages.idempotencyKey, idempotencyKey),
             ...(conversationId ? [eq(conversations.id, conversationId)] : []),
@@ -123,71 +123,37 @@ export const postgresConversationRepository: ConversationRepository = {
   },
   /**
    * Creates or reuses the Customer's open Conversation and records its first
-   * USER message atomically.
+   * Customer message atomically.
    *
    * A concurrent insert may win the open-Conversation uniqueness race. In that
    * case, the winning Conversation is loaded and used for the new message.
    *
    * @param owner - Customer who owns the Conversation.
-   * @param userMessage - Redacted text of the Customer's first message.
+   * @param customerMessage - Redacted text of the Customer's first message.
    * @param idempotencyKey - Client-generated key used to deduplicate the turn.
-   * @returns IDs for the Conversation and USER message, plus parsed persisted
+   * @returns IDs for the Conversation and Customer message, plus parsed persisted
    * context.
    * @throws When no open Conversation can be created or recovered.
    */
-  async create(owner, userMessage, idempotencyKey) {
+  async create(owner, customerMessage, idempotencyKey) {
     return db.transaction(async (transaction) => {
-      const context = createEmptyConversationContext();
-      const [existing] = await transaction
-        .select({ id: conversations.id, context: conversations.context })
-        .from(conversations)
-        .where(
-          and(
-            eq(conversations.userId, owner.userId),
-            isNull(conversations.closedAt),
-          ),
-        )
-        .limit(1);
-      const [inserted] = existing
-        ? []
-        : await transaction
-            .insert(conversations)
-            .values({ ...owner, context })
-            .onConflictDoNothing()
-            .returning({
-              id: conversations.id,
-              context: conversations.context,
-            });
-      const [concurrent] =
-        existing || inserted
-          ? []
-          : await transaction
-              .select({ id: conversations.id, context: conversations.context })
-              .from(conversations)
-              .where(
-                and(
-                  eq(conversations.userId, owner.userId),
-                  isNull(conversations.closedAt),
-                ),
-              )
-              .limit(1);
-      const conversation = existing ?? inserted ?? concurrent;
-      if (!conversation) {
-        throw new Error("The current Conversation could not be created.");
-      }
+      const conversation = await openCurrentConversation(
+        transaction,
+        owner.guestSessionId,
+      );
       const [message] = await transaction
         .insert(messages)
         .values({
           conversationId: conversation.id,
-          role: "USER",
-          content: userMessage,
+          role: "CUSTOMER",
+          content: customerMessage,
           idempotencyKey,
         })
         .returning({ id: messages.id });
       return {
         conversationId: conversation.id,
-        userMessageId: message.id,
-        context: parseConversationContext(conversation.context),
+        customerMessageId: message.id,
+        context: conversation.context,
       };
     });
   },
@@ -201,7 +167,7 @@ export const postgresConversationRepository: ConversationRepository = {
   async findOwnedContext(conversationId) {
     const [ownedContext] = await db
       .select({
-        userId: conversations.userId,
+        guestSessionId: conversations.guestSessionId,
         context: conversations.context,
       })
       .from(conversations)
@@ -220,7 +186,7 @@ export const postgresConversationRepository: ConversationRepository = {
       : null;
   },
   /**
-   * Advances Conversation Context and attaches metadata to the current USER
+   * Advances Conversation Context and attaches metadata to the current Customer
    * message in one transaction.
    *
    * The context update uses its revision as an optimistic-concurrency check, so
@@ -229,7 +195,7 @@ export const postgresConversationRepository: ConversationRepository = {
    * @param conversationId - Open Conversation being updated.
    * @param context - Next Conversation Context; its revision must be exactly one
    * greater than the persisted revision.
-   * @param messageId - USER message that initiated the context change.
+   * @param messageId - Customer message that initiated the context change.
    * @param metadata - Sanitized, inspectable metadata to store on that message.
    * @returns `true` when both records are updated, or `false` after a revision
    * conflict or when the Conversation is unavailable.
@@ -260,10 +226,10 @@ export const postgresConversationRepository: ConversationRepository = {
    * single transaction.
    *
    * @param conversationId - Conversation receiving the message.
-   * @param role - Whether the message was written by the USER or ASSISTANT.
-   * @param content - Text to persist. Callers must redact sensitive USER text.
+   * @param role - Whether the message was written by the Customer or ASSISTANT.
+   * @param content - Text to persist. Callers must redact sensitive Customer text.
    * @param metadata - Optional structured data associated with the message.
-   * @param idempotencyKey - Optional client key used to deduplicate USER turns.
+   * @param idempotencyKey - Optional client key used to deduplicate Customer turns.
    * @returns The ID of the newly persisted message.
    */
   async append(conversationId, role, content, metadata = {}, idempotencyKey) {
@@ -281,23 +247,23 @@ export const postgresConversationRepository: ConversationRepository = {
   },
   /**
    * Completes a turn by persisting the ASSISTANT response and making the
-   * sanitized Agent outcome discoverable from the initiating USER message.
+   * sanitized Agent outcome discoverable from the initiating Customer message.
    *
    * All writes, including the Conversation activity update, are committed in a
    * single transaction so duplicate requests cannot observe a partial outcome.
    *
    * @param conversationId - Conversation containing the completed turn.
-   * @param userMessageId - USER message that initiated the turn.
+   * @param customerMessageId - Customer message that initiated the turn.
    * @param content - ASSISTANT response; sensitive text is redacted before
    * persistence.
    * @param outcome - Typed result returned by the Agent for this turn.
    */
-  async finalizeTurn(conversationId, userMessageId, content, outcome, executor) {
+  async finalizeTurn(conversationId, customerMessageId, content, outcome, executor) {
     const finalize = async (transaction: DbExecutor) => {
-      const [userMessage] = await transaction
+      const [customerMessage] = await transaction
         .select({ metadata: messages.metadata })
         .from(messages)
-        .where(eq(messages.id, userMessageId))
+        .where(eq(messages.id, customerMessageId))
         .limit(1);
       await transaction.insert(messages).values({
         conversationId,
@@ -309,11 +275,11 @@ export const postgresConversationRepository: ConversationRepository = {
         .update(messages)
         .set({
           metadata: {
-            ...(userMessage?.metadata ?? {}),
+            ...(customerMessage?.metadata ?? {}),
             agentOutcome: sanitizeValue(outcome) as JsonObject,
           },
         })
-        .where(eq(messages.id, userMessageId));
+        .where(eq(messages.id, customerMessageId));
       await transaction
         .update(conversations)
         .set({ updatedAt: new Date() })
@@ -372,6 +338,56 @@ export const postgresConversationRepository: ConversationRepository = {
     return Boolean(updated);
   },
 };
+
+/**
+ * Returns the Customer's open Conversation, creating it when they have none.
+ *
+ * A concurrent request may win the one-open-Conversation uniqueness race, so
+ * the winning Conversation is reread and used rather than treated as a failure.
+ * Every Conversation record a Customer can produce — a typed Conversation Turn
+ * or a Customer Action Entry — enters through here, so they can never create
+ * two open Conversations between them.
+ *
+ * @param executor - Executor of the calling transaction.
+ * @param guestSessionId - Guest Session that owns the Conversation.
+ * @returns The open Conversation's ID and parsed Conversation Context.
+ * @throws When no open Conversation can be created or recovered.
+ */
+export async function openCurrentConversation(
+  executor: DbExecutor,
+  guestSessionId: string,
+): Promise<{ id: string; context: ConversationContext }> {
+  const findOpen = async () => {
+    const [open] = await executor
+      .select({ id: conversations.id, context: conversations.context })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.guestSessionId, guestSessionId),
+          isNull(conversations.closedAt),
+        ),
+      )
+      .limit(1);
+    return open ?? null;
+  };
+
+  const existing = await findOpen();
+  const [inserted] = existing
+    ? []
+    : await executor
+        .insert(conversations)
+        .values({ guestSessionId, context: createEmptyConversationContext() })
+        .onConflictDoNothing()
+        .returning({ id: conversations.id, context: conversations.context });
+  const conversation = existing ?? inserted ?? (await findOpen());
+  if (!conversation) {
+    throw new Error("The current Conversation could not be created.");
+  }
+  return {
+    id: conversation.id,
+    context: parseConversationContext(conversation.context),
+  };
+}
 
 /**
  * Pauses duplicate polling without blocking the event loop.

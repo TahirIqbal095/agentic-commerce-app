@@ -34,6 +34,7 @@ export const products = pgTable(
   (table) => [
     uniqueIndex("products_slug_unique").on(table.slug),
     index("products_category_idx").on(table.category),
+    check("products_currency_inr", sql`${table.currency} = 'INR'`),
     check("products_price_nonnegative", sql`${table.priceMinor} >= 0`),
     check("products_stock_nonnegative", sql`${table.stock} >= 0`),
   ],
