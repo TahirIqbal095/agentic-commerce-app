@@ -1,10 +1,11 @@
-import { ShoppingBag } from "lucide-react";
+import { ClipboardCheck, ShoppingBag } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
   Drawer,
   DrawerContent,
   DrawerDescription,
+  DrawerFooter,
   DrawerHeader,
   DrawerTitle,
   DrawerTrigger,
@@ -14,14 +15,32 @@ import { CartPanel, type CartControls } from "./cart-panel";
 
 export type CartLoadState = "loading" | "ready" | "error";
 
+/**
+ * The Cart drawer's Review for checkout control.
+ *
+ * The control stays available for an empty Cart, because an empty Cart has a
+ * deterministic not-ready answer the Customer is entitled to see.
+ */
+export type CheckoutReadinessControl = {
+  onReview: () => void;
+  isReviewing: boolean;
+  error: string | null;
+};
+
 export function CartDrawer({
   cart,
   state,
   controls,
+  readiness,
+  open,
+  onOpenChange,
 }: {
   cart: CartView | null;
   state: CartLoadState;
   controls: CartControls;
+  readiness: CheckoutReadinessControl;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }) {
   const quantity = state === "ready" ? cart?.totalQuantity : undefined;
   const accessibleName =
@@ -32,7 +51,11 @@ export function CartDrawer({
         : "Cart, unavailable";
 
   return (
-    <Drawer shouldScaleBackground={false}>
+    <Drawer
+      shouldScaleBackground={false}
+      open={open}
+      onOpenChange={onOpenChange}
+    >
       <DrawerTrigger asChild>
         <Button
           type="button"
@@ -69,6 +92,26 @@ export function CartDrawer({
             <CartPanel cart={cart} controls={controls} />
           )}
         </div>
+        <DrawerFooter className="border-t border-[#1d2a24]/10 px-5 py-5 sm:px-7">
+          <Button
+            type="button"
+            onClick={readiness.onReview}
+            disabled={readiness.isReviewing}
+            className="rounded-full"
+          >
+            <ClipboardCheck />
+            Review for checkout
+          </Button>
+          <p className="text-center text-xs text-[#708176]">
+            Reviews this Cart for checkout. It reserves no inventory and
+            starts no payment.
+          </p>
+          {readiness.error ? (
+            <p role="alert" className="text-center text-sm text-red-700">
+              {readiness.error}
+            </p>
+          ) : null}
+        </DrawerFooter>
       </DrawerContent>
     </Drawer>
   );

@@ -10,7 +10,9 @@ import { createConversationHandler } from "./handler";
 
 type ConversationRouteOptions = {
   store: GuestSessionStore;
-  createState: (guestSession: GuestSession) => ConversationState;
+  createState: (
+    guestSession: GuestSession,
+  ) => Pick<ConversationState, "loadCurrent" | "resetCurrent">;
   issueToken?: () => string;
   now?: () => Date;
 };

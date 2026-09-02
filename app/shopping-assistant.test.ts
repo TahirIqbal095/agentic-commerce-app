@@ -1,60 +1,11 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { JSDOM } from "jsdom";
+import { installBrowser } from "./_test/browser";
 import React from "react";
 import type { AgentOutcome } from "@/modules/agent/agent-outcome";
 import type { CartView } from "@/modules/cart/cart";
 import { createEmptyConversationContext } from "@/modules/agent/intent";
-
-function installBrowser(dom: JSDOM) {
-  Object.assign(globalThis, {
-    window: dom.window,
-    document: dom.window.document,
-    HTMLElement: dom.window.HTMLElement,
-    HTMLInputElement: dom.window.HTMLInputElement,
-    Node: dom.window.Node,
-    MutationObserver: dom.window.MutationObserver,
-    Event: dom.window.Event,
-    CustomEvent: dom.window.CustomEvent,
-    getComputedStyle: dom.window.getComputedStyle,
-    IS_REACT_ACT_ENVIRONMENT: true,
-  });
-  Object.defineProperty(globalThis, "navigator", {
-    configurable: true,
-    value: dom.window.navigator,
-  });
-  Object.defineProperties(dom.window, {
-    requestAnimationFrame: {
-      configurable: true,
-      value: (callback: FrameRequestCallback) =>
-        setTimeout(() => callback(Date.now()), 0),
-    },
-    cancelAnimationFrame: { configurable: true, value: clearTimeout },
-    matchMedia: {
-      configurable: true,
-      value: () => ({
-        matches: false,
-        media: "",
-        onchange: null,
-        addListener() {},
-        removeListener() {},
-        addEventListener() {},
-        removeEventListener() {},
-        dispatchEvent() {
-          return false;
-        },
-      }),
-    },
-    scrollTo: { configurable: true, value() {} },
-  });
-  Object.assign(dom.window.HTMLElement.prototype, {
-    hasPointerCapture() {
-      return false;
-    },
-    setPointerCapture() {},
-    releasePointerCapture() {},
-  });
-}
 
 test("Customer increments one Cart Item without optimistic commercial changes", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {

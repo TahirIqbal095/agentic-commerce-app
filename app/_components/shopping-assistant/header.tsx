@@ -3,7 +3,11 @@ import { MessageSquarePlus, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { CartView } from "@/modules/cart/cart";
 import type { CartControls } from "./cart-panel";
-import { CartDrawer, type CartLoadState } from "./cart-drawer";
+import {
+  CartDrawer,
+  type CartLoadState,
+  type CheckoutReadinessControl,
+} from "./cart-drawer";
 
 export function Header({
   brandName,
@@ -12,6 +16,9 @@ export function Header({
   hasConversation,
   onNewConversation,
   cartControls,
+  checkoutReadiness,
+  isCartOpen,
+  onCartOpenChange,
 }: {
   brandName: string;
   cart: CartView | null;
@@ -19,6 +26,9 @@ export function Header({
   hasConversation: boolean;
   onNewConversation: () => void;
   cartControls: CartControls;
+  checkoutReadiness: CheckoutReadinessControl;
+  isCartOpen: boolean;
+  onCartOpenChange: (open: boolean) => void;
 }) {
   return (
     <header className="flex items-center justify-between">
@@ -54,6 +64,9 @@ export function Header({
           cart={cart}
           state={cartState}
           controls={cartControls}
+          readiness={checkoutReadiness}
+          open={isCartOpen}
+          onOpenChange={onCartOpenChange}
         />
       </div>
     </header>

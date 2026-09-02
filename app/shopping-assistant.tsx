@@ -13,9 +13,11 @@ import { ResultArea } from "./_components/shopping-assistant/result-area";
 import type {
   AgentResult,
   CartFeedback,
-  ConversationTurn,
+  CustomerActionEntry,
+  TranscriptEntry,
   CurrentConversation,
 } from "./_components/shopping-assistant/types";
+import { isCustomerActionEntry } from "@/modules/agent/customer-action-entry";
 import { formatMoney } from "@/lib/format-money";
 import { cn } from "@/lib/utils";
 import type { CartView } from "@/modules/cart/cart";
@@ -26,6 +28,10 @@ import type {
 } from "@/modules/agent/intent";
 
 type AgentApiResponse = { data: AgentResult } | { error: { message: string } };
+
+type CheckoutReadinessApiResponse =
+  | { data: CustomerActionEntry }
+  | { error: { message: string } };
 
 type CartApiResponse =
   | { data: CartView }
@@ -59,6 +65,19 @@ class CartCommandRejection extends Error {
   }
 }
 
+/**
+ * Whether this Transcript entry is the Conversation Turn awaiting `turnId`.
+ *
+ * A Customer Action Entry shares the Transcript but never carries a Turn
+ * result, so it is left untouched when a Turn resolves.
+ */
+function isTurn(
+  entry: TranscriptEntry,
+  turnId: string,
+): entry is Extract<TranscriptEntry, { customerMessage: string }> {
+  return entry.id === turnId && !isCustomerActionEntry(entry);
+}
+
 function wasReconciled(requestError: unknown) {
   return (
     requestError instanceof CartCommandRejection &&
@@ -79,7 +98,7 @@ export function ShoppingAssistant({
   const [conversationId, setConversationId] = useState<string | null>(
     initialConversation?.conversationId ?? null,
   );
-  const [turns, setTurns] = useState<ConversationTurn[]>(
+  const [entries, setEntries] = useState<TranscriptEntry[]>(
     initialConversation?.transcript ?? [],
   );
   const [contextSummary, setContextSummary] = useState<ShoppingIntent | null>(
@@ -105,6 +124,9 @@ export function ShoppingAssistant({
   const [cartItemFeedback, setCartItemFeedback] = useState<
     Record<string, string>
   >({});
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
   const mutationKeys = useRef(new Map<string, string>());
 
   /**
@@ -182,7 +204,7 @@ export function ShoppingAssistant({
       .then((conversation) => {
         if (!active || !conversation) return;
         setConversationId(conversation.conversationId);
-        setTurns(conversation.transcript);
+        setEntries(conversation.transcript);
         setContextSummary(conversation.contextSummary);
       })
       .catch(() => {});
@@ -216,8 +238,8 @@ export function ShoppingAssistant({
 
   async function sendMessage(message: string) {
     const turnId = crypto.randomUUID();
-    setTurns((currentTurns) => [
-      ...currentTurns,
+    setEntries((currentEntries) => [
+      ...currentEntries,
       { id: turnId, customerMessage: message, result: null, error: null },
     ]);
     setIsLoading(true);
@@ -242,9 +264,9 @@ export function ShoppingAssistant({
         );
       }
 
-      setTurns((currentTurns) =>
-        currentTurns.map((turn) =>
-          turn.id === turnId ? { ...turn, result: payload.data } : turn,
+      setEntries((currentEntries) =>
+        currentEntries.map((entry) =>
+          isTurn(entry, turnId) ? { ...entry, result: payload.data } : entry,
         ),
       );
       if (payload.data.conversationId) {
@@ -261,9 +283,9 @@ export function ShoppingAssistant({
         requestError instanceof Error
           ? requestError.message
           : "The assistant could not respond.";
-      setTurns((currentTurns) =>
-        currentTurns.map((turn) =>
-          turn.id === turnId ? { ...turn, error: message } : turn,
+      setEntries((currentEntries) =>
+        currentEntries.map((entry) =>
+          isTurn(entry, turnId) ? { ...entry, error: message } : entry,
         ),
       );
     } finally {
@@ -293,7 +315,7 @@ export function ShoppingAssistant({
     });
     if (!response.ok) return;
     setConversationId(null);
-    setTurns([]);
+    setEntries([]);
     setContextSummary(null);
     setSelectedProduct(null);
   }
@@ -443,6 +465,43 @@ export function ShoppingAssistant({
     }
   }
 
+  /**
+   * Reviews the authoritative Cart for Checkout Readiness.
+   *
+   * The review is deterministic: it never reaches the Commerce Agent, never
+   * changes the Cart, and shows nothing until the authority answers. A
+   * successful review appends the recorded Customer Action Entry to the
+   * Transcript and closes the drawer so the Customer sees the card it produced.
+   */
+  async function reviewCheckoutReadiness() {
+    if (isReviewing) return;
+    setIsReviewing(true);
+    setReviewError(null);
+
+    try {
+      const response = await fetch("/api/cart/checkout-readiness", {
+        method: "POST",
+      });
+      const payload = (await response.json()) as CheckoutReadinessApiResponse;
+      if (!response.ok || !("data" in payload)) {
+        throw new Error(
+          "error" in payload
+            ? payload.error.message
+            : "The Cart could not be reviewed.",
+        );
+      }
+      setEntries((currentEntries) => [...currentEntries, payload.data]);
+      replaceCartFromAuthority(payload.data.readiness.cart);
+      setIsCartOpen(false);
+    } catch {
+      setReviewError(
+        "The Cart could not be reviewed for checkout. Try again shortly.",
+      );
+    } finally {
+      setIsReviewing(false);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[#f4f1eb] text-[#1d2a24]">
       <div
@@ -458,22 +517,29 @@ export function ShoppingAssistant({
           brandName={brandName}
           cart={cart}
           cartState={cartState}
-          hasConversation={turns.length > 0}
+          hasConversation={entries.length > 0}
           onNewConversation={startNewConversation}
           cartControls={{
             onCommand: changeCartItem,
             pendingCommands: pendingCartCommands,
             itemFeedback: cartItemFeedback,
           }}
+          checkoutReadiness={{
+            onReview: reviewCheckoutReadiness,
+            isReviewing,
+            error: reviewError,
+          }}
+          isCartOpen={isCartOpen}
+          onCartOpenChange={setIsCartOpen}
         />
 
         <div
           className={cn(
             "mx-auto flex w-full max-w-4xl flex-1 flex-col py-14 sm:py-20",
-            turns.length === 0 ? "justify-center" : "justify-start",
+            entries.length === 0 ? "justify-center" : "justify-start",
           )}
         >
-          {turns.length === 0 ? (
+          {entries.length === 0 ? (
             <Hero brandName={brandName} onSuggestion={setPrompt} />
           ) : (
             <>
@@ -490,7 +556,7 @@ export function ShoppingAssistant({
                 onAddProduct={addProduct}
                 addingProductIds={addingProductIds}
                 cartFeedback={cartFeedback}
-                turns={turns}
+                entries={entries}
               />
             </>
           )}

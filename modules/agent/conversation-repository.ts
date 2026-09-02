@@ -137,44 +137,10 @@ export const postgresConversationRepository: ConversationRepository = {
    */
   async create(owner, customerMessage, idempotencyKey) {
     return db.transaction(async (transaction) => {
-      const context = createEmptyConversationContext();
-      const [existing] = await transaction
-        .select({ id: conversations.id, context: conversations.context })
-        .from(conversations)
-        .where(
-          and(
-            eq(conversations.guestSessionId, owner.guestSessionId),
-            isNull(conversations.closedAt),
-          ),
-        )
-        .limit(1);
-      const [inserted] = existing
-        ? []
-        : await transaction
-            .insert(conversations)
-            .values({ ...owner, context })
-            .onConflictDoNothing()
-            .returning({
-              id: conversations.id,
-              context: conversations.context,
-            });
-      const [concurrent] =
-        existing || inserted
-          ? []
-          : await transaction
-              .select({ id: conversations.id, context: conversations.context })
-              .from(conversations)
-              .where(
-                and(
-                  eq(conversations.guestSessionId, owner.guestSessionId),
-                  isNull(conversations.closedAt),
-                ),
-              )
-              .limit(1);
-      const conversation = existing ?? inserted ?? concurrent;
-      if (!conversation) {
-        throw new Error("The current Conversation could not be created.");
-      }
+      const conversation = await openCurrentConversation(
+        transaction,
+        owner.guestSessionId,
+      );
       const [message] = await transaction
         .insert(messages)
         .values({
@@ -187,7 +153,7 @@ export const postgresConversationRepository: ConversationRepository = {
       return {
         conversationId: conversation.id,
         customerMessageId: message.id,
-        context: parseConversationContext(conversation.context),
+        context: conversation.context,
       };
     });
   },
@@ -372,6 +338,56 @@ export const postgresConversationRepository: ConversationRepository = {
     return Boolean(updated);
   },
 };
+
+/**
+ * Returns the Customer's open Conversation, creating it when they have none.
+ *
+ * A concurrent request may win the one-open-Conversation uniqueness race, so
+ * the winning Conversation is reread and used rather than treated as a failure.
+ * Every Conversation record a Customer can produce — a typed Conversation Turn
+ * or a Customer Action Entry — enters through here, so they can never create
+ * two open Conversations between them.
+ *
+ * @param executor - Executor of the calling transaction.
+ * @param guestSessionId - Guest Session that owns the Conversation.
+ * @returns The open Conversation's ID and parsed Conversation Context.
+ * @throws When no open Conversation can be created or recovered.
+ */
+export async function openCurrentConversation(
+  executor: DbExecutor,
+  guestSessionId: string,
+): Promise<{ id: string; context: ConversationContext }> {
+  const findOpen = async () => {
+    const [open] = await executor
+      .select({ id: conversations.id, context: conversations.context })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.guestSessionId, guestSessionId),
+          isNull(conversations.closedAt),
+        ),
+      )
+      .limit(1);
+    return open ?? null;
+  };
+
+  const existing = await findOpen();
+  const [inserted] = existing
+    ? []
+    : await executor
+        .insert(conversations)
+        .values({ guestSessionId, context: createEmptyConversationContext() })
+        .onConflictDoNothing()
+        .returning({ id: conversations.id, context: conversations.context });
+  const conversation = existing ?? inserted ?? (await findOpen());
+  if (!conversation) {
+    throw new Error("The current Conversation could not be created.");
+  }
+  return {
+    id: conversation.id,
+    context: parseConversationContext(conversation.context),
+  };
+}
 
 /**
  * Pauses duplicate polling without blocking the event loop.
