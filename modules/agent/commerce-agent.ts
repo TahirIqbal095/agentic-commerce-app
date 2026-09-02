@@ -1,5 +1,5 @@
 import type { CatalogModule } from "@/modules/catalog/catalog";
-import { CartError, type CartModule } from "@/modules/cart/cart";
+import type { CartModule } from "@/modules/cart/cart";
 import type {
   CatalogProduct,
   CatalogSearch,
@@ -68,7 +68,7 @@ export const MAX_COMMERCE_AGENT_TOOL_PRODUCTS = 8;
 
 type CommerceAgentOptions = {
   agentLoop: CommerceAgentLoop;
-  cart?: CartModule;
+  cart?: Pick<CartModule, "inspect">;
   limits?: CommerceAgentLimits;
 };
 
@@ -180,11 +180,36 @@ export function createCommerceAgent(
           });
         }
       }
-      if (intentBrief.requestedEffects.includes("ADD_TO_CART")) {
-        const requestedCartItems = intentBrief.requestedCartItems;
-        const referencedProductIds = requestedCartItems?.map(
-          ({ productId }) => productId,
-        ) ?? intentBrief.referencedProductIds ?? [];
+      if (intentBrief.requestedEffects.includes("PRESENT_ADD_CONTROLS")) {
+        const referencedProductIds = intentBrief.referencedProductIds ?? [];
+        if (referencedProductIds.length > 0) {
+          const selectedProducts = (
+            await Promise.all(
+              referencedProductIds.map((productId) =>
+                catalog.getProduct(productId),
+              ),
+            )
+          ).flatMap((result) => (result.ok ? [result.value] : []));
+          if (selectedProducts.length === 1) {
+            return completeTurn(turn, {
+              status: "COMPLETED",
+              conversationId: turn.conversationId,
+              message: `I can’t change your Cart. Use Add to Cart on ${selectedProducts[0].name} to add it yourself.`,
+              intentBrief,
+              products: selectedProducts,
+            });
+          }
+          return completeTurn(turn, {
+            status: "NEEDS_INPUT",
+            conversationId: turn.conversationId,
+            message:
+              "I can’t change your Cart. Choose a Product, then use its Add to Cart control.",
+            question: "Which Product did you mean?",
+            missingInformation: ["Unambiguous Product"],
+            intentBrief,
+            products: selectedProducts,
+          });
+        }
         let directlyMatchedProduct: CatalogProduct | undefined;
         let directlyMatchedProducts: CatalogProduct[] = [];
         const resolvesDirectRequest =
@@ -218,10 +243,7 @@ export function createCommerceAgent(
             });
           }
         }
-        if (
-          directlyMatchedProducts.length > 0 &&
-          !directlyMatchedProduct
-        ) {
+        if (directlyMatchedProducts.length > 0 && !directlyMatchedProduct) {
           try {
             const saved = await turn.recordRecommendationSet?.(
               directlyMatchedProducts,
@@ -244,150 +266,44 @@ export function createCommerceAgent(
               products: [],
             });
           }
-          return needsInputWithCurrentCart({
-            turn,
-            cart: options.cart,
+          return completeTurn(turn, {
+            status: "NEEDS_INPUT",
+            conversationId: turn.conversationId,
             intentBrief,
-            message: "I found multiple Products matching that Cart request.",
-            question: "Which Product would you like to add?",
+            message:
+              "I can’t change your Cart. Choose a Product, then use its Add to Cart control.",
+            question: "Which Product did you mean?",
             missingInformation: ["Unambiguous Product"],
             products: directlyMatchedProducts,
           });
         }
         if (resolvesDirectRequest && directlyMatchedProducts.length === 0) {
-          try {
-            if (!options.cart) throw new Error("Cart capability unavailable");
-            const cart = await options.cart.inspect();
-            return completeTurn(turn, {
-              status: "COMPLETED",
-              conversationId: turn.conversationId,
-              message:
-                "I couldn't find a Product matching that Cart request.",
-              intentBrief,
-              products: [],
-              cart,
-            });
-          } catch {
-            return completeTurn(turn, {
-              status: "TEMPORARILY_UNAVAILABLE",
-              conversationId: turn.conversationId,
-              message: "I couldn't read your Cart right now. Please try again.",
-              retryable: true,
-              intentBrief,
-              products: [],
-            });
-          }
-        }
-        if (
-          !directlyMatchedProduct &&
-          referencedProductIds.length === 0
-        ) {
-          return needsInputWithCurrentCart({
-            turn,
-            cart: options.cart,
-            intentBrief,
-            message:
-              "I need one specific Product from the latest Recommendations.",
-            question: "Which recommended Product would you like to add?",
-            missingInformation: ["Unambiguous Product"],
-          });
-        }
-        const quantity = intentBrief.requestedQuantity ?? 1;
-        const quantities = requestedCartItems?.map((item) => item.quantity) ?? [
-          quantity,
-        ];
-        if (
-          quantities.some(
-            (requested) =>
-              !Number.isInteger(requested) || requested < 1 || requested > 10,
-          )
-        ) {
-          return needsInputWithCurrentCart({
-            turn,
-            cart: options.cart,
-            intentBrief,
-            message:
-              "Please choose a positive whole-unit quantity from 1 to 10.",
-            question: "How many units would you like, from 1 to 10?",
-            missingInformation: ["Valid Cart quantity"],
-          });
-        }
-        try {
-          if (!options.cart) throw new Error("Cart capability unavailable");
-          const productResults = directlyMatchedProduct
-            ? [{ ok: true as const, value: directlyMatchedProduct }]
-            : await Promise.all(
-                referencedProductIds.map((productId) =>
-                  catalog.getProduct(productId),
-                ),
-              );
-          const selectedProducts = productResults.map((productResult) => {
-            if (!productResult.ok) {
-              throw new CartError(productResult.error.message);
-            }
-            return productResult.value;
-          });
-          const additions = selectedProducts.map((product) => ({
-            product,
-            quantity:
-              requestedCartItems?.find(
-                (item) => item.productId === product.id,
-              )?.quantity ?? quantity,
-          }));
-          let completedOutcome: AgentOutcome | undefined;
-          const completeAddition: Parameters<CartModule["addItem"]>[2] = async (
-            updatedCart,
-            transaction,
-          ) => {
-            const outcome: AgentOutcome = {
-              status: "COMPLETED",
-              conversationId: turn.conversationId,
-              message: cartAdditionsMessage(additions),
-              intentBrief,
-              products: [],
-              cart: updatedCart,
-            };
-            await turn.complete(outcome.message, outcome, transaction);
-            completedOutcome = outcome;
-          };
-          const cart =
-            additions.length === 1
-              ? await options.cart.addItem(
-                  additions[0].product,
-                  additions[0].quantity,
-                  completeAddition,
-                )
-              : await options.cart.addItems?.(additions, completeAddition);
-          if (completedOutcome) return completedOutcome;
-          if (!cart) {
-            throw new Error("Atomic multi-Product Cart addition unavailable");
-          }
           return completeTurn(turn, {
             status: "COMPLETED",
             conversationId: turn.conversationId,
-            message: cartAdditionsMessage(additions),
+            message: "I couldn't find a matching Product to present.",
             intentBrief,
             products: [],
-            cart,
           });
-        } catch (error) {
-          if (error instanceof CartError) {
-            return needsInputWithCurrentCart({
-              turn,
-              cart: options.cart,
-              intentBrief,
-              message: error.message,
-              question:
-                "Would you like to choose a different Product or quantity?",
-              missingInformation: ["Valid Cart addition"],
-            });
-          }
+        }
+        if (directlyMatchedProduct) {
           return completeTurn(turn, {
-            status: "TEMPORARILY_UNAVAILABLE",
+            status: "COMPLETED",
             conversationId: turn.conversationId,
-            message: "I couldn't update your Cart right now. Please try again.",
-            retryable: true,
+            message: `I can’t change your Cart. Use Add to Cart on ${directlyMatchedProduct.name} to add it yourself.`,
             intentBrief,
+            products: [directlyMatchedProduct],
+          });
+        }
+        if (!directlyMatchedProduct && referencedProductIds.length === 0) {
+          return completeTurn(turn, {
+            status: "NEEDS_INPUT",
+            conversationId: turn.conversationId,
+            intentBrief,
+            message:
+              "I need one specific Product from the latest Recommendations.",
+            question: "Which recommended Product did you mean?",
+            missingInformation: ["Unambiguous Product"],
             products: [],
           });
         }
@@ -512,68 +428,6 @@ function contextConflictOutcome(conversationId: string): AgentOutcome {
     retryable: true,
     products: [],
   };
-}
-
-function cartAdditionMessage(
-  quantity: number,
-  productName: string,
-): string {
-  return `Added ${quantity} × ${productName} to your Cart.`;
-}
-
-function cartAdditionsMessage(
-  additions: Array<{ product: CatalogProduct; quantity: number }>,
-): string {
-  if (additions.length === 1) {
-    const [{ product, quantity }] = additions;
-    return cartAdditionMessage(quantity, product.name);
-  }
-  const selections = additions.map(
-    ({ product, quantity }) => `${quantity} × ${product.name}`,
-  );
-  return `Added ${selections.slice(0, -1).join(", ")} and ${selections.at(-1)} to your Cart.`;
-}
-
-async function needsInputWithCurrentCart({
-  turn,
-  cart,
-  intentBrief,
-  message,
-  question,
-  missingInformation,
-  products,
-}: {
-  turn: AgentTurn;
-  cart: CartModule | undefined;
-  intentBrief: IntentBrief;
-  message: string;
-  question: string;
-  missingInformation: string[];
-  products?: CatalogProduct[];
-}): Promise<AgentOutcome> {
-  try {
-    if (!cart) throw new Error("Cart capability unavailable");
-    const currentCart = await cart.inspect();
-    return completeTurn(turn, {
-      status: "NEEDS_INPUT",
-      conversationId: turn.conversationId,
-      message,
-      question,
-      missingInformation,
-      intentBrief,
-      products: products ?? [],
-      cart: currentCart,
-    });
-  } catch {
-    return completeTurn(turn, {
-      status: "TEMPORARILY_UNAVAILABLE",
-      conversationId: turn.conversationId,
-      message: "I couldn't read your Cart right now. Please try again.",
-      retryable: true,
-      intentBrief,
-      products: [],
-    });
-  }
 }
 
 function resolveCapabilities({

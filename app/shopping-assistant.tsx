@@ -3,6 +3,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 
 import { Composer } from "./_components/shopping-assistant/composer";
+import type { CartLoadState } from "./_components/shopping-assistant/cart-drawer";
 import { ContextSummary } from "./_components/shopping-assistant/context-summary";
 import { Header } from "./_components/shopping-assistant/header";
 import { Hero } from "./_components/shopping-assistant/hero";
@@ -16,7 +17,7 @@ import type {
 } from "./_components/shopping-assistant/types";
 import { formatMoney } from "@/lib/format-money";
 import { cn } from "@/lib/utils";
-import type { CartSummary, CartView } from "@/modules/cart/cart";
+import type { CartView } from "@/modules/cart/cart";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
 import type {
   ProductConstraintKey,
@@ -51,7 +52,10 @@ export function ShoppingAssistant({
   const [selectedProduct, setSelectedProduct] = useState<CatalogProduct | null>(
     null,
   );
-  const [cart, setCart] = useState<CartSummary | CartView | null>(null);
+  const [cart, setCart] = useState<CartView | null>(null);
+  const [cartState, setCartState] = useState<CartLoadState>(
+    resumeConversation ? "loading" : "error",
+  );
   const [addingProductIds, setAddingProductIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -79,17 +83,20 @@ export function ShoppingAssistant({
       .catch(() => {});
     void fetch("/api/cart")
       .then(async (response) => {
-        if (!response.ok) return null;
+        if (!response.ok) throw new Error("Cart unavailable");
         const payload = (await response.json()) as {
           data: CartView;
         };
         return payload.data;
       })
       .then((cart) => {
-        if (!active || !cart) return;
+        if (!active) return;
         setCart(cart);
+        setCartState("ready");
       })
-      .catch(() => {});
+      .catch(() => {
+        if (active) setCartState("error");
+      });
     return () => {
       active = false;
     };
@@ -139,8 +146,9 @@ export function ShoppingAssistant({
       if (payload.data.conversationId) {
         setConversationId(payload.data.conversationId);
       }
-      if (payload.data.cart) {
+      if (payload.data.cart && "items" in payload.data.cart) {
         setCart(payload.data.cart);
+        setCartState("ready");
       }
       const nextSummary =
         payload.data.intentBrief?.constraints ?? payload.data.intent;
@@ -210,6 +218,7 @@ export function ShoppingAssistant({
       if (!response.ok || !("data" in payload)) {
         if ("error" in payload && payload.error.details?.cart) {
           setCart(payload.error.details.cart);
+          setCartState("ready");
         }
         throw new Error(
           "error" in payload
@@ -219,6 +228,7 @@ export function ShoppingAssistant({
       }
 
       setCart(payload.data);
+      setCartState("ready");
       const item = payload.data.items.find(
         (cartItem) => cartItem.productId === product.id,
       );
@@ -262,7 +272,8 @@ export function ShoppingAssistant({
       <div className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 pb-52 pt-5 sm:px-8 sm:pb-56 sm:pt-7">
         <Header
           brandName={brandName}
-          cartQuantity={cart?.totalQuantity ?? 0}
+          cart={cart}
+          cartState={cartState}
           hasConversation={turns.length > 0}
           onNewConversation={startNewConversation}
         />

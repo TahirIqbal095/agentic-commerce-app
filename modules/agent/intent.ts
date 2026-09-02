@@ -57,20 +57,10 @@ export type IntentAnalysis = {
   missingInformation: string[];
   confidence: number;
   requestedEffects: Array<
-    "DISCOVER_PRODUCTS" | "ADD_TO_CART" | "INSPECT_CART"
+    "DISCOVER_PRODUCTS" | "PRESENT_ADD_CONTROLS" | "INSPECT_CART"
   >;
   referencedProductIds?: string[];
-  requestedQuantity?: number;
-  requestedCartItems?: Array<{ productId: string; quantity: number }>;
 };
-
-export type AddToCartIntent = {
-  action: "ADD_TO_CART";
-  productName: string;
-  quantity: number;
-};
-
-export type CommerceIntent = ShoppingIntent | AddToCartIntent;
 
 export type IntentBrief = {
   goal: string;
@@ -82,11 +72,9 @@ export type IntentBrief = {
   missingInformation: string[];
   confidence: number;
   requestedEffects: Array<
-    "DISCOVER_PRODUCTS" | "ADD_TO_CART" | "INSPECT_CART"
+    "DISCOVER_PRODUCTS" | "PRESENT_ADD_CONTROLS" | "INSPECT_CART"
   >;
   referencedProductIds?: string[];
-  requestedQuantity?: number;
-  requestedCartItems?: Array<{ productId: string; quantity: number }>;
 };
 
 export interface IntentAnalyzer {
@@ -94,10 +82,6 @@ export interface IntentAnalyzer {
     context: ConversationContext;
     message: string;
   }): Promise<IntentAnalysis>;
-}
-
-export interface IntentInterpreter {
-  interpret(message: string): Promise<CommerceIntent>;
 }
 
 const CLEAR_VALUES: { [Key in ProductConstraintKey]: ShoppingIntent[Key] } = {
@@ -359,9 +343,6 @@ export function resolveIntentBrief(
   const referencedProductIds = analysis.referencedProductIds?.filter((id) =>
     currentRecommendationIds.has(id),
   );
-  const requestedCartItems = analysis.requestedCartItems?.filter(({ productId }) =>
-    currentRecommendationIds.has(productId),
-  );
   return {
     goal: analysis.goal,
     constraints: context.productConstraints,
@@ -370,10 +351,6 @@ export function resolveIntentBrief(
     confidence: analysis.confidence,
     requestedEffects: analysis.requestedEffects,
     ...(referencedProductIds?.length ? { referencedProductIds } : {}),
-    ...(analysis.requestedQuantity === undefined
-      ? {}
-      : { requestedQuantity: analysis.requestedQuantity }),
-    ...(requestedCartItems?.length ? { requestedCartItems } : {}),
   };
 }
 

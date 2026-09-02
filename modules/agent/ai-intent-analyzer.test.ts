@@ -92,19 +92,18 @@ test("returns an INSPECT_CART effect for a conversational Cart-inspection reques
   );
 });
 
-test("returns an explicit Cart quantity for application validation", async () => {
-  const explicitQuantity = {
-    goal: "Add a recommended Product",
+test("resolves a conversational Add request as a read-only Product presentation", async () => {
+  const productPresentation = {
+    goal: "Present a recommended Product with its Add control",
     constraintDelta: { set: {}, clear: [] },
     knownEntities: [],
     missingInformation: [],
     confidence: 0.99,
-    requestedEffects: ["ADD_TO_CART"],
+    requestedEffects: ["PRESENT_ADD_CONTROLS"],
     referencedProductIds: ["71000000-0000-4000-8000-000000000001"],
-    requestedQuantity: 2,
   };
   const model = new MockLanguageModelV4({
-    doGenerate: async () => modelResponse(explicitQuantity),
+    doGenerate: async () => modelResponse(productPresentation),
   });
 
   const analyzer = createAiIntentAnalyzer(model);
@@ -114,7 +113,7 @@ test("returns an explicit Cart quantity for application validation", async () =>
       context: createEmptyConversationContext(),
       message: "Add two of the first one",
     }),
-    explicitQuantity,
+    productPresentation,
   );
 });
 

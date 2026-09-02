@@ -1,15 +1,19 @@
-import { MessageSquarePlus, ShoppingBag, Sparkles } from "lucide-react";
+import { MessageSquarePlus, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import type { CartView } from "@/modules/cart/cart";
+import { CartDrawer, type CartLoadState } from "./cart-drawer";
 
 export function Header({
   brandName,
-  cartQuantity,
+  cart,
+  cartState,
   hasConversation,
   onNewConversation,
 }: {
   brandName: string;
-  cartQuantity: number;
+  cart: CartView | null;
+  cartState: CartLoadState;
   hasConversation: boolean;
   onNewConversation: () => void;
 }) {
@@ -43,14 +47,7 @@ export function Header({
             <MessageSquarePlus /> New conversation
           </Button>
         ) : null}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="rounded-full border-[#1d2a24]/10 bg-white/45 text-[#39483f] shadow-none hover:bg-white"
-        >
-          <ShoppingBag /> Cart · {cartQuantity}
-        </Button>
+        <CartDrawer cart={cart} state={cartState} />
       </div>
     </header>
   );

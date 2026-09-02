@@ -23,6 +23,7 @@ async function createAgentForStorefront(
   const catalogModule = createCatalogModule();
   const intentAnalyzer = createAiIntentAnalyzer();
   const conversationModule = createConversationModule(guestSession.id);
+  const cartModule = createCartModule(guestSession.id, brand.currency);
 
   return createCommerceAgent(
     catalogModule,
@@ -30,7 +31,7 @@ async function createAgentForStorefront(
     conversationModule,
     {
       agentLoop: createAiCommerceAgentLoop(),
-      cart: createCartModule(guestSession.id, brand.currency),
+      cart: { inspect: () => cartModule.inspect() },
     },
   );
 }

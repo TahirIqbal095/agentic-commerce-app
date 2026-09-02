@@ -4,10 +4,50 @@ import { JSDOM } from "jsdom";
 import React from "react";
 import { createEmptyConversationContext } from "@/modules/agent/intent";
 
+function installDrawerBrowserApis(dom: JSDOM) {
+  Object.assign(globalThis, {
+    Event: dom.window.Event,
+    CustomEvent: dom.window.CustomEvent,
+    getComputedStyle: dom.window.getComputedStyle,
+  });
+  Object.defineProperties(dom.window, {
+    requestAnimationFrame: {
+      configurable: true,
+      value: (callback: FrameRequestCallback) =>
+        setTimeout(() => callback(Date.now()), 0),
+    },
+    cancelAnimationFrame: { configurable: true, value: clearTimeout },
+    matchMedia: {
+      configurable: true,
+      value: () => ({
+        matches: false,
+        media: "",
+        onchange: null,
+        addListener() {},
+        removeListener() {},
+        addEventListener() {},
+        removeEventListener() {},
+        dispatchEvent() {
+          return false;
+        },
+      }),
+    },
+    scrollTo: { configurable: true, value() {} },
+  });
+  Object.assign(dom.window.HTMLElement.prototype, {
+    hasPointerCapture() {
+      return false;
+    },
+    setPointerCapture() {},
+    releasePointerCapture() {},
+  });
+}
+
 test("Customer adds a recommended Product without optimistic Cart changes or model interpretation", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
   Object.assign(globalThis, {
     window: dom.window,
     document: dom.window.document,
@@ -118,7 +158,7 @@ test("Customer adds a recommended Product without optimistic Cart changes or mod
   await user.click(add);
 
   assert.equal(add.hasAttribute("disabled"), true);
-  assert.ok(view.getByRole("button", { name: "Cart · 0" }));
+  assert.ok(view.getByRole("button", { name: "Cart, unavailable" }));
   assert.equal(requests.length, 1);
   assert.equal(requests[0]?.[0], "/api/cart");
   assert.equal(requests[0]?.[1]?.method, "POST");
@@ -169,6 +209,7 @@ test("Customer uses the same deterministic Add behavior from Product details", a
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
   Object.assign(globalThis, {
     window: dom.window,
     document: dom.window.document,
@@ -293,7 +334,7 @@ test("Customer uses the same deterministic Add behavior from Product details", a
     "POST /api/cart",
   ]);
   assert.equal(add.hasAttribute("disabled"), true);
-  assert.ok(view.getByRole("button", { name: "Cart · 0" }));
+  assert.ok(view.getByRole("button", { name: "Cart, unavailable" }));
 
   await act(async () => {
     resolveAdd(
@@ -336,6 +377,7 @@ test("returning in the same browser resumes the current Conversation and Cart", 
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
   Object.assign(globalThis, {
     window: dom.window,
     document: dom.window.document,
@@ -398,16 +440,151 @@ test("returning in the same browser resumes the current Conversation and Cart", 
     "Show me running shoes",
   );
   assert.ok(await view.findByRole("button", { name: "Cart · 3" }));
-  assert.deepEqual(requests, [
-    "GET /api/agent/conversation",
-    "GET /api/cart",
-  ]);
+  assert.deepEqual(requests, ["GET /api/agent/conversation", "GET /api/cart"]);
+});
+
+test("Customer opens the authoritative Cart drawer without invoking the Commerce Agent", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  installDrawerBrowserApis(dom);
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    getComputedStyle: dom.window.getComputedStyle,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+  let resolveCart!: (response: Response) => void;
+  const cartResponse = new Promise<Response>((resolve) => {
+    resolveCart = resolve;
+  });
+  const requests: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push(`${init?.method ?? "GET"} ${String(input)}`);
+    if (input === "/api/cart") return cartResponse;
+    return Response.json({ data: null });
+  };
+  const [{ render, cleanup, within, act }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(
+    React.createElement(ShoppingAssistant, {
+      brandName: "Arc",
+      resumeConversation: true,
+    }),
+  );
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  await user.click(view.getByRole("button", { name: "Cart, loading" }));
+
+  const drawer = view.getByRole("dialog", { name: "Your Cart" });
+  assert.equal(within(drawer).getByRole("status").textContent, "Loading Cart…");
+  assert.deepEqual(requests, ["GET /api/agent/conversation", "GET /api/cart"]);
+
+  await act(async () => {
+    resolveCart(
+      Response.json({
+        data: {
+          id: "31000000-0000-4000-8000-000000000001",
+          items: [
+            {
+              productId: "21000000-0000-4000-8000-000000000001",
+              productName: "Quiet Buds",
+              quantity: 3,
+              cartPriceMinor: 349900,
+              subtotalMinor: 1049700,
+            },
+          ],
+          totalQuantity: 3,
+          subtotalMinor: 1049700,
+          currency: "INR",
+        },
+      }),
+    );
+  });
+
+  assert.ok(view.getByLabelText("Cart · 3", { selector: "button" }));
+  assert.ok(within(drawer).getByText("Quiet Buds"));
+  assert.ok(within(drawer).getByText("3 × ₹3,499"));
+  assert.ok(within(drawer).getByText("Cart Subtotal"));
+  assert.equal(within(drawer).getAllByText("₹10,497").length, 2);
+  assert.equal(view.queryByText("You"), null);
+});
+
+test("Cart loading failure does not present a quantity or subtotal as authoritative", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  installDrawerBrowserApis(dom);
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    MutationObserver: dom.window.MutationObserver,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: dom.window.navigator,
+  });
+  globalThis.fetch = async (input) =>
+    input === "/api/cart"
+      ? Response.json(
+          { error: { message: "Cart unavailable" } },
+          { status: 503 },
+        )
+      : Response.json({ data: null });
+  const [{ render, cleanup, within }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(
+    React.createElement(ShoppingAssistant, {
+      brandName: "Arc",
+      resumeConversation: true,
+    }),
+  );
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  const cartControl = await view.findByRole("button", {
+    name: "Cart, unavailable",
+  });
+  assert.equal(view.queryByRole("button", { name: /Cart ·/ }), null);
+  await user.click(cartControl);
+  const drawer = view.getByRole("dialog", { name: "Your Cart" });
+  assert.equal(
+    within(drawer).getByRole("alert").textContent,
+    "Cart details are unavailable. Try again shortly.",
+  );
+  assert.equal(within(drawer).queryByText("Cart Subtotal"), null);
 });
 
 test("customer sees the configured Brand in the Storefront", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
 
   Object.assign(globalThis, {
     window: dom.window,
@@ -442,6 +619,7 @@ test("customer can read one Commerce Agent progress update beside their submitte
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
 
   Object.assign(globalThis, {
     window: dom.window,
@@ -499,6 +677,7 @@ test("customer can submit a request and read product results above the persisten
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
 
   Object.assign(globalThis, {
     window: dom.window,
@@ -613,16 +792,23 @@ test("customer can submit a request and read product results above the persisten
   assert.equal(fetchCalls[0]?.[0], "/api/agent/message");
   const submittedBody = JSON.parse(String(fetchCalls[0]?.[1]?.body));
   assert.match(submittedBody.idempotencyKey, /^[0-9a-f-]{36}$/);
-  assert.deepEqual({ ...submittedBody, idempotencyKey: undefined }, {
-    idempotencyKey: undefined,
-    message: "noise cancelling earphones under 5000",
-  });
+  assert.deepEqual(
+    { ...submittedBody, idempotencyKey: undefined },
+    {
+      idempotencyKey: undefined,
+      message: "noise cancelling earphones under 5000",
+    },
+  );
   assert.ok(form);
   assert.equal(
-    product.compareDocumentPosition(form) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
+    product.compareDocumentPosition(form) &
+      dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
     dom.window.Node.DOCUMENT_POSITION_FOLLOWING,
   );
-  assert.equal(view.getByText("I found one precise match.").textContent, "I found one precise match.");
+  assert.equal(
+    view.getByText("I found one precise match.").textContent,
+    "I found one precise match.",
+  );
   assert.equal(
     view.getByText("noise cancelling").textContent?.trim(),
     "noise cancelling",
@@ -641,6 +827,7 @@ test("Customer sees a clarification question without discovery-only presentation
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
 
   Object.assign(globalThis, {
     window: dom.window,
@@ -728,6 +915,7 @@ test("Customer sees authoritative Commerce Agent messages for zero-Product respo
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
   Object.assign(globalThis, {
     window: dom.window,
     document: dom.window.document,
@@ -773,7 +961,8 @@ test("Customer sees authoritative Commerce Agent messages for zero-Product respo
             result: {
               status: "TEMPORARILY_UNAVAILABLE",
               conversationId: "41000000-0000-4000-8000-000000000001",
-              message: "The Catalog is temporarily unavailable. Please try again.",
+              message:
+                "The Catalog is temporarily unavailable. Please try again.",
               retryable: true,
               products: [],
             },
@@ -812,6 +1001,7 @@ test("Customer can navigate a Recommendation Set one Product at a time", async (
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
   Object.assign(globalThis, {
     window: dom.window,
     document: dom.window.document,
@@ -942,6 +1132,7 @@ test("customer can request and read the details of a product", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
 
   Object.assign(globalThis, {
     window: dom.window,
@@ -1046,18 +1237,25 @@ test("customer can request and read the details of a product", async (t) => {
   );
   assert.equal(detailView.getByText("₹3,499").textContent, "₹3,499");
   assert.equal(detailView.getByText("In stock").textContent, "In stock");
-  assert.equal(detailView.getByText("Battery life").textContent, "Battery life");
+  assert.equal(
+    detailView.getByText("Battery life").textContent,
+    "Battery life",
+  );
   assert.equal(detailView.getByText("30 hours").textContent, "30 hours");
   assert.equal(detailView.getByText("Black, Sand").textContent, "Black, Sand");
 
   await user.click(detailView.getByRole("button", { name: "Close details" }));
-  assert.equal(view.queryByRole("dialog", { name: "Quiet Buds details" }), null);
+  assert.equal(
+    view.queryByRole("dialog", { name: "Quiet Buds details" }),
+    null,
+  );
 });
 
 test("customer sees the status when product details cannot be loaded", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
 
   Object.assign(globalThis, {
     window: dom.window,
@@ -1158,10 +1356,11 @@ test("customer sees the status when product details cannot be loaded", async (t)
   );
 });
 
-test("customer sees the updated cart after the agent adds a product", async (t) => {
+test("Customer sees a Product Add control when asking the Commerce Agent to add it", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
 
   Object.assign(globalThis, {
     window: dom.window,
@@ -1176,22 +1375,42 @@ test("customer sees the updated cart after the agent adds a product", async (t) 
     value: dom.window.navigator,
   });
 
-  globalThis.fetch = async () =>
-    new Response(
+  const requests: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push(`${init?.method ?? "GET"} ${String(input)}`);
+    return new Response(
       JSON.stringify({
         data: {
-          message: "Added 2 × Quiet Buds to your cart.",
-          products: [],
-          cart: {
-            id: "31000000-0000-4000-8000-000000000001",
-            totalQuantity: 2,
-            subtotalMinor: 699800,
-            currency: "INR",
+          status: "COMPLETED",
+          conversationId: "41000000-0000-4000-8000-000000000001",
+          message:
+            "I can’t change your Cart. Use Add to Cart on Quiet Buds to add it yourself.",
+          intentBrief: {
+            goal: "Present Quiet Buds with its Add control",
+            constraints: createEmptyConversationContext().productConstraints,
+            knownEntities: [{ type: "PRODUCT", value: "Quiet Buds" }],
+            missingInformation: [],
+            confidence: 0.99,
+            requestedEffects: ["PRESENT_ADD_CONTROLS"],
           },
+          products: [
+            {
+              id: "11000000-0000-4000-8000-000000000001",
+              slug: "quiet-buds",
+              name: "Quiet Buds",
+              description: "Compact wireless earphones.",
+              category: "Audio",
+              priceMinor: 349900,
+              currency: "INR",
+              inStock: true,
+              attributes: {},
+            },
+          ],
         },
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
+  };
 
   const [{ render, cleanup }, userEvent, { ShoppingAssistant }] =
     await Promise.all([
@@ -1211,22 +1430,28 @@ test("customer sees the updated cart after the agent adds a product", async (t) 
 
   await user.type(
     view.getByRole("textbox", { name: "Message the Arc Commerce Agent" }),
-    "add two Quiet Buds to my cart",
+    "add Quiet Buds to my Cart",
   );
   await user.click(view.getByRole("button", { name: "Send" }));
 
   assert.equal(
-    (await view.findByText("Added 2 × Quiet Buds to your cart.")).textContent,
-    "Added 2 × Quiet Buds to your cart.",
+    (
+      await view.findByText(
+        "I can’t change your Cart. Use Add to Cart on Quiet Buds to add it yourself.",
+      )
+    ).textContent,
+    "I can’t change your Cart. Use Add to Cart on Quiet Buds to add it yourself.",
   );
-  assert.equal(view.getByRole("button", { name: "Cart · 2" }).textContent, " Cart · 2");
-  assert.equal(view.queryByText("No close matches yet. Try broadening the request."), null);
+  assert.ok(view.getByRole("button", { name: "Add Quiet Buds to Cart" }));
+  assert.ok(view.getByRole("button", { name: "Cart, unavailable" }));
+  assert.deepEqual(requests, ["POST /api/agent/message"]);
 });
 
 test("Customer sees a structured Cart panel within the Conversation", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
 
   Object.assign(globalThis, {
     window: dom.window,
@@ -1304,13 +1529,17 @@ test("Customer sees a structured Cart panel within the Conversation", async (t) 
   assert.ok(cart.getByText("1 × ₹5,299"));
   assert.ok(cart.getByText("2 × ₹3,799"));
   assert.ok(cart.getByText("₹12,897"));
-  assert.equal(view.getByRole("button", { name: "Cart · 3" }).textContent, " Cart · 3");
+  assert.equal(
+    view.getByRole("button", { name: "Cart · 3" }).textContent,
+    "Cart · 3",
+  );
 });
 
-test("Customer sees an empty Cart summary without an empty panel", async (t) => {
+test("Customer sees the authoritative empty state in the Cart drawer", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
 
   Object.assign(globalThis, {
     window: dom.window,
@@ -1345,7 +1574,7 @@ test("Customer sees an empty Cart summary without an empty panel", async (t) => 
       { status: 200, headers: { "content-type": "application/json" } },
     );
 
-  const [{ render, cleanup }, userEvent, { ShoppingAssistant }] =
+  const [{ render, cleanup, within }, userEvent, { ShoppingAssistant }] =
     await Promise.all([
       import("@testing-library/react"),
       import("@testing-library/user-event").then((module) => module.default),
@@ -1367,14 +1596,21 @@ test("Customer sees an empty Cart summary without an empty panel", async (t) => 
   await user.click(view.getByRole("button", { name: "Send" }));
 
   assert.ok(await view.findByText("Your Cart is empty."));
-  assert.equal(view.getByRole("button", { name: "Cart · 0" }).textContent, " Cart · 0");
+  assert.equal(
+    view.getByRole("button", { name: "Cart · 0" }).textContent,
+    "Cart · 0",
+  );
   assert.equal(view.queryByRole("region", { name: "Your Cart" }), null);
+  await user.click(view.getByRole("button", { name: "Cart · 0" }));
+  const drawer = view.getByRole("dialog", { name: "Your Cart" });
+  assert.ok(within(drawer).getByText("Your Cart is empty."));
 });
 
 test("Storefront reuses the server conversation identifier on later turns", async (t) => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
 
   Object.assign(globalThis, {
     window: dom.window,
@@ -1397,7 +1633,10 @@ test("Storefront reuses the server conversation identifier on later turns", asyn
       JSON.stringify({
         data: {
           conversationId: "41000000-0000-4000-8000-000000000001",
-          message: turn === 1 ? "Here are running shoes." : "Here are waterproof options.",
+          message:
+            turn === 1
+              ? "Here are running shoes."
+              : "Here are waterproof options.",
           products: [],
         },
       }),
@@ -1451,6 +1690,7 @@ test("Customer can read earlier Conversation Turns after a later response", asyn
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
 
   Object.assign(globalThis, {
     window: dom.window,
@@ -1531,6 +1771,7 @@ test("Customer can resume and reset the current Conversation without changing th
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
+  installDrawerBrowserApis(dom);
   Object.assign(globalThis, {
     window: dom.window,
     document: dom.window.document,
@@ -1546,6 +1787,28 @@ test("Customer can resume and reset the current Conversation without changing th
   const requests: string[] = [];
   globalThis.fetch = async (input, init) => {
     requests.push(`${init?.method ?? "GET"} ${String(input)}`);
+    if (input === "/api/cart") {
+      return Response.json({
+        data: {
+          id: "31000000-0000-4000-8000-000000000001",
+          items: [
+            {
+              productId: "21000000-0000-4000-8000-000000000001",
+              productName: "Quiet Buds",
+              quantity: 2,
+              cartPriceMinor: 349900,
+              subtotalMinor: 699800,
+            },
+          ],
+          totalQuantity: 2,
+          subtotalMinor: 699800,
+          currency: "INR",
+        },
+      });
+    }
+    if (input === "/api/agent/conversation" && !init?.method) {
+      return Response.json({ data: null });
+    }
     if (init?.method === "POST") {
       return new Response(
         JSON.stringify({
@@ -1585,6 +1848,7 @@ test("Customer can resume and reset the current Conversation without changing th
   const view = render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      resumeConversation: true,
       initialConversation: {
         conversationId: "41000000-0000-4000-8000-000000000001",
         transcript: [
@@ -1627,8 +1891,12 @@ test("Customer can resume and reset the current Conversation without changing th
   });
   const user = userEvent.setup({ document: dom.window.document });
 
+  assert.ok(await view.findByRole("button", { name: "Cart · 2" }));
   assert.equal(view.getByText("I want shoes").textContent, "I want shoes");
-  assert.equal(view.getByText("Here are shoes.").textContent, "Here are shoes.");
+  assert.equal(
+    view.getByText("Here are shoes.").textContent,
+    "Here are shoes.",
+  );
   const contextSummary = view.getByRole("complementary", {
     name: "Context Summary",
   });
@@ -1651,9 +1919,24 @@ test("Customer can resume and reset the current Conversation without changing th
   await user.click(view.getByRole("button", { name: "New conversation" }));
 
   assert.deepEqual(requests, [
+    "GET /api/agent/conversation",
+    "GET /api/cart",
     "POST /api/agent/message",
     "DELETE /api/agent/conversation",
   ]);
   assert.equal(view.queryByText("I want shoes"), null);
-  assert.equal(view.getByRole("button", { name: "Cart · 0" }).textContent, " Cart · 0");
+  assert.equal(
+    view.getByRole("button", { name: "Cart · 2" }).textContent,
+    "Cart · 2",
+  );
+  await user.click(view.getByRole("button", { name: "Cart · 2" }));
+  const cartDrawer = view.getByRole("dialog", { name: "Your Cart" });
+  assert.equal(
+    within(cartDrawer).getByText("Quiet Buds").textContent,
+    "Quiet Buds",
+  );
+  assert.equal(
+    within(cartDrawer).getByText("2 × ₹3,499").textContent,
+    "2 × ₹3,499",
+  );
 });

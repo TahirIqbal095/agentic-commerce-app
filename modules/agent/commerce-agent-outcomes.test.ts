@@ -11,11 +11,7 @@ import {
 import type { AgentOutcome } from "./agent-outcome";
 import type { AgentMessage, ConversationModule } from "./conversation";
 import type { ConversationRepository } from "./conversation-repository";
-import type {
-  IntentAnalysis,
-  IntentAnalyzer,
-  IntentBrief,
-} from "./intent";
+import type { IntentAnalysis, IntentAnalyzer, IntentBrief } from "./intent";
 import { createEmptyConversationContext } from "./intent";
 import { createConversationModule } from "./conversation";
 
@@ -100,16 +96,8 @@ const directAddBrief: IntentBrief = {
     attributes: { color: "Black" },
   },
   knownEntities: [{ type: "PRODUCT_TYPE", value: "shirt" }],
-  requestedEffects: ["DISCOVER_PRODUCTS", "ADD_TO_CART"],
+  requestedEffects: ["DISCOVER_PRODUCTS", "PRESENT_ADD_CONTROLS"],
 };
-const emptyCart = {
-  id: null,
-  items: [],
-  totalQuantity: 0,
-  subtotalMinor: 0,
-  currency: "INR",
-};
-
 function intentAnalysisFor(intentBrief: IntentBrief): IntentAnalysis {
   const { constraints, ...analysis } = intentBrief;
   return {
@@ -185,7 +173,11 @@ test("lets the Commerce Agent choose from only the permitted Catalog capabilitie
         throw new Error("not used");
       },
     },
-    { async analyze() { return intentAnalysisFor(brief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(brief);
+      },
+    },
     {
       async startTurn() {
         return {
@@ -218,20 +210,30 @@ test("lets the Commerce Agent choose from only the permitted Catalog capabilitie
   });
 });
 
-test("does not expose Catalog capabilities for an ambiguous Cart addition", async () => {
+test("asks for a Product when a conversational Add request has no resolvable reference", async () => {
   const nonDiscoveryBrief: IntentBrief = {
     ...brief,
-    requestedEffects: ["ADD_TO_CART"],
+    requestedEffects: ["PRESENT_ADD_CONTROLS"],
   };
   const loop: CommerceAgentLoop = {
-    async run() { throw new Error("Cart additions must not use the model loop"); },
+    async run() {
+      throw new Error("Cart additions must not use the model loop");
+    },
   };
   const agent = createCommerceAgent(
     {
-      async search() { throw new Error("Catalog search must not be exposed"); },
-      async getProduct() { throw new Error("Product lookup must not be exposed"); },
+      async search() {
+        throw new Error("Catalog search must not be exposed");
+      },
+      async getProduct() {
+        throw new Error("Product lookup must not be exposed");
+      },
     },
-    { async analyze() { return intentAnalysisFor(nonDiscoveryBrief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(nonDiscoveryBrief);
+      },
+    },
     {
       async startTurn() {
         return {
@@ -243,18 +245,6 @@ test("does not expose Catalog capabilities for an ambiguous Cart addition", asyn
     },
     {
       agentLoop: loop,
-      cart: {
-        async addItem() { throw new Error("Ambiguous requests must not mutate"); },
-        async inspect() {
-          return {
-            id: null,
-            items: [],
-            totalQuantity: 0,
-            subtotalMinor: 0,
-            currency: "INR",
-          };
-        },
-      },
     },
   );
 
@@ -263,37 +253,29 @@ test("does not expose Catalog capabilities for an ambiguous Cart addition", asyn
   assert.equal(outcome.status, "NEEDS_INPUT");
 });
 
-test("revalidates a referenced Product before a non-discovery follow-up action", async () => {
+test("resolves a conversational Add request to a current Product and requires the Customer to use its Add control", async () => {
   const currentProduct = { ...product, priceMinor: 429900, inStock: true };
   const referencedBrief: IntentBrief = {
     ...brief,
-    requestedEffects: ["ADD_TO_CART"],
+    requestedEffects: ["PRESENT_ADD_CONTROLS"],
     referencedProductIds: [product.id],
   };
   const lookedUpProductIds: string[] = [];
-  const addedProducts: CatalogProduct[] = [];
-  const updatedCart = {
-    id: "31000000-0000-4000-8000-000000000001",
-    items: [{
-      productId: product.id,
-      productName: product.name,
-      quantity: 1,
-      cartPriceMinor: currentProduct.priceMinor,
-      subtotalMinor: currentProduct.priceMinor,
-    }],
-    totalQuantity: 1,
-    subtotalMinor: currentProduct.priceMinor,
-    currency: currentProduct.currency,
-  };
   const agent = createCommerceAgent(
     {
-      async search() { throw new Error("Catalog search must not be exposed"); },
+      async search() {
+        throw new Error("Catalog search must not be exposed");
+      },
       async getProduct(productId) {
         lookedUpProductIds.push(productId);
         return { ok: true, value: currentProduct };
       },
     },
-    { async analyze() { return intentAnalysisFor(referencedBrief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(referencedBrief);
+      },
+    },
     {
       async startTurn() {
         return {
@@ -316,14 +298,9 @@ test("revalidates a referenced Product before a non-discovery follow-up action",
     },
     {
       agentLoop: {
-        async run() { throw new Error("Cart additions must not use the model loop"); },
-      },
-      cart: {
-        async addItem(current) {
-          addedProducts.push(current);
-          return updatedCart;
+        async run() {
+          throw new Error("Cart additions must not use the model loop");
         },
-        async inspect() { return updatedCart; },
       },
     },
   );
@@ -331,98 +308,89 @@ test("revalidates a referenced Product before a non-discovery follow-up action",
   const outcome = await agent.respond({ message: "add the first one" });
 
   assert.deepEqual(lookedUpProductIds, [product.id]);
-  assert.deepEqual(addedProducts, [currentProduct]);
-  assert.deepEqual(outcome.products, []);
-  assert.deepEqual(outcome.cart, updatedCart);
+  assert.deepEqual(outcome, {
+    status: "COMPLETED",
+    conversationId,
+    message:
+      "I can’t change your Cart. Use Add to Cart on StrideFlow Daily Running Shoes to add it yourself.",
+    intentBrief: referencedBrief,
+    products: [currentProduct],
+  });
 });
 
-test("adds the only Catalog Product matching a direct Cart request", async () => {
-  const updatedCart = {
-    id: "31000000-0000-4000-8000-000000000001",
-    items: [{
-      productId: blackShirt.id,
-      productName: blackShirt.name,
-      quantity: 1,
-      cartPriceMinor: blackShirt.priceMinor,
-      subtotalMinor: blackShirt.priceMinor,
-    }],
-    totalQuantity: 1,
-    subtotalMinor: blackShirt.priceMinor,
-    currency: blackShirt.currency,
-  };
+test("presents the Add control for the only Product matching a conversational Add request", async () => {
   const searches: unknown[] = [];
-  const additions: CatalogProduct[] = [];
-  const transaction = {} as Parameters<
-    Parameters<NonNullable<Parameters<typeof createCommerceAgent>[3]["cart"]>["addItem"]>[2]
-  >[1];
-  let completedTransaction: unknown;
   const agent = createCommerceAgent(
     {
       async search(input) {
         searches.push(input);
         return { products: [blackShirt] };
       },
-      async getProduct() { throw new Error("Direct additions use search results"); },
+      async getProduct() {
+        throw new Error("Direct additions use search results");
+      },
     },
-    { async analyze() { return intentAnalysisFor(directAddBrief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(directAddBrief);
+      },
+    },
     {
       async startTurn() {
         return {
           conversationId,
           async recordIntentBrief() {},
-          async complete(_message, _outcome, completedWith) {
-            completedTransaction = completedWith;
-          },
+          async complete() {},
         };
       },
     },
     {
       agentLoop: {
-        async run() { throw new Error("The model must not select a direct match"); },
-      },
-      cart: {
-        async addItem(current, quantity, complete) {
-          additions.push(current);
-          assert.equal(quantity, 1);
-          await complete(updatedCart, transaction);
-          return updatedCart;
+        async run() {
+          throw new Error("The model must not select a direct match");
         },
-        async inspect() { throw new Error("Successful additions do not inspect"); },
       },
     },
   );
 
   const outcome = await agent.respond({ message: "add a black shirt" });
 
-  assert.deepEqual(searches, [{
-    productTypes: ["shirt"],
-    category: "Apparel",
-    inStockOnly: true,
-    attributes: { color: "Black" },
-    limit: 2,
-  }]);
-  assert.deepEqual(additions, [blackShirt]);
-  assert.equal(completedTransaction, transaction);
+  assert.deepEqual(searches, [
+    {
+      productTypes: ["shirt"],
+      category: "Apparel",
+      inStockOnly: true,
+      attributes: { color: "Black" },
+      limit: 2,
+    },
+  ]);
   assert.deepEqual(outcome, {
     status: "COMPLETED",
     conversationId,
-    message: "Added 1 × Everyday Black Shirt to your Cart.",
+    message:
+      "I can’t change your Cart. Use Add to Cart on Everyday Black Shirt to add it yourself.",
     intentBrief: directAddBrief,
-    products: [],
-    cart: updatedCart,
+    products: [blackShirt],
   });
 });
 
-test("shows matching Products without changing the Cart when a direct addition is ambiguous", async () => {
+test("presents Product choices without reading or changing the Cart when a conversational Add request is ambiguous", async () => {
   const blackShirts = [blackShirt, formalBlackShirt];
-  let inspected = 0;
   let recordedRecommendationSet: CatalogProduct[] | undefined;
   const agent = createCommerceAgent(
     {
-      async search() { return { products: blackShirts }; },
-      async getProduct() { throw new Error("Ambiguous additions do not look up"); },
+      async search() {
+        return { products: blackShirts };
+      },
+      async getProduct() {
+        throw new Error("Ambiguous additions do not look up");
+      },
     },
-    { async analyze() { return intentAnalysisFor(directAddBrief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(directAddBrief);
+      },
+    },
     {
       async startTurn() {
         return {
@@ -437,13 +405,8 @@ test("shows matching Products without changing the Cart when a direct addition i
     },
     {
       agentLoop: {
-        async run() { throw new Error("The model must not choose among matches"); },
-      },
-      cart: {
-        async addItem() { throw new Error("Ambiguous additions must not mutate"); },
-        async inspect() {
-          inspected += 1;
-          return emptyCart;
+        async run() {
+          throw new Error("The model must not choose among matches");
         },
       },
     },
@@ -451,28 +414,34 @@ test("shows matching Products without changing the Cart when a direct addition i
 
   const outcome = await agent.respond({ message: "add a black shirt" });
 
-  assert.equal(inspected, 1);
   assert.deepEqual(recordedRecommendationSet, blackShirts);
   assert.deepEqual(outcome, {
     status: "NEEDS_INPUT",
     conversationId,
-    message: "I found multiple Products matching that Cart request.",
-    question: "Which Product would you like to add?",
+    message:
+      "I can’t change your Cart. Choose a Product, then use its Add to Cart control.",
+    question: "Which Product did you mean?",
     missingInformation: ["Unambiguous Product"],
     intentBrief: directAddBrief,
     products: blackShirts,
-    cart: emptyCart,
   });
 });
 
-test("explains that no Product matches a direct addition and leaves the Cart unchanged", async () => {
-  let inspected = 0;
+test("explains that no Product matches a conversational Add request", async () => {
   const agent = createCommerceAgent(
     {
-      async search() { return { products: [] }; },
-      async getProduct() { throw new Error("Missing Products do not look up"); },
+      async search() {
+        return { products: [] };
+      },
+      async getProduct() {
+        throw new Error("Missing Products do not look up");
+      },
     },
-    { async analyze() { return intentAnalysisFor(directAddBrief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(directAddBrief);
+      },
+    },
     {
       async startTurn() {
         return {
@@ -484,13 +453,8 @@ test("explains that no Product matches a direct addition and leaves the Cart unc
     },
     {
       agentLoop: {
-        async run() { throw new Error("The model must not invent a match"); },
-      },
-      cart: {
-        async addItem() { throw new Error("Missing Products must not mutate"); },
-        async inspect() {
-          inspected += 1;
-          return emptyCart;
+        async run() {
+          throw new Error("The model must not invent a match");
         },
       },
     },
@@ -498,26 +462,30 @@ test("explains that no Product matches a direct addition and leaves the Cart unc
 
   const outcome = await agent.respond({ message: "add a black shirt" });
 
-  assert.equal(inspected, 1);
   assert.deepEqual(outcome, {
     status: "COMPLETED",
     conversationId,
-    message: "I couldn't find a Product matching that Cart request.",
+    message: "I couldn't find a matching Product to present.",
     intentBrief: directAddBrief,
     products: [],
-    cart: emptyCart,
   });
 });
 
-test("does not add a Product when the Catalog reports more matching pages", async () => {
+test("presents choices when the Catalog reports more matching pages", async () => {
   const agent = createCommerceAgent(
     {
       async search() {
         return { products: [blackShirt], nextCursor: blackShirt.id };
       },
-      async getProduct() { throw new Error("Paginated matches do not look up"); },
+      async getProduct() {
+        throw new Error("Paginated matches do not look up");
+      },
     },
-    { async analyze() { return intentAnalysisFor(directAddBrief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(directAddBrief);
+      },
+    },
     {
       async startTurn() {
         return {
@@ -530,11 +498,9 @@ test("does not add a Product when the Catalog reports more matching pages", asyn
     },
     {
       agentLoop: {
-        async run() { throw new Error("The model must not choose a paginated match"); },
-      },
-      cart: {
-        async addItem() { throw new Error("Paginated matches must not mutate"); },
-        async inspect() { return emptyCart; },
+        async run() {
+          throw new Error("The model must not choose a paginated match");
+        },
       },
     },
   );
@@ -543,33 +509,41 @@ test("does not add a Product when the Catalog reports more matching pages", asyn
 
   assert.equal(outcome.status, "NEEDS_INPUT");
   assert.deepEqual(outcome.products, [blackShirt]);
-  assert.deepEqual(outcome.cart, emptyCart);
+  assert.equal("cart" in outcome, false);
 });
 
 test("returns a retryable outcome when ambiguous direct matches cannot be retained", async () => {
   const agent = createCommerceAgent(
     {
-      async search() { return { products: [blackShirt, formalBlackShirt] }; },
-      async getProduct() { throw new Error("Ambiguous additions do not look up"); },
+      async search() {
+        return { products: [blackShirt, formalBlackShirt] };
+      },
+      async getProduct() {
+        throw new Error("Ambiguous additions do not look up");
+      },
     },
-    { async analyze() { return intentAnalysisFor(directAddBrief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(directAddBrief);
+      },
+    },
     {
       async startTurn() {
         return {
           conversationId,
           async recordIntentBrief() {},
-          async recordRecommendationSet() { return false; },
+          async recordRecommendationSet() {
+            return false;
+          },
           async complete() {},
         };
       },
     },
     {
       agentLoop: {
-        async run() { throw new Error("The model must not choose among matches"); },
-      },
-      cart: {
-        async addItem() { throw new Error("Ambiguous additions must not mutate"); },
-        async inspect() { throw new Error("Stale outcomes do not inspect"); },
+        async run() {
+          throw new Error("The model must not choose among matches");
+        },
       },
     },
   );
@@ -614,9 +588,15 @@ test("bounds Catalog search inputs and results exposed to the Commerce Agent", a
         catalogSearches.push(input);
         return { products: catalogProducts, nextCursor: "catalog-cursor" };
       },
-      async getProduct() { throw new Error("not used"); },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { return intentAnalysisFor(brief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(brief);
+      },
+    },
     {
       async startTurn() {
         return {
@@ -665,10 +645,18 @@ test("runs the Commerce Agent with fixed step, timeout, token, and tool-result l
   };
   const agent = createCommerceAgent(
     {
-      async search() { throw new Error("not used"); },
-      async getProduct() { throw new Error("not used"); },
+      async search() {
+        throw new Error("not used");
+      },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { return intentAnalysisFor(brief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(brief);
+      },
+    },
     {
       async startTurn() {
         return {
@@ -709,10 +697,18 @@ test("stops an uncooperative agent loop and returns the best grounded Product ou
   };
   const agent = createCommerceAgent(
     {
-      async search() { return { products: [product] }; },
-      async getProduct() { throw new Error("not used"); },
+      async search() {
+        return { products: [product] };
+      },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { return intentAnalysisFor(brief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(brief);
+      },
+    },
     {
       async startTurn() {
         return {
@@ -764,9 +760,15 @@ test("denies Catalog calls attempted after the agent loop timeout", async () => 
         searches += 1;
         return { products: [product] };
       },
-      async getProduct() { throw new Error("not used"); },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { return intentAnalysisFor(brief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(brief);
+      },
+    },
     {
       async startTurn() {
         return {
@@ -802,10 +804,18 @@ test("returns NEEDS_INPUT when a step or token limit is reached without grounded
   };
   const agent = createCommerceAgent(
     {
-      async search() { throw new Error("not used"); },
-      async getProduct() { throw new Error("not used"); },
+      async search() {
+        throw new Error("not used");
+      },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { return intentAnalysisFor(brief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(brief);
+      },
+    },
     {
       async startTurn() {
         return {
@@ -843,10 +853,18 @@ test("rejects a model completion that references an unobserved Product", async (
   };
   const agent = createCommerceAgent(
     {
-      async search() { throw new Error("not used"); },
-      async getProduct() { throw new Error("not used"); },
+      async search() {
+        throw new Error("not used");
+      },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { return intentAnalysisFor(brief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(brief);
+      },
+    },
     {
       async startTurn() {
         return {
@@ -921,9 +939,15 @@ test("executes an AI-selected Catalog search through the bounded tool loop", asy
         catalogSearches.push(input);
         return { products: [product] };
       },
-      async getProduct() { throw new Error("not used"); },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { return intentAnalysisFor(brief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(brief);
+      },
+    },
     {
       async startTurn() {
         return {
@@ -1015,9 +1039,15 @@ test("uses a grounded fallback when the AI SDK returns output at the five-step l
         searches += 1;
         return { products: [product] };
       },
-      async getProduct() { throw new Error("not used"); },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { return intentAnalysisFor(brief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(brief);
+      },
+    },
     {
       async startTurn() {
         return {
@@ -1065,10 +1095,18 @@ test("stops the AI SDK tool loop at its cumulative output-token budget", async (
   });
   const agent = createCommerceAgent(
     {
-      async search() { return { products: [product] }; },
-      async getProduct() { throw new Error("not used"); },
+      async search() {
+        return { products: [product] };
+      },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { return intentAnalysisFor(brief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(brief);
+      },
+    },
     {
       async startTurn() {
         return {
@@ -1096,18 +1134,28 @@ test("returns a COMPLETED outcome with trusted Products and agent-composed langu
     outcome?: AgentOutcome;
   } = {};
   const analyzer: IntentAnalyzer = {
-    async analyze() { return intentAnalysisFor(brief); },
+    async analyze() {
+      return intentAnalysisFor(brief);
+    },
   };
   const catalog: CatalogModule = {
-    async search() { return { products: [product] }; },
-    async getProduct() { throw new Error("not used"); },
+    async search() {
+      return { products: [product] };
+    },
+    async getProduct() {
+      throw new Error("not used");
+    },
   };
   const conversation: ConversationModule = {
     async startTurn() {
       return {
         conversationId,
-        async recordIntentBrief(intentBrief) { persisted.intentBrief = intentBrief; },
-        async complete(_message, outcome) { persisted.outcome = outcome; },
+        async recordIntentBrief(intentBrief) {
+          persisted.intentBrief = intentBrief;
+        },
+        async complete(_message, outcome) {
+          persisted.outcome = outcome;
+        },
       };
     },
   };
@@ -1152,16 +1200,27 @@ test("returns NEEDS_INPUT with one focused question for a genuinely ambiguous re
   let persistedOutcome: AgentOutcome | undefined;
   const agent = createCommerceAgent(
     {
-      async search() { searched = true; return { products: [] }; },
-      async getProduct() { throw new Error("not used"); },
+      async search() {
+        searched = true;
+        return { products: [] };
+      },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { return intentAnalysisFor(ambiguousBrief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(ambiguousBrief);
+      },
+    },
     {
       async startTurn() {
         return {
           conversationId,
           async recordIntentBrief() {},
-          async complete(_message, outcome) { persistedOutcome = outcome; },
+          async complete(_message, outcome) {
+            persistedOutcome = outcome;
+          },
         };
       },
     },
@@ -1198,16 +1257,26 @@ test("returns a retryable typed outcome when Intent analysis stays unavailable",
   let persistedOutcome: AgentOutcome | undefined;
   const agent = createCommerceAgent(
     {
-      async search() { throw new Error("not used"); },
-      async getProduct() { throw new Error("not used"); },
+      async search() {
+        throw new Error("not used");
+      },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { throw new Error("model unavailable"); } },
+    {
+      async analyze() {
+        throw new Error("model unavailable");
+      },
+    },
     {
       async startTurn() {
         return {
           conversationId,
           async recordIntentBrief() {},
-          async complete(_message, outcome) { persistedOutcome = outcome; },
+          async complete(_message, outcome) {
+            persistedOutcome = outcome;
+          },
         };
       },
     },
@@ -1229,12 +1298,22 @@ test("returns a retryable typed outcome when Intent analysis stays unavailable",
 test("returns a retryable typed outcome when conversation persistence cannot start", async () => {
   const agent = createCommerceAgent(
     {
-      async search() { throw new Error("not used"); },
-      async getProduct() { throw new Error("not used"); },
+      async search() {
+        throw new Error("not used");
+      },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { throw new Error("not used"); } },
     {
-      async startTurn() { throw new Error("database unavailable"); },
+      async analyze() {
+        throw new Error("not used");
+      },
+    },
+    {
+      async startTurn() {
+        throw new Error("database unavailable");
+      },
     },
     { agentLoop: unusedAgentLoop },
   );
@@ -1253,16 +1332,26 @@ test("returns a retryable typed outcome when discovery infrastructure fails", as
   let persistedOutcome: AgentOutcome | undefined;
   const agent = createCommerceAgent(
     {
-      async search() { throw new Error("catalog unavailable"); },
-      async getProduct() { throw new Error("not used"); },
+      async search() {
+        throw new Error("catalog unavailable");
+      },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { return intentAnalysisFor(brief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(brief);
+      },
+    },
     {
       async startTurn() {
         return {
           conversationId,
           async recordIntentBrief() {},
-          async complete(_message, outcome) { persistedOutcome = outcome; },
+          async complete(_message, outcome) {
+            persistedOutcome = outcome;
+          },
         };
       },
     },
@@ -1292,16 +1381,26 @@ test("returns a retryable typed outcome when the agent loop fails", async () => 
   let persistedOutcome: AgentOutcome | undefined;
   const agent = createCommerceAgent(
     {
-      async search() { throw new Error("not used"); },
-      async getProduct() { throw new Error("not used"); },
+      async search() {
+        throw new Error("not used");
+      },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { return intentAnalysisFor(ambiguousBrief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(ambiguousBrief);
+      },
+    },
     {
       async startTurn() {
         return {
           conversationId,
           async recordIntentBrief() {},
-          async complete(_message, outcome) { persistedOutcome = outcome; },
+          async complete(_message, outcome) {
+            persistedOutcome = outcome;
+          },
         };
       },
     },
@@ -1325,16 +1424,28 @@ test("returns a retryable typed outcome when Intent Brief persistence fails", as
   let persistedOutcome: AgentOutcome | undefined;
   const agent = createCommerceAgent(
     {
-      async search() { throw new Error("not used"); },
-      async getProduct() { throw new Error("not used"); },
+      async search() {
+        throw new Error("not used");
+      },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { return intentAnalysisFor(brief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(brief);
+      },
+    },
     {
       async startTurn() {
         return {
           conversationId,
-          async recordIntentBrief() { throw new Error("database unavailable"); },
-          async complete(_message, outcome) { persistedOutcome = outcome; },
+          async recordIntentBrief() {
+            throw new Error("database unavailable");
+          },
+          async complete(_message, outcome) {
+            persistedOutcome = outcome;
+          },
         };
       },
     },
@@ -1357,16 +1468,26 @@ test("returns a retryable typed outcome when Intent Brief persistence fails", as
 test("returns a retryable typed outcome when Agent Outcome persistence fails", async () => {
   const agent = createCommerceAgent(
     {
-      async search() { return { products: [product] }; },
-      async getProduct() { throw new Error("not used"); },
+      async search() {
+        return { products: [product] };
+      },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { return intentAnalysisFor(brief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(brief);
+      },
+    },
     {
       async startTurn() {
         return {
           conversationId,
           async recordIntentBrief() {},
-          async complete() { throw new Error("database unavailable"); },
+          async complete() {
+            throw new Error("database unavailable");
+          },
         };
       },
     },
@@ -1387,9 +1508,12 @@ test("returns a retryable typed outcome when Agent Outcome persistence fails", a
 
 test("persists the Intent Brief and Agent Outcome as inspectable turn metadata", async () => {
   const metadataUpdates: Array<{ messageId: string; metadata: unknown }> = [];
-  const appended: Array<{ role: string; content: string; metadata: unknown }> = [];
+  const appended: Array<{ role: string; content: string; metadata: unknown }> =
+    [];
   const repository: ConversationRepository = {
-    async findDuplicate() { return null; },
+    async findDuplicate() {
+      return null;
+    },
     async create() {
       return {
         conversationId,
@@ -1397,7 +1521,9 @@ test("persists the Intent Brief and Agent Outcome as inspectable turn metadata",
         context: createEmptyConversationContext(),
       };
     },
-    async findOwnedContext() { return null; },
+    async findOwnedContext() {
+      return null;
+    },
     async saveContextAndMetadata(
       _conversationId,
       _context,
@@ -1413,10 +1539,18 @@ test("persists the Intent Brief and Agent Outcome as inspectable turn metadata",
   };
   const agent = createCommerceAgent(
     {
-      async search() { return { products: [product] }; },
-      async getProduct() { throw new Error("not used"); },
+      async search() {
+        return { products: [product] };
+      },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { return intentAnalysisFor(brief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(brief);
+      },
+    },
     createConversationModule(
       "11000000-0000-4000-8000-000000000001",
       repository,
@@ -1455,7 +1589,9 @@ test("persists the Intent Brief and Agent Outcome as inspectable turn metadata",
 test("continues a Conversation only for its owning Guest Session", async () => {
   const appendedMessages: string[] = [];
   const repository: ConversationRepository = {
-    async findDuplicate() { return null; },
+    async findDuplicate() {
+      return null;
+    },
     async create() {
       throw new Error("not used");
     },
@@ -1488,7 +1624,9 @@ test("continues a Conversation only for its owning Guest Session", async () => {
 test("redacts sensitive Customer text before durable Transcript persistence", async () => {
   const persistedMessages: string[] = [];
   const repository: ConversationRepository = {
-    async findDuplicate() { return null; },
+    async findDuplicate() {
+      return null;
+    },
     async create(_owner, message) {
       persistedMessages.push(message);
       return {
@@ -1537,8 +1675,7 @@ test("excludes credentials and unnecessary personal data from persisted intent a
   const metadataRecords: unknown[] = [];
   const sensitiveBrief: IntentBrief = {
     ...brief,
-    goal:
-      "Alice wants shoes at 12 Main Street; OTP 654321; contact jane.private@example.com; reasoning: hidden notes",
+    goal: "Alice wants shoes at 12 Main Street; OTP 654321; contact jane.private@example.com; reasoning: hidden notes",
     constraints: {
       ...brief.constraints,
       attributes: {
@@ -1556,7 +1693,9 @@ test("excludes credentials and unnecessary personal data from persisted intent a
     ],
   };
   const repository: ConversationRepository = {
-    async findDuplicate() { return null; },
+    async findDuplicate() {
+      return null;
+    },
     async create() {
       return {
         conversationId,
@@ -1564,7 +1703,9 @@ test("excludes credentials and unnecessary personal data from persisted intent a
         context: createEmptyConversationContext(),
       };
     },
-    async findOwnedContext() { return null; },
+    async findOwnedContext() {
+      return null;
+    },
     async saveContextAndMetadata(
       _conversationId,
       _context,
@@ -1580,10 +1721,18 @@ test("excludes credentials and unnecessary personal data from persisted intent a
   };
   const agent = createCommerceAgent(
     {
-      async search() { return { products: [product] }; },
-      async getProduct() { throw new Error("not used"); },
+      async search() {
+        return { products: [product] };
+      },
+      async getProduct() {
+        throw new Error("not used");
+      },
     },
-    { async analyze() { return intentAnalysisFor(sensitiveBrief); } },
+    {
+      async analyze() {
+        return intentAnalysisFor(sensitiveBrief);
+      },
+    },
     createConversationModule(
       "11000000-0000-4000-8000-000000000001",
       repository,
