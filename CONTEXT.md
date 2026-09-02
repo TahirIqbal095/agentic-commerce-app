@@ -47,9 +47,10 @@ upsell, accessory, bundle, alternative, or compatibility candidates.
 _Avoid_: Recommendation
 
 **Cart**:
-A Customer's mutable selection of the Brand's Products before an Order is
-created. It persists independently of Conversations and does not reserve
-Product inventory.
+A Customer's selection of the Brand's Products before an Order is created. An
+active Cart is mutable, persists independently of Conversations, and does not
+reserve Product inventory. Creating an Order converts that Cart into read-only
+history; a later selection starts a new active Cart.
 _Avoid_: Basket, draft order
 
 **Cart Item**:
@@ -57,6 +58,23 @@ A Product selected in a Cart, together with its positive whole-unit quantity
 and Cart Price. It remains visible when the Product's current price or
 availability changes.
 _Avoid_: Line item, cart line
+
+**Cart Item Removal**:
+The explicit removal of one Cart Item from a Cart. Setting a Cart Item's
+quantity to zero is invalid and does not mean removal.
+_Avoid_: Product deletion, zero quantity
+
+**Cart Quantity Change**:
+An authoritative change that replaces a Cart Item's quantity with another
+positive whole-unit quantity. It may be requested conversationally or through
+controls on the current Cart summary.
+_Avoid_: Cart Item Removal, Product quantity
+
+**Cart Mutation**:
+An authoritative addition, Cart Item Removal, Cart Quantity Change, or clearing
+of a Cart. Multiple Cart Mutations requested in one Conversation Turn succeed
+or fail together.
+_Avoid_: Cart edit, optimistic update
 
 **Cart Price**:
 The unit price shown for a Cart Item, retained until the Cart is authoritatively
@@ -68,6 +86,12 @@ _Avoid_: Current price, final price
 The sum of each Cart Item's quantity multiplied by its Cart Price, before any
 tax, shipping, discounts, or final checkout pricing.
 _Avoid_: Accumulated total, final total
+
+**Cart Summary**:
+A Customer-visible snapshot of authoritative Cart state at one point in a
+Conversation. Only the most recent Cart Summary is current and interactive;
+earlier Cart Summaries remain visible as read-only history.
+_Avoid_: Live Cart, checkout summary
 
 **Recommendation**:
 A Product suggestion shown in the context of a Customer's intent or Cart,
@@ -94,8 +118,9 @@ the Cart and protected commerce records unchanged.
 _Avoid_: Chat session, request
 
 **Conversation Turn**:
-One Customer message and the Commerce Agent response it produces within a
-Conversation.
+One Customer message or interactive Cart command and the response it produces
+within a Conversation. Interactive Cart commands use deterministic commerce
+rules and do not require model interpretation.
 _Avoid_: Request, prompt
 
 **Conversation Context**:
@@ -126,6 +151,8 @@ _Avoid_: Autonomous purchase, chat payment
 **Checkout Proposal**:
 An immutable commercial summary of a Cart, including final Product prices,
 totals, stock warnings, and the Policy Evaluation at preparation time.
+Changing that Cart invalidates any unconsumed Checkout Proposal prepared from
+its earlier state.
 _Avoid_: Checkout, quote, payment request
 
 **Policy Evaluation**:
