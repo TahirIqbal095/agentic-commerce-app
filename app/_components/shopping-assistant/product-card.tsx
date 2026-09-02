@@ -7,15 +7,22 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { formatMoney } from "@/lib/format-money";
 import { cn } from "@/lib/utils";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
+import type { CartFeedback } from "./types";
 
 export function ProductCard({
   product,
   index,
   onView,
+  onAdd,
+  isAdding,
+  cartFeedback,
 }: {
   product: CatalogProduct;
   index: number;
   onView: () => void;
+  onAdd: () => void;
+  isAdding: boolean;
+  cartFeedback?: CartFeedback;
 }) {
   const reduceMotion = useReducedMotion();
   const category = product.category.toLowerCase();
@@ -80,6 +87,16 @@ export function ProductCard({
             <Button
               type="button"
               size="sm"
+              aria-label={`Add ${product.name} to Cart`}
+              disabled={isAdding}
+              onClick={onAdd}
+              className="rounded-full bg-[#1d2a24] px-3 text-white hover:bg-[#31463a]"
+            >
+              {isAdding ? "Adding…" : "Add to Cart"}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
               variant="outline"
               aria-label={`View ${product.name} details`}
               onClick={onView}
@@ -88,6 +105,19 @@ export function ProductCard({
               View details <ArrowRight />
             </Button>
           </div>
+          {cartFeedback ? (
+            <p
+              role={cartFeedback.kind === "error" ? "alert" : "status"}
+              className={cn(
+                "mt-3 text-sm",
+                cartFeedback.kind === "error"
+                  ? "text-red-700"
+                  : "text-emerald-700",
+              )}
+            >
+              {cartFeedback.message}
+            </p>
+          ) : null}
         </CardContent>
       </Card>
     </motion.article>

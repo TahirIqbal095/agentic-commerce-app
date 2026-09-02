@@ -14,3 +14,8 @@ export type ConversationTurn = {
   result: AgentResult | null;
   error: string | null;
 };
+
+export type CartFeedback = {
+  kind: "success" | "error";
+  message: string;
+};

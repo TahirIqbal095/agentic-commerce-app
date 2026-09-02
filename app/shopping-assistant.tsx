@@ -10,10 +10,13 @@ import { ProductDetails } from "./_components/shopping-assistant/product-details
 import { ResultArea } from "./_components/shopping-assistant/result-area";
 import type {
   AgentResult,
+  CartFeedback,
   ConversationTurn,
   CurrentConversation,
 } from "./_components/shopping-assistant/types";
+import { formatMoney } from "@/lib/format-money";
 import { cn } from "@/lib/utils";
+import type { CartView } from "@/modules/cart/cart";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
 import type {
   ProductConstraintKey,
@@ -21,6 +24,9 @@ import type {
 } from "@/modules/agent/intent";
 
 type AgentApiResponse = { data: AgentResult } | { error: { message: string } };
+type CartApiResponse =
+  | { data: CartView }
+  | { error: { message: string; details?: { cart?: CartView } } };
 
 export function ShoppingAssistant({
   brandName,
@@ -46,6 +52,12 @@ export function ShoppingAssistant({
     null,
   );
   const [cartQuantity, setCartQuantity] = useState(0);
+  const [addingProductIds, setAddingProductIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [cartFeedback, setCartFeedback] = useState<
+    Record<string, CartFeedback>
+  >({});
 
   useEffect(() => {
     if (!resumeConversation) return;
@@ -175,6 +187,68 @@ export function ShoppingAssistant({
     setSelectedProduct(null);
   }
 
+  async function addProduct(product: CatalogProduct) {
+    if (addingProductIds.has(product.id)) return;
+    setAddingProductIds((current) => new Set(current).add(product.id));
+    setCartFeedback((current) => {
+      const next = { ...current };
+      delete next[product.id];
+      return next;
+    });
+
+    try {
+      const response = await fetch("/api/cart", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          type: "ADD_PRODUCT",
+          productId: product.id,
+          mutationKey: crypto.randomUUID(),
+        }),
+      });
+      const payload = (await response.json()) as CartApiResponse;
+      if (!response.ok || !("data" in payload)) {
+        if ("error" in payload && payload.error.details?.cart) {
+          setCartQuantity(payload.error.details.cart.totalQuantity);
+        }
+        throw new Error(
+          "error" in payload
+            ? payload.error.message
+            : `${product.name} could not be added.`,
+        );
+      }
+
+      setCartQuantity(payload.data.totalQuantity);
+      const item = payload.data.items.find(
+        (cartItem) => cartItem.productId === product.id,
+      );
+      setCartFeedback((current) => ({
+        ...current,
+        [product.id]: {
+          kind: "success",
+          message: `${product.name} quantity: ${item?.quantity ?? 0}. Cart subtotal: ${formatMoney(payload.data.subtotalMinor, payload.data.currency)}.`,
+        },
+      }));
+    } catch (requestError) {
+      setCartFeedback((current) => ({
+        ...current,
+        [product.id]: {
+          kind: "error",
+          message:
+            requestError instanceof Error
+              ? requestError.message
+              : `${product.name} could not be added.`,
+        },
+      }));
+    } finally {
+      setAddingProductIds((current) => {
+        const next = new Set(current);
+        next.delete(product.id);
+        return next;
+      });
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[#f4f1eb] text-[#1d2a24]">
       <div
@@ -213,6 +287,9 @@ export function ShoppingAssistant({
               <ResultArea
                 isLoading={isLoading}
                 onViewProduct={setSelectedProduct}
+                onAddProduct={addProduct}
+                addingProductIds={addingProductIds}
+                cartFeedback={cartFeedback}
                 turns={turns}
               />
             </>
@@ -224,6 +301,9 @@ export function ShoppingAssistant({
         <ProductDetails
           product={selectedProduct}
           onClose={() => setSelectedProduct(null)}
+          onAdd={() => addProduct(selectedProduct)}
+          isAdding={addingProductIds.has(selectedProduct.id)}
+          cartFeedback={cartFeedback[selectedProduct.id]}
         />
       ) : null}
 

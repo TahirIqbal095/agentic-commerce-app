@@ -6,17 +6,23 @@ import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/format-money";
 import { cn } from "@/lib/utils";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
+import type { CartFeedback } from "./types";
 
 type ProductApiResponse =
-  | { data: CatalogProduct }
-  | { error: { message: string } };
+  { data: CatalogProduct } | { error: { message: string } };
 
 export function ProductDetails({
   product,
   onClose,
+  onAdd,
+  isAdding,
+  cartFeedback,
 }: {
   product: CatalogProduct;
   onClose: () => void;
+  onAdd: () => void;
+  isAdding: boolean;
+  cartFeedback?: CartFeedback;
 }) {
   const [details, setDetails] = useState<CatalogProduct | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,7 +113,9 @@ export function ProductDetails({
         </div>
 
         {isLoading ? (
-          <p className="mt-8 text-sm text-[#59665f]">Loading product details…</p>
+          <p className="mt-8 text-sm text-[#59665f]">
+            Loading product details…
+          </p>
         ) : null}
         {error ? (
           <p
@@ -125,6 +133,28 @@ export function ProductDetails({
             <p className="mt-6 text-2xl font-semibold">
               {formatMoney(details.priceMinor, details.currency)}
             </p>
+            <Button
+              type="button"
+              aria-label={`Add ${product.name} to Cart`}
+              disabled={isAdding}
+              onClick={onAdd}
+              className="mt-6 rounded-full bg-[#1d2a24] text-white hover:bg-[#31463a]"
+            >
+              {isAdding ? "Adding…" : "Add to Cart"}
+            </Button>
+            {cartFeedback ? (
+              <p
+                role={cartFeedback.kind === "error" ? "alert" : "status"}
+                className={cn(
+                  "mt-4 text-sm",
+                  cartFeedback.kind === "error"
+                    ? "text-red-700"
+                    : "text-emerald-700",
+                )}
+              >
+                {cartFeedback.message}
+              </p>
+            ) : null}
           </>
         ) : null}
         {attributes.length > 0 ? (

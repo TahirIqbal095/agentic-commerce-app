@@ -8,15 +8,21 @@ import { CartPanel } from "./cart-panel";
 import { CustomerMessage } from "./customer-message";
 import { IntentSummary } from "./intent-summary";
 import { RecommendationCarousel } from "./recommendation-carousel";
-import type { ConversationTurn } from "./types";
+import type { CartFeedback, ConversationTurn } from "./types";
 
 export function ResultArea({
   isLoading,
   onViewProduct,
+  onAddProduct,
+  addingProductIds,
+  cartFeedback,
   turns,
 }: {
   isLoading: boolean;
   onViewProduct: (product: CatalogProduct) => void;
+  onAddProduct: (product: CatalogProduct) => void;
+  addingProductIds: ReadonlySet<string>;
+  cartFeedback: Record<string, CartFeedback>;
   turns: ConversationTurn[];
 }) {
   const reduceMotion = useReducedMotion();
@@ -96,6 +102,9 @@ export function ResultArea({
                       <RecommendationCarousel
                         products={turn.result.products}
                         onViewProduct={onViewProduct}
+                        onAddProduct={onAddProduct}
+                        addingProductIds={addingProductIds}
+                        cartFeedback={cartFeedback}
                       />
                     ) : null}
                     {inspectedCart && inspectedCart.items.length > 0 ? (

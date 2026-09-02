@@ -4,6 +4,7 @@ import test, { after } from "node:test";
 import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
 import { GET } from "@/app/api/products/route";
+import { POST as addToCart } from "@/app/api/cart/route";
 import { DELETE as deleteConversation } from "@/app/api/agent/conversation/route";
 import { db } from "@/db";
 import { conversations, messages } from "@/db/schema/agent";
@@ -13,7 +14,7 @@ import { cartItems, carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
 import { brands, guestSessions } from "@/db/schema/identity";
 import { createCatalogModule } from "@/modules/catalog/catalog";
-import { createCartModule } from "@/modules/cart/cart";
+import { createCartModule, type CartView } from "@/modules/cart/cart";
 import {
   cleanupExpiredGuestSessions,
   createDatabaseGuestSessionStore,
@@ -37,6 +38,21 @@ const EXPECTED_ACTIVE_PRODUCTS = [
   { slug: "reflective-running-laces", inStock: true },
   { slug: "complete-shoe-care-kit", inStock: true },
 ];
+
+function cartAddRequest(
+  productId: string,
+  mutationKey: string,
+  cookie?: string,
+): Request {
+  return new Request("http://localhost/api/cart", {
+    method: "POST",
+    headers: {
+      ...(cookie ? { cookie } : {}),
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ type: "ADD_PRODUCT", productId, mutationKey }),
+  });
+}
 after(async () => {
   await db.$client.end();
 });
@@ -352,10 +368,7 @@ test("cleanup removes an expired Guest Session's Cart, Conversation, and Recomme
     await db.select({ content: messages.content }).from(messages),
     [{ content: "active Conversation content" }],
   );
-  assert.equal(
-    (await db.select().from(recommendationEvents)).length,
-    1,
-  );
+  assert.equal((await db.select().from(recommendationEvents)).length, 1);
 });
 
 test("cleanup can be retried after expired Guest Sessions are removed", async () => {
@@ -404,7 +417,10 @@ test("cleanup preserves an immutable Audit Event without retaining its expired G
   assert.deepEqual(await db.select().from(guestSessions), []);
   assert.deepEqual(
     await db
-      .select({ id: auditEvents.id, guestSessionId: auditEvents.guestSessionId })
+      .select({
+        id: auditEvents.id,
+        guestSessionId: auditEvents.guestSessionId,
+      })
       .from(auditEvents)
       .where(eq(auditEvents.id, auditEventId)),
     [{ id: auditEventId, guestSessionId: expiredGuestSessionId }],
@@ -639,6 +655,127 @@ test("concurrent Customer turns retain every authoritative Cart addition", async
   assert.equal(summary.totalQuantity, 2);
   assert.equal(summary.subtotalMinor, 799800);
   assert.equal(summary.currency, "INR");
+});
+
+test("repeated explicit Add commands increment one Cart Item without repricing it", async () => {
+  await runSeedCommand();
+  const catalog = createCatalogModule();
+  const result = await catalog.search({
+    query: "StrideFlow Daily Running Shoes",
+    limit: 1,
+  });
+  const product = result.products[0];
+  assert.ok(product);
+
+  const firstResponse = await addToCart(
+    cartAddRequest(product.id, crypto.randomUUID()),
+  );
+  const cookie = firstResponse.headers.get("set-cookie")?.split(";", 1)[0];
+  assert.ok(cookie);
+  const secondResponse = await addToCart(
+    cartAddRequest(product.id, crypto.randomUUID(), cookie),
+  );
+
+  assert.equal(firstResponse.status, 200);
+  assert.equal(secondResponse.status, 200);
+  const payload = (await secondResponse.json()) as {
+    data: CartView;
+  };
+  assert.deepEqual(payload.data.items, [
+    {
+      productId: product.id,
+      productName: product.name,
+      quantity: 2,
+      cartPriceMinor: product.priceMinor,
+      subtotalMinor: product.priceMinor * 2,
+    },
+  ]);
+  assert.equal(payload.data.totalQuantity, 2);
+});
+
+test("explicit Add rejects a lower inventory limit with the unchanged Cart", async () => {
+  await runSeedCommand();
+  const [product] = await db
+    .select({ id: products.id, name: products.name })
+    .from(products)
+    .where(eq(products.active, true))
+    .limit(1);
+  assert.ok(product);
+  await db
+    .update(products)
+    .set({ stock: 1 })
+    .where(eq(products.id, product.id));
+
+  const firstResponse = await addToCart(
+    cartAddRequest(product.id, crypto.randomUUID()),
+  );
+  const cookie = firstResponse.headers.get("set-cookie")?.split(";", 1)[0];
+  assert.ok(cookie);
+  const rejectedResponse = await addToCart(
+    cartAddRequest(product.id, crypto.randomUUID(), cookie),
+  );
+
+  assert.equal(rejectedResponse.status, 409);
+  const payload = (await rejectedResponse.json()) as {
+    error: { message: string; details: { cart: CartView } };
+  };
+  assert.equal(
+    payload.error.message,
+    `${product.name} only has 1 unit in stock.`,
+  );
+  assert.equal(payload.error.details.cart.totalQuantity, 1);
+  assert.equal(payload.error.details.cart.items[0]?.quantity, 1);
+});
+
+test("explicit Add rejects inactive and out-of-stock Products without creating a Cart", async () => {
+  await runSeedCommand();
+  const availableProducts = await db
+    .select({ id: products.id })
+    .from(products)
+    .where(eq(products.active, true))
+    .limit(2);
+  const inactiveProduct = availableProducts[0];
+  const outOfStockProduct = availableProducts[1];
+  assert.ok(inactiveProduct);
+  assert.ok(outOfStockProduct);
+  await db
+    .update(products)
+    .set({ active: false })
+    .where(eq(products.id, inactiveProduct.id));
+  await db
+    .update(products)
+    .set({ stock: 0 })
+    .where(eq(products.id, outOfStockProduct.id));
+
+  const inactiveResponse = await addToCart(
+    cartAddRequest(inactiveProduct.id, crypto.randomUUID()),
+  );
+  const outOfStockResponse = await addToCart(
+    cartAddRequest(outOfStockProduct.id, crypto.randomUUID()),
+  );
+
+  assert.equal(inactiveResponse.status, 409);
+  assert.deepEqual(await inactiveResponse.json(), {
+    error: {
+      code: "PRODUCT_UNAVAILABLE",
+      message: "The Product is not available.",
+      details: {
+        cart: {
+          id: null,
+          items: [],
+          totalQuantity: 0,
+          subtotalMinor: 0,
+          currency: "INR",
+        },
+      },
+    },
+  });
+  assert.equal(outOfStockResponse.status, 409);
+  const outOfStockPayload = (await outOfStockResponse.json()) as {
+    error: { message: string; details: { cart: CartView } };
+  };
+  assert.match(outOfStockPayload.error.message, /only has 0 units in stock/);
+  assert.equal(outOfStockPayload.error.details.cart.id, null);
 });
 
 test("Cart additions retain an existing Cart Price", async () => {
