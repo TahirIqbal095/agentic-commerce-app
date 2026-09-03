@@ -3,6 +3,7 @@ export * from "./analytics";
 export * from "./audit";
 export * from "./cart";
 export * from "./catalog";
+export * from "./checkout";
 export * from "./enums";
 export * from "./identity";
 export type * from "./types";

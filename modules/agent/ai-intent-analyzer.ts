@@ -167,7 +167,12 @@ const intentAnalysisSchema = jsonSchema<IntentAnalysis>(
         maxItems: 3,
         items: {
           type: "string",
-          enum: ["DISCOVER_PRODUCTS", "PRESENT_ADD_CONTROLS", "INSPECT_CART"],
+          enum: [
+            "DISCOVER_PRODUCTS",
+            "PRESENT_ADD_CONTROLS",
+            "INSPECT_CART",
+            "START_CHECKOUT",
+          ],
         },
       },
       referencedProductIds: {
@@ -209,6 +214,7 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
     "DISCOVER_PRODUCTS",
     "PRESENT_ADD_CONTROLS",
     "INSPECT_CART",
+    "START_CHECKOUT",
   ]);
 
   return (
@@ -246,7 +252,7 @@ function isIntentAnalysis(value: unknown): value is IntentAnalysis {
     brief.confidence >= 0 &&
     brief.confidence <= 1 &&
     Array.isArray(brief.requestedEffects) &&
-    brief.requestedEffects.length <= 3 &&
+    brief.requestedEffects.length <= 4 &&
     new Set(brief.requestedEffects).size === brief.requestedEffects.length &&
     brief.requestedEffects.every((effect) =>
       requestedEffects.has(String(effect)),

@@ -8,6 +8,7 @@ import { createConversationModule } from "@/modules/agent/conversation";
 import { createCatalogModule } from "@/modules/catalog/catalog";
 import { createCartModule } from "@/modules/cart/cart";
 import { createCartInspection } from "@/modules/cart/cart-inspection";
+import { createStorefrontCheckoutAuthority } from "@/modules/checkout/checkout-composition";
 import { requireBrand } from "@/modules/identity/brand";
 import { db } from "@/db";
 import {
@@ -34,6 +35,15 @@ async function createAgentForStorefront(
       cartInspection: createCartInspection(guestSession.id, (guestSessionId) =>
         createCartModule(guestSessionId, brand.currency),
       ),
+      // Only the preparing half of the checkout authority is handed to the
+      // Commerce Agent. Approval, Order creation, and every Provider Write stay
+      // out of reach of a Conversation Turn.
+      checkoutPreparation: {
+        prepare: (command) =>
+          createStorefrontCheckoutAuthority(guestSession, brand.name).prepare(
+            command,
+          ),
+      },
     },
   );
 }

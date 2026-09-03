@@ -2,6 +2,17 @@ import type { agentActions, conversations, messages } from "./agent";
 import type { recommendationEvents } from "./analytics";
 import type { auditEvents } from "./audit";
 import type { cartItems, carts } from "./cart";
+import type {
+  checkoutApprovals,
+  checkoutProposals,
+  orderItems,
+  orders,
+  paymentAttempts,
+  providerNotifications,
+  providerOperations,
+  providerOrders,
+  providerPayments,
+} from "./checkout";
 import type { productRelations, products } from "./catalog";
 import type { brands, guestSessions } from "./identity";
 
@@ -33,3 +44,23 @@ export type RecommendationEvent = typeof recommendationEvents.$inferSelect;
 export type NewRecommendationEvent = typeof recommendationEvents.$inferInsert;
 export type AuditEvent = typeof auditEvents.$inferSelect;
 export type NewAuditEvent = typeof auditEvents.$inferInsert;
+
+export type CheckoutProposalRow = typeof checkoutProposals.$inferSelect;
+export type NewCheckoutProposalRow = typeof checkoutProposals.$inferInsert;
+export type CheckoutApprovalRow = typeof checkoutApprovals.$inferSelect;
+export type NewCheckoutApprovalRow = typeof checkoutApprovals.$inferInsert;
+export type OrderRow = typeof orders.$inferSelect;
+export type NewOrderRow = typeof orders.$inferInsert;
+export type OrderItemRow = typeof orderItems.$inferSelect;
+export type NewOrderItemRow = typeof orderItems.$inferInsert;
+export type ProviderOperationRow = typeof providerOperations.$inferSelect;
+export type NewProviderOperationRow = typeof providerOperations.$inferInsert;
+export type ProviderOrderRow = typeof providerOrders.$inferSelect;
+export type NewProviderOrderRow = typeof providerOrders.$inferInsert;
+export type PaymentAttemptRow = typeof paymentAttempts.$inferSelect;
+export type NewPaymentAttemptRow = typeof paymentAttempts.$inferInsert;
+export type ProviderPaymentRow = typeof providerPayments.$inferSelect;
+export type NewProviderPaymentRow = typeof providerPayments.$inferInsert;
+export type ProviderNotificationRow = typeof providerNotifications.$inferSelect;
+export type NewProviderNotificationRow =
+  typeof providerNotifications.$inferInsert;

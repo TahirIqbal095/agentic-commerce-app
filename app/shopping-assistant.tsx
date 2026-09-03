@@ -13,11 +13,18 @@ import { ResultArea } from "./_components/shopping-assistant/result-area";
 import type {
   AgentResult,
   CartFeedback,
-  CustomerActionEntry,
   TranscriptEntry,
   CurrentConversation,
 } from "./_components/shopping-assistant/types";
-import { isCustomerActionEntry } from "@/modules/agent/customer-action-entry";
+import type { CheckoutSession } from "./_components/shopping-assistant/checkout-entry-card";
+import {
+  isCustomerActionEntry,
+  type CheckoutActionEntry,
+  type CheckoutReadinessActionEntry,
+} from "@/modules/agent/customer-action-entry";
+import type { CheckoutLauncher } from "@/modules/checkout/checkout-launcher";
+import type { CheckoutStatusView } from "@/modules/checkout/checkout-status";
+import { launchRazorpayCheckout } from "@/modules/checkout/checkout-launcher";
 import { formatMoney } from "@/lib/format-money";
 import { cn } from "@/lib/utils";
 import type { CartView } from "@/modules/cart/cart";
@@ -30,7 +37,11 @@ import type {
 type AgentApiResponse = { data: AgentResult } | { error: { message: string } };
 
 type CheckoutReadinessApiResponse =
-  | { data: CustomerActionEntry }
+  | { data: CheckoutReadinessActionEntry }
+  | { error: { message: string } };
+
+type CheckoutApiResponse =
+  | { data: CheckoutActionEntry }
   | { error: { message: string } };
 
 type CartApiResponse =
@@ -38,6 +49,14 @@ type CartApiResponse =
   | {
       error: { code?: string; message: string; details?: { cart?: CartView } };
     };
+
+/** A checkout no command has touched yet: idle, and with nothing to explain. */
+const emptyCheckoutSession: CheckoutSession = {
+  isApproving: false,
+  isPaying: false,
+  error: null,
+  checkout: null,
+};
 
 /**
  * Whether the authority decided this Cart command.
@@ -78,6 +97,31 @@ function isTurn(
   return entry.id === turnId && !isCustomerActionEntry(entry);
 }
 
+/**
+ * Reads the authority's answer, or raises the reason it refused.
+ *
+ * A refusal is a decision the Customer is entitled to read, so its own message
+ * is kept rather than replaced with a generic failure.
+ */
+async function readData<Value>(
+  response: Response,
+  fallbackMessage: string,
+): Promise<Value> {
+  const payload = (await response.json()) as
+    | { data: Value }
+    | { error: { message: string } };
+  if (!response.ok || !("data" in payload)) {
+    throw new Error(
+      "error" in payload ? payload.error.message : fallbackMessage,
+    );
+  }
+  return payload.data;
+}
+
+function readCheckout(response: Response, fallbackMessage: string) {
+  return readData<CheckoutStatusView>(response, fallbackMessage);
+}
+
 function wasReconciled(requestError: unknown) {
   return (
     requestError instanceof CartCommandRejection &&
@@ -89,10 +133,17 @@ export function ShoppingAssistant({
   brandName,
   initialConversation = null,
   resumeConversation = false,
+  launchCheckout = launchRazorpayCheckout,
 }: {
   brandName: string;
   initialConversation?: CurrentConversation | null;
   resumeConversation?: boolean;
+  /**
+   * How managed Razorpay Checkout is opened. Injected so a Storefront behavior
+   * test proves the Customer's journey against a contract-faithful fake rather
+   * than a hosted script and a credential.
+   */
+  launchCheckout?: CheckoutLauncher;
 }) {
   const [prompt, setPrompt] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(
@@ -127,7 +178,28 @@ export function ShoppingAssistant({
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isReviewing, setIsReviewing] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [isPreparingCheckout, setIsPreparingCheckout] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [checkoutSessions, setCheckoutSessions] = useState<
+    Record<string, CheckoutSession>
+  >({});
   const mutationKeys = useRef(new Map<string, string>());
+  const approvalKeys = useRef(new Map<string, string>());
+
+  /**
+   * Returns the idempotency key for one Checkout Proposal's Approval.
+   *
+   * The key is minted once per proposal and kept, so a double-clicked or
+   * retried Approval submission resolves to the same Order rather than
+   * preparing payment twice.
+   */
+  function approvalKeyFor(proposalId: string) {
+    const existing = approvalKeys.current.get(proposalId);
+    if (existing) return existing;
+    const issued = crypto.randomUUID();
+    approvalKeys.current.set(proposalId, issued);
+    return issued;
+  }
 
   /**
    * Returns the idempotency key for one logical Cart command.
@@ -206,6 +278,7 @@ export function ShoppingAssistant({
         setConversationId(conversation.conversationId);
         setEntries(conversation.transcript);
         setContextSummary(conversation.contextSummary);
+        void resumeCheckouts(conversation.transcript, () => active);
       })
       .catch(() => {});
     void fetch("/api/cart")
@@ -226,6 +299,9 @@ export function ShoppingAssistant({
     return () => {
       active = false;
     };
+    // The resume runs once for the conversation this mount loaded; re-running
+    // it whenever a render redefines its helpers would re-read every checkout.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resumeConversation]);
 
   async function submitPrompt(event: FormEvent<HTMLFormElement>) {
@@ -503,6 +579,296 @@ export function ShoppingAssistant({
   }
 
   /**
+   * Recovers any checkout a reloaded Transcript is still holding open.
+   *
+   * A stored entry remembers the proposal a Customer was shown but nothing
+   * about what happened afterwards, so the authority is asked. Without this a
+   * refreshed page would offer a second Approval for an amount the Customer
+   * has already approved.
+   */
+  async function resumeCheckouts(
+    transcript: TranscriptEntry[],
+    isActive: () => boolean,
+  ) {
+    const proposals = transcript.flatMap((entry) =>
+      isCustomerActionEntry(entry) &&
+      entry.action === "CHECKOUT" &&
+      entry.preparation.status === "PREPARED"
+        ? [{ entryId: entry.id, proposalId: entry.preparation.proposal.id }]
+        : [],
+    );
+
+    for (const { entryId, proposalId } of proposals) {
+      try {
+        const response = await fetch(`/api/checkout/${proposalId}`);
+        if (!response.ok || !isActive()) continue;
+        updateCheckoutSession(entryId, {
+          checkout: await readCheckout(response, ""),
+        });
+      } catch {
+        // A checkout that cannot be read stays as the proposal the Customer
+        // saw. The authority still refuses a second Approval for it.
+      }
+    }
+  }
+
+  /**
+   * Updates one checkout's client-side state without disturbing another's.
+   */
+  function updateCheckoutSession(
+    entryId: string,
+    change: Partial<CheckoutSession>,
+  ) {
+    setCheckoutSessions((current) => ({
+      ...current,
+      [entryId]: { ...emptyCheckoutSession, ...current[entryId], ...change },
+    }));
+  }
+
+  /**
+   * Asks the authority to prepare a Checkout Proposal for the current Cart.
+   *
+   * The Storefront calculates nothing: the amounts, the policy result, the
+   * expiry, and any blocker all come back from the deterministic checkout
+   * authority, and the entry it recorded is appended to the Transcript exactly
+   * as the Review for checkout entry is.
+   */
+  async function startCheckout() {
+    if (isPreparingCheckout) return;
+    setIsPreparingCheckout(true);
+    setCheckoutError(null);
+
+    try {
+      const response = await fetch("/api/checkout/proposal", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ commandKey: crypto.randomUUID() }),
+      });
+      const payload = (await response.json()) as CheckoutApiResponse;
+      if (!response.ok || !("data" in payload)) {
+        throw new Error(
+          "error" in payload
+            ? payload.error.message
+            : "Checkout could not be prepared.",
+        );
+      }
+      setEntries((currentEntries) => [...currentEntries, payload.data]);
+      setIsCartOpen(false);
+    } catch {
+      setCheckoutError(
+        "Checkout could not be prepared right now. Try again shortly.",
+      );
+    } finally {
+      setIsPreparingCheckout(false);
+    }
+  }
+
+  /**
+   * Submits the Customer's explicit Approval for one exact Checkout Proposal.
+   *
+   * The Approval carries the proposal it belongs to and the amount the
+   * Customer was shown, so the authority can refuse an Approval that has
+   * drifted from what was displayed rather than charging a different total.
+   */
+  async function approveCheckout(entry: CheckoutActionEntry) {
+    if (entry.preparation.status !== "PREPARED") return;
+    if (checkoutSessions[entry.id]?.isApproving) return;
+    const { proposal } = entry.preparation;
+    updateCheckoutSession(entry.id, { isApproving: true, error: null });
+
+    try {
+      const response = await fetch("/api/checkout/approval", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          proposalId: proposal.id,
+          approvalKey: approvalKeyFor(proposal.id),
+          approvedTotalMinor: proposal.checkoutTotalMinor,
+          currency: proposal.currency,
+        }),
+      });
+      const checkout = await readCheckout(
+        response,
+        "This approval could not be completed.",
+      );
+      updateCheckoutSession(entry.id, { isApproving: false, checkout });
+      await openManagedCheckout(entry.id, await settleUnknownOutcome(entry.id, checkout));
+    } catch (requestError) {
+      updateCheckoutSession(entry.id, {
+        isApproving: false,
+        error:
+          requestError instanceof Error
+            ? requestError.message
+            : "This approval could not be completed.",
+      });
+    }
+  }
+
+  /**
+   * Waits out an Unknown Provider Outcome with bounded background checking.
+   *
+   * The authority already spent one reconciliation read the moment the answer
+   * was lost. This adds the bounded background work and then stops: once the
+   * authority offers the Customer its own status control, automatic checking
+   * has done all it may, and the remaining permitted read belongs to the
+   * Customer. Nothing here retries payment creation.
+   *
+   * @returns The latest checkout state, resolved or still unknown.
+   */
+  async function settleUnknownOutcome(
+    entryId: string,
+    checkout: CheckoutStatusView,
+  ): Promise<CheckoutStatusView> {
+    let latest = checkout;
+    while (
+      latest.providerOperation.status === "OUTCOME_UNKNOWN" &&
+      !latest.providerOperation.canCheckStatus
+    ) {
+      let reconciled: CheckoutStatusView;
+      try {
+        reconciled = await readCheckout(
+          await fetch(`/api/checkout/${latest.orderId}/reconcile`, {
+            method: "POST",
+          }),
+          "Razorpay's status could not be checked right now.",
+        );
+      } catch {
+        return latest;
+      }
+      // A read that changed nothing means the authority has stopped; looping
+      // again would spend the Customer's own remaining check for them.
+      if (
+        reconciled.providerOperation.reconciliationReadsUsed ===
+        latest.providerOperation.reconciliationReadsUsed
+      ) {
+        updateCheckoutSession(entryId, { checkout: reconciled });
+        return reconciled;
+      }
+      latest = reconciled;
+      updateCheckoutSession(entryId, { checkout: latest });
+    }
+    return latest;
+  }
+
+  /**
+   * Opens Razorpay's managed Test Checkout for one verified payment.
+   *
+   * It runs only once a Provider Order has been verified for the approved
+   * amount, so a Customer can never be shown a payment they did not authorize.
+   * Razorpay collects every instrument and OTP; the Storefront sends back only
+   * the outcome, and the server decides what it means.
+   */
+  async function openManagedCheckout(
+    entryId: string,
+    checkout: CheckoutStatusView,
+  ) {
+    const { providerOrder } = checkout;
+    if (!providerOrder || checkout.status === "PAID") return;
+    updateCheckoutSession(entryId, { isPaying: true, error: null });
+
+    try {
+      const attemptResponse = await fetch(
+        `/api/checkout/${checkout.orderId}/payment-attempt`,
+        { method: "POST" },
+      );
+      const attempt = await readData<{
+        attemptId: string;
+        keyId: string;
+        providerOrderId: string;
+        amountMinor: number;
+        currency: string;
+        checkout: CheckoutStatusView;
+      }>(attemptResponse, "Razorpay Test Checkout could not be opened.");
+      updateCheckoutSession(entryId, { checkout: attempt.checkout });
+
+      const result = await launchCheckout({
+        orderId: checkout.orderId,
+        keyId: attempt.keyId,
+        providerOrderId: attempt.providerOrderId,
+        amountMinor: attempt.amountMinor,
+        currency: attempt.currency,
+        brandName,
+      });
+
+      const callbackResponse = await fetch(
+        `/api/checkout/${checkout.orderId}/callback`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ attemptId: attempt.attemptId, result }),
+        },
+      );
+      updateCheckoutSession(entryId, {
+        isPaying: false,
+        checkout: await readCheckout(
+          callbackResponse,
+          "That payment result could not be recorded.",
+        ),
+      });
+    } catch (requestError) {
+      updateCheckoutSession(entryId, {
+        isPaying: false,
+        error:
+          requestError instanceof Error
+            ? requestError.message
+            : "Razorpay Test Checkout could not be opened.",
+      });
+    }
+  }
+
+  /**
+   * Reopens managed Checkout against the same verified payment.
+   *
+   * No fresh Approval is asked for: the Customer already authorized this exact
+   * amount, and the authority enforces the launch limit, so retrying is a
+   * continuation of one checkout rather than the start of another.
+   */
+  async function retryCheckout(entry: CheckoutActionEntry) {
+    const session = checkoutSessions[entry.id];
+    if (!session?.checkout || session.isPaying) return;
+    await openManagedCheckout(entry.id, session.checkout);
+  }
+
+  /**
+   * Asks for one more safe observation of what Razorpay actually did.
+   *
+   * It never retries payment creation: the authority spends a bounded
+   * reconciliation read and returns whatever it learned.
+   */
+  async function checkCheckoutStatus(entry: CheckoutActionEntry) {
+    const session = checkoutSessions[entry.id];
+    if (!session?.checkout || session.isPaying) return;
+    const orderId = session.checkout.orderId;
+    updateCheckoutSession(entry.id, { isPaying: true, error: null });
+    try {
+      const response = await fetch(`/api/checkout/${orderId}/reconcile`, {
+        method: "POST",
+      });
+      updateCheckoutSession(entry.id, {
+        isPaying: false,
+        checkout: await readCheckout(
+          response,
+          "Razorpay's status could not be checked right now.",
+        ),
+      });
+    } catch (requestError) {
+      updateCheckoutSession(entry.id, {
+        isPaying: false,
+        error:
+          requestError instanceof Error
+            ? requestError.message
+            : "Razorpay's status could not be checked right now.",
+      });
+    }
+  }
+
+  /** Leaves an unsuccessful checkout behind and re-reads the current Cart. */
+  async function returnToShopping() {
+    await reloadCartFromAuthority();
+    setIsCartOpen(false);
+  }
+
+  /**
    * The deterministic Cart Item controls, shared by every surface that may
    * change the Cart. The Cart drawer and a blocked readiness card offer the
    * same commands, so correcting a blocker is the Customer action it already
@@ -528,6 +894,11 @@ export function ShoppingAssistant({
             onReview: reviewCheckoutReadiness,
             isReviewing,
             error: reviewError,
+          }}
+          checkout={{
+            onCheckout: startCheckout,
+            isPreparing: isPreparingCheckout,
+            error: checkoutError,
           }}
           isCartOpen={isCartOpen}
           onCartOpenChange={setIsCartOpen}
@@ -559,6 +930,11 @@ export function ShoppingAssistant({
                 entries={entries}
                 currentCart={cart}
                 cartControls={cartControls}
+                checkoutSessions={checkoutSessions}
+                onApproveCheckout={approveCheckout}
+                onRetryCheckout={retryCheckout}
+                onCheckCheckoutStatus={checkCheckoutStatus}
+                onReturnToShopping={returnToShopping}
               />
             </>
           )}

@@ -4,7 +4,7 @@ import {
   unexpectedErrorResponse,
 } from "@/lib/http/responses";
 import { isUuid } from "@/lib/validation";
-import { CartError, type CartModule } from "@/modules/cart/cart";
+import { CartError, type CartModule, type CartView } from "@/modules/cart/cart";
 import type { CatalogModule } from "@/modules/catalog/catalog";
 import {
   createGuestSessionRoute,
@@ -16,8 +16,42 @@ import {
 type CartRouteOptions = {
   store: GuestSessionStore;
   createCart: (guestSession: GuestSession) => CartModule;
+  /**
+   * Retires Checkout Proposals prepared from an earlier Cart.
+   *
+   * A Cart Mutation changes the commercial facts a proposal describes, so an
+   * unconsumed proposal for the older Cart version must stop being actionable
+   * the moment the Cart moves. Retiring it here — beside the mutation that
+   * caused it — means every Cart command shares one rule rather than each
+   * remembering to apply it.
+   */
+  retireCheckoutProposals?: (
+    guestSession: GuestSession,
+    cart: CartView,
+  ) => Promise<void>;
   now?: () => Date;
 };
+
+/**
+ * Builds the completion hook one Cart command runs once it has succeeded.
+ *
+ * A failure to retire proposals must not undo a Cart command the Customer
+ * asked for, so it is logged and swallowed: Approval revalidates the Cart
+ * version independently, and the Storefront presents a moved-on proposal as
+ * Outdated, so a missed invalidation cannot authorize a stale amount.
+ */
+function retireProposalsAfter(
+  options: CartRouteOptions,
+  guestSession: GuestSession,
+) {
+  return async (cart: CartView) => {
+    try {
+      await options.retireCheckoutProposals?.(guestSession, cart);
+    } catch (error) {
+      console.error("Checkout Proposal invalidation failed", error);
+    }
+  };
+}
 
 type AddToCartRouteOptions = CartRouteOptions & {
   catalog: CatalogModule;
@@ -87,7 +121,7 @@ export function createAddToCartRoute(options: AddToCartRouteOptions) {
         const cart = await cartModule.addItem(
           product.value,
           1,
-          async () => {},
+          retireProposalsAfter(options, guestSession),
           {
             mutationKey: command.mutationKey,
             expectedVersion: command.expectedVersion,
@@ -137,7 +171,7 @@ export function createUpdateCartItemRoute(options: CartRouteOptions) {
           await cartModule.changeItemQuantity(
             command.productId,
             command.type === "INCREMENT_ITEM" ? 1 : -1,
-            async () => {},
+            retireProposalsAfter(options, guestSession),
             {
               mutationKey: command.mutationKey,
               expectedVersion: command.expectedVersion,
@@ -181,10 +215,14 @@ export function createRemoveCartItemRoute(options: CartRouteOptions) {
       if (!cartModule.removeItem) return unexpectedErrorResponse();
       try {
         return dataResponse(
-          await cartModule.removeItem(command.productId, async () => {}, {
-            mutationKey: command.mutationKey,
-            expectedVersion: command.expectedVersion,
-          }),
+          await cartModule.removeItem(
+            command.productId,
+            retireProposalsAfter(options, guestSession),
+            {
+              mutationKey: command.mutationKey,
+              expectedVersion: command.expectedVersion,
+            },
+          ),
         );
       } catch (error) {
         if (error instanceof CartError) {

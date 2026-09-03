@@ -1,4 +1,4 @@
-import { ClipboardCheck, ShoppingBag } from "lucide-react";
+import { ClipboardCheck, CreditCard, ShoppingBag } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -29,11 +29,27 @@ export type CheckoutReadinessControl = {
   error: string | null;
 };
 
+/**
+ * The Cart drawer's Check out control.
+ *
+ * It enters exactly the same deterministic checkout as conversational intent,
+ * so a Customer who asks to check out and a Customer who presses the control
+ * reach one orchestrator and one Checkout Proposal. Like the review control it
+ * stays available for an empty Cart, whose blocker the Customer is entitled to
+ * see, and it prepares a proposal rather than starting a payment.
+ */
+export type CheckoutControl = {
+  onCheckout: () => void;
+  isPreparing: boolean;
+  error: string | null;
+};
+
 export function CartDrawer({
   cart,
   state,
   controls,
   readiness,
+  checkout,
   open,
   onOpenChange,
 }: {
@@ -41,6 +57,7 @@ export function CartDrawer({
   state: CartLoadState;
   controls: CartControls;
   readiness: CheckoutReadinessControl;
+  checkout: CheckoutControl;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -91,6 +108,24 @@ export function CartDrawer({
         <DrawerFooter className="border-t-2 border-sidebar-border px-5 py-5 sm:px-7">
           <Button
             type="button"
+            onClick={checkout.onCheckout}
+            disabled={checkout.isPreparing}
+          >
+            <CreditCard />
+            Check out
+          </Button>
+          <p className="text-center text-xs text-muted-foreground">
+            Prepares an exact amount for your explicit approval. Razorpay Test
+            Mode — no real charge is made.
+          </p>
+          {checkout.error ? (
+            <Alert role="alert">
+              <span>{checkout.error}</span>
+            </Alert>
+          ) : null}
+          <Button
+            type="button"
+            variant="outline"
             onClick={readiness.onReview}
             disabled={readiness.isReviewing}
           >

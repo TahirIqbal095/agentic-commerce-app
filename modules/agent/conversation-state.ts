@@ -4,12 +4,17 @@ import { agentActions, conversations, messages } from "@/db/schema/agent";
 import { auditEvents } from "@/db/schema/audit";
 import type { JsonObject } from "@/db/schema/types";
 import type { CheckoutReadiness } from "@/modules/cart/checkout-readiness";
+import type { CheckoutPreparation } from "@/modules/checkout/checkout-proposal";
 import { isAgentOutcome, type AgentOutcome } from "./agent-outcome";
 import { openCurrentConversation } from "./conversation-repository";
 import {
+  CHECKOUT_ACTION_MESSAGE,
   CHECKOUT_READINESS_ACTION_MESSAGE,
+  checkoutActionEntry,
   checkoutReadinessActionEntry,
   parseCustomerActionEntry,
+  type CheckoutActionEntry,
+  type CheckoutReadinessActionEntry,
   type CustomerActionEntry,
 } from "./customer-action-entry";
 import {
@@ -60,7 +65,19 @@ export interface ConversationState {
    */
   recordCheckoutReadiness(
     readiness: CheckoutReadiness,
-  ): Promise<CustomerActionEntry>;
+  ): Promise<CheckoutReadinessActionEntry>;
+  /**
+   * Records one Check out command as a durable Customer Action Entry.
+   *
+   * The entry keeps whichever answer the checkout authority gave — a prepared
+   * proposal, a blocking readiness result, or an explanation — so a reload
+   * shows what the Customer was actually asked to approve rather than a fresh
+   * preparation of a since-changed Cart. Conversation Context is untouched, so
+   * the Commerce Agent never receives it as Customer-authored text.
+   */
+  recordCheckout(
+    preparation: CheckoutPreparation,
+  ): Promise<CheckoutActionEntry>;
 }
 
 /**
@@ -99,6 +116,39 @@ export function transcriptEntryFromMessage(message: {
 export function createConversationState(
   guestSessionId: string,
 ): ConversationState {
+  /**
+   * Appends one generated Customer-side entry to the current Conversation.
+   *
+   * Both Customer UI actions record the same way — open the Conversation,
+   * append the entry, touch the Conversation — so neither can drift into
+   * writing a Transcript row the loader would not read back.
+   */
+  async function recordCustomerAction(
+    content: string,
+    metadata: JsonObject,
+  ): Promise<string> {
+    return db.transaction(async (transaction) => {
+      const conversation = await openCurrentConversation(
+        transaction,
+        guestSessionId,
+      );
+      const [entry] = await transaction
+        .insert(messages)
+        .values({
+          conversationId: conversation.id,
+          role: TRANSCRIPT_MESSAGE_ROLE,
+          content,
+          metadata,
+        })
+        .returning({ id: messages.id });
+      await transaction
+        .update(conversations)
+        .set({ updatedAt: new Date() })
+        .where(eq(conversations.id, conversation.id));
+      return entry.id;
+    });
+  }
+
   return {
     async loadCurrent() {
       const [current] = await db
@@ -138,26 +188,7 @@ export function createConversationState(
 
     async recordCheckoutReadiness(readiness) {
       const { content, metadata } = checkoutReadinessActionEntry(readiness);
-      const id = await db.transaction(async (transaction) => {
-        const conversation = await openCurrentConversation(
-          transaction,
-          guestSessionId,
-        );
-        const [entry] = await transaction
-          .insert(messages)
-          .values({
-            conversationId: conversation.id,
-            role: TRANSCRIPT_MESSAGE_ROLE,
-            content,
-            metadata,
-          })
-          .returning({ id: messages.id });
-        await transaction
-          .update(conversations)
-          .set({ updatedAt: new Date() })
-          .where(eq(conversations.id, conversation.id));
-        return entry.id;
-      });
+      const id = await recordCustomerAction(content, metadata);
 
       return {
         id,
@@ -165,6 +196,18 @@ export function createConversationState(
         message: CHECKOUT_READINESS_ACTION_MESSAGE,
         provenance: "GENERATED",
         readiness,
+      };
+    },
+
+    async recordCheckout(preparation) {
+      const { content, metadata } = checkoutActionEntry(preparation);
+      const id = await recordCustomerAction(content, metadata);
+      return {
+        id,
+        action: "CHECKOUT",
+        message: CHECKOUT_ACTION_MESSAGE,
+        provenance: "GENERATED",
+        preparation,
       };
     },
 

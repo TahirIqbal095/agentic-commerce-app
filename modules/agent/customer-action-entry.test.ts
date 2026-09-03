@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CheckoutReadiness } from "@/modules/cart/checkout-readiness";
+import { isCheckoutReadinessActionEntry } from "@/modules/agent/customer-action-entry";
+
+/**
+ * Reads the readiness card off a reloaded entry, or `null` when the entry is
+ * not a Review for checkout entry at all.
+ */
+function readinessOf(entry: unknown): CheckoutReadiness | null {
+  return isCheckoutReadinessActionEntry(entry) ? entry.readiness : null;
+}
 import {
   CHECKOUT_READINESS_ACTION_MESSAGE,
   checkoutReadinessActionEntry,
@@ -71,7 +80,7 @@ test("the entry text is fixed rather than authored from the readiness result", (
   assert.equal(ready.content, CHECKOUT_READINESS_ACTION_MESSAGE);
   assert.equal(notReady.content, CHECKOUT_READINESS_ACTION_MESSAGE);
   assert.deepEqual(
-    parseCustomerActionEntry({ id: messageId, ...notReady })?.readiness,
+    readinessOf(parseCustomerActionEntry({ id: messageId, ...notReady })),
     emptyReadiness,
   );
 });

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { CatalogModule } from "@/modules/catalog/catalog";
 import type { CartInspection } from "@/modules/cart/cart-inspection";
 import type {
@@ -21,6 +22,7 @@ import {
   type IntentBrief,
 } from "./intent";
 import type { AgentOutcome } from "./agent-outcome";
+import type { CheckoutPreparation } from "@/modules/checkout/checkout-proposal";
 
 export interface CommerceAgent {
   respond(input: AgentMessage): Promise<AgentOutcome>;
@@ -70,6 +72,18 @@ type CommerceAgentOptions = {
   agentLoop: CommerceAgentLoop;
   /** Read-only Cart capability; absent when the Cart cannot be inspected. */
   cartInspection?: CartInspection;
+  /**
+   * Prepares a Checkout Proposal deterministically.
+   *
+   * It is the same authority the Cart's Check out control uses, so
+   * conversational checkout intent and the explicit control converge on one
+   * orchestrator rather than on two behaviors that must be kept in agreement.
+   * The capability offered here can only prepare: there is no Approval, no
+   * Order creation, and no Provider Write reachable from a Conversation Turn.
+   */
+  checkoutPreparation?: {
+    prepare(command: { commandKey: string }): Promise<CheckoutPreparation>;
+  };
   limits?: CommerceAgentLimits;
 };
 
@@ -79,6 +93,23 @@ const COMMERCE_AGENT_LIMITS: CommerceAgentLimits = {
   maxOutputTokens: 2_000,
   maxToolProducts: MAX_COMMERCE_AGENT_TOOL_PRODUCTS,
 };
+
+/**
+ * What the Commerce Agent says about a checkout it did not calculate.
+ *
+ * The words are fixed rather than generated, so the Agent can introduce a
+ * proposal without ever appearing to price it, approve it, or promise an
+ * outcome the authority has not decided.
+ */
+function checkoutMessage(checkout: CheckoutPreparation): string {
+  if (checkout.status === "PREPARED") {
+    return "Here's your checkout. Check the amount, then approve it yourself — I can't approve a payment for you.";
+  }
+  if (checkout.status === "NOT_READY") {
+    return "Your Cart isn't ready for checkout yet. Here's what needs correcting.";
+  }
+  return "Checkout isn't available right now.";
+}
 
 export function createCommerceAgent(
   catalog: CatalogModule,
@@ -149,6 +180,34 @@ export function createCommerceAgent(
             conversationId: turn.conversationId,
             message:
               "I couldn't save that request right now. Please try again.",
+            retryable: true,
+            intentBrief,
+            products: [],
+          });
+        }
+      }
+      if (intentBrief.requestedEffects.includes("START_CHECKOUT")) {
+        try {
+          if (!options.checkoutPreparation) {
+            throw new Error("Checkout is unavailable.");
+          }
+          const checkout = await options.checkoutPreparation.prepare({
+            commandKey: randomUUID(),
+          });
+          return completeTurn(turn, {
+            status: "COMPLETED",
+            conversationId: turn.conversationId,
+            message: checkoutMessage(checkout),
+            intentBrief,
+            products: [],
+            checkout,
+          });
+        } catch {
+          return completeTurn(turn, {
+            status: "TEMPORARILY_UNAVAILABLE",
+            conversationId: turn.conversationId,
+            message:
+              "I couldn't prepare your checkout right now. Please try again.",
             retryable: true,
             intentBrief,
             products: [],

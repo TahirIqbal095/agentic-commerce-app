@@ -1,5 +1,6 @@
 import type { CatalogProduct } from "../catalog/types";
 import type { CartItemRemovalUndo, CartView } from "../cart/cart";
+import type { CheckoutPreparation } from "../checkout/checkout-proposal";
 import type { IntentBrief, ShoppingIntent } from "./intent";
 
 export type CompletedAgentOutcome = {
@@ -11,6 +12,15 @@ export type CompletedAgentOutcome = {
   intent?: never;
   cart?: CartView;
   cartItemRemovalUndo?: CartItemRemovalUndo;
+  /**
+   * The deterministic checkout the Storefront prepared for this Turn.
+   *
+   * The Commerce Agent may recognize that a Customer asked to check out and
+   * explain what happens next, but the proposal itself — its lines, its
+   * amounts, its policy result, its expiry — is calculated by the checkout
+   * authority, never by the model.
+   */
+  checkout?: CheckoutPreparation;
 };
 
 export type NeedsInputAgentOutcome = {
@@ -24,6 +34,7 @@ export type NeedsInputAgentOutcome = {
   intent?: never;
   cart?: CartView;
   cartItemError?: { productId: string; message: string };
+  checkout?: never;
 };
 
 export type TemporarilyUnavailableAgentOutcome = {
@@ -35,6 +46,7 @@ export type TemporarilyUnavailableAgentOutcome = {
   intentBrief?: IntentBrief;
   intent?: never;
   cart?: never;
+  checkout?: never;
 };
 
 export type AgentOutcome =
@@ -55,6 +67,7 @@ export type AgentResponse = {
   };
   status?: never;
   intentBrief?: never;
+  checkout?: never;
 };
 
 export function isAgentOutcome(value: unknown): value is AgentOutcome {

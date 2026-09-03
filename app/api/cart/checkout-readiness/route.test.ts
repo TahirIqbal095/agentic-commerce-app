@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CHECKOUT_READINESS_ACTION_MESSAGE,
-  type CustomerActionEntry,
+  type CheckoutReadinessActionEntry,
 } from "@/modules/agent/customer-action-entry";
 import type {
   CartModule,
@@ -97,7 +97,7 @@ function recordingConversationState() {
             message: CHECKOUT_READINESS_ACTION_MESSAGE,
             provenance: "GENERATED",
             readiness,
-          } satisfies CustomerActionEntry;
+          } satisfies CheckoutReadinessActionEntry;
         },
       };
     },
@@ -175,7 +175,7 @@ test("an empty Cart returns a not-ready entry that requires at least one Product
   });
 
   const response = await route(reviewRequest());
-  const payload = (await response.json()) as { data: CustomerActionEntry };
+  const payload = (await response.json()) as { data: CheckoutReadinessActionEntry };
 
   assert.equal(response.status, 200);
   assert.equal(payload.data.readiness.status, "NOT_READY");
@@ -208,10 +208,10 @@ test("a Guest Session reviews only the Cart owned by its own browser", async () 
   const returning = await route(reviewRequest(ownerCookie));
 
   const otherPayload = (await otherBrowser.json()) as {
-    data: CustomerActionEntry;
+    data: CheckoutReadinessActionEntry;
   };
   const returningPayload = (await returning.json()) as {
-    data: CustomerActionEntry;
+    data: CheckoutReadinessActionEntry;
   };
   assert.equal(otherPayload.data.readiness.status, "NOT_READY");
   assert.equal(returningPayload.data.readiness.cart.version, 4);
@@ -315,7 +315,7 @@ test("a Cart the Catalog can no longer supply returns a blocker for each affecte
   const route = routeReviewing(unsuppliableCart, conversation);
 
   const response = await route(reviewRequest());
-  const payload = (await response.json()) as { data: CustomerActionEntry };
+  const payload = (await response.json()) as { data: CheckoutReadinessActionEntry };
 
   assert.equal(response.status, 200);
   assert.equal(payload.data.readiness.status, "NOT_READY");
@@ -348,7 +348,7 @@ test("a blocked review returns the evaluated Cart unchanged and reserves nothing
   const route = routeReviewing(unsuppliableCart, conversation);
 
   const response = await route(reviewRequest());
-  const payload = (await response.json()) as { data: CustomerActionEntry };
+  const payload = (await response.json()) as { data: CheckoutReadinessActionEntry };
 
   assert.equal(response.status, 200);
   assert.equal(payload.data.readiness.cart.version, 7);
@@ -386,7 +386,7 @@ test("a successful review returns no reservation, expiry, or payment state", asy
           }, conversation);
 
   const response = await route(reviewRequest());
-  const payload = (await response.json()) as { data: CustomerActionEntry };
+  const payload = (await response.json()) as { data: CheckoutReadinessActionEntry };
 
   assert.equal(payload.data.readiness.status, "READY");
   assert.deepEqual(Object.keys(payload.data.readiness).sort(), [
@@ -427,7 +427,7 @@ test("a Cart Item above the authoritative quantity limit is blocked through the 
           }, conversation);
 
   const response = await route(reviewRequest());
-  const payload = (await response.json()) as { data: CustomerActionEntry };
+  const payload = (await response.json()) as { data: CheckoutReadinessActionEntry };
 
   assert.equal(payload.data.readiness.status, "NOT_READY");
   assert.deepEqual(payload.data.readiness.blockers, [
@@ -455,7 +455,7 @@ test("a Cart priced outside Indian rupees is blocked through the route", async (
   );
 
   const response = await route(reviewRequest());
-  const payload = (await response.json()) as { data: CustomerActionEntry };
+  const payload = (await response.json()) as { data: CheckoutReadinessActionEntry };
 
   assert.equal(payload.data.readiness.status, "NOT_READY");
   assert.deepEqual(payload.data.readiness.blockers, [

@@ -57,7 +57,10 @@ export type IntentAnalysis = {
   missingInformation: string[];
   confidence: number;
   requestedEffects: Array<
-    "DISCOVER_PRODUCTS" | "PRESENT_ADD_CONTROLS" | "INSPECT_CART"
+    | "DISCOVER_PRODUCTS"
+    | "PRESENT_ADD_CONTROLS"
+    | "INSPECT_CART"
+    | "START_CHECKOUT"
   >;
   referencedProductIds?: string[];
 };
@@ -72,7 +75,10 @@ export type IntentBrief = {
   missingInformation: string[];
   confidence: number;
   requestedEffects: Array<
-    "DISCOVER_PRODUCTS" | "PRESENT_ADD_CONTROLS" | "INSPECT_CART"
+    | "DISCOVER_PRODUCTS"
+    | "PRESENT_ADD_CONTROLS"
+    | "INSPECT_CART"
+    | "START_CHECKOUT"
   >;
   referencedProductIds?: string[];
 };

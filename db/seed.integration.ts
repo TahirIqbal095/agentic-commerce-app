@@ -23,7 +23,7 @@ import { cartItems, cartMutations, carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
 import { brands, guestSessions } from "@/db/schema/identity";
 import { createCatalogModule } from "@/modules/catalog/catalog";
-import type { CustomerActionEntry } from "@/modules/agent/customer-action-entry";
+import type { CheckoutReadinessActionEntry } from "@/modules/agent/customer-action-entry";
 import type { CurrentConversation } from "@/modules/agent/conversation-state";
 import { createCartModule, type CartView } from "@/modules/cart/cart";
 import {
@@ -538,44 +538,90 @@ test("database rejects runtime Product price changes", async () => {
   );
 });
 
-test("database contains no deferred checkout or payment storage", async () => {
-  const deferredTables = [
-    "approvals",
-    "checkout_proposal_items",
-    "checkout_proposals",
-    "order_items",
-    "orders",
-    "payment_attempts",
-    "policies",
-    "policy_evaluations",
-    "webhook_events",
-  ];
-  const result = await db.$client.query<{ table_name: string }>(
+test("checkout storage holds only Test Mode evidence, never payment data", async () => {
+  // Conversational Checkout is implemented, so the boundary worth protecting is
+  // no longer "checkout does not exist". It is that the Payment Account can only
+  // be a test one, and that no column anywhere can hold a payment instrument, an
+  // OTP, a credential, a signature, or a raw provider payload.
+  const environments = await db.$client.query<{ enumlabel: string }>(
+    `select enumlabel
+       from pg_enum
+       join pg_type on pg_type.oid = pg_enum.enumtypid
+      where pg_type.typname = 'payment_environment'
+      order by enumsortorder`,
+  );
+  const forbiddenColumns = await db.$client.query<{
+    table_name: string;
+    column_name: string;
+  }>(
+    `select table_name, column_name
+       from information_schema.columns
+      where table_schema = 'public'
+        and (column_name ~ '(card|cvv|cvc|otp|pan|vpa|upi_id|token|secret|password|signature|raw_payload|authorization|email|phone)')
+        -- The one deliberate exception: a Guest Session stores the SHA-256 of
+        -- its browser credential, never the credential, so the hash cannot be
+        -- replayed as one.
+        and not (table_name = 'guest_sessions' and column_name = 'token_hash')
+      order by table_name, column_name`,
+  );
+  const outOfScopeTables = await db.$client.query<{ table_name: string }>(
     `select table_name
        from information_schema.tables
       where table_schema = 'public'
         and table_name = any($1::text[])
       order by table_name`,
-    [deferredTables],
-  );
-  const deferredTypes = [
-    "approval_status",
-    "checkout_proposal_status",
-    "order_status",
-    "payment_provider",
-    "payment_status",
-    "policy_decision",
-  ];
-  const typeResult = await db.$client.query<{ typname: string }>(
-    `select typname
-       from pg_type
-      where typname = any($1::text[])
-      order by typname`,
-    [deferredTypes],
+    [
+      [
+        "brand_admins",
+        "payment_links",
+        "policies",
+        "policy_evaluations",
+        "refunds",
+        "settlements",
+        "users",
+      ],
+    ],
   );
 
-  assert.deepEqual(result.rows, []);
-  assert.deepEqual(typeResult.rows, []);
+  assert.deepEqual(
+    environments.rows.map(({ enumlabel }) => enumlabel),
+    ["TEST"],
+  );
+  assert.deepEqual(forbiddenColumns.rows, []);
+  assert.deepEqual(outOfScopeTables.rows, []);
+});
+
+test("protected commerce records do not cascade with a Guest Session", async () => {
+  // ADR-0011: a lost browser credential ends Customer access, never the Brand's
+  // reconciliation evidence. That is a property of the foreign keys, so it is
+  // asserted against the schema rather than against one deletion.
+  const cascading = await db.$client.query<{
+    table_name: string;
+    delete_rule: string;
+  }>(
+    `select distinct child.relname as table_name, constraint_rules.confdeltype as delete_rule
+       from pg_constraint constraint_rules
+       join pg_class child on child.oid = constraint_rules.conrelid
+       join pg_class parent on parent.oid = constraint_rules.confrelid
+      where constraint_rules.contype = 'f'
+        and parent.relname = 'guest_sessions'
+        and child.relname = any($1::text[])
+      order by child.relname`,
+    [
+      [
+        "orders",
+        "order_items",
+        "provider_operations",
+        "provider_orders",
+        "payment_attempts",
+        "provider_payments",
+        "provider_notifications",
+        "audit_events",
+      ],
+    ],
+  );
+
+  assert.deepEqual(cascading.rows, []);
 });
 
 test("recommendation analytics are pseudonymous and expose no personal-information fields", async () => {
@@ -640,7 +686,9 @@ test("database exposes no authenticated Customer or Brand Admin identity contrac
     {
       tables: [],
       identityColumns: [],
-      actorTypes: ["AGENT", "SYSTEM", "RAZORPAY"],
+      // CUSTOMER names who acted on an Approval. It is an actor, not an
+      // identity contract: there is still no account, credential, or profile.
+      actorTypes: ["AGENT", "SYSTEM", "RAZORPAY", "CUSTOMER"],
       messageRoles: ["CUSTOMER", "ASSISTANT", "TOOL", "SYSTEM"],
     },
   );
@@ -1140,7 +1188,9 @@ test("a Cart command retried after a lost response applies exactly once", async 
   assert.equal(currentCart.version, appliedCart.version);
 });
 
-async function reviewCartFor(cookie: string): Promise<CustomerActionEntry> {
+async function reviewCartFor(
+  cookie: string,
+): Promise<CheckoutReadinessActionEntry> {
   const response = await reviewCheckoutReadiness(
     new Request("http://localhost/api/cart/checkout-readiness", {
       method: "POST",
@@ -1148,7 +1198,8 @@ async function reviewCartFor(cookie: string): Promise<CustomerActionEntry> {
     }),
   );
   assert.equal(response.status, 200);
-  return ((await response.json()) as { data: CustomerActionEntry }).data;
+  return ((await response.json()) as { data: CheckoutReadinessActionEntry })
+    .data;
 }
 
 async function transcriptFor(cookie: string): Promise<CurrentConversation> {

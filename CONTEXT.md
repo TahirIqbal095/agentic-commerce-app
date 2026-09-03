@@ -178,16 +178,53 @@ Proposal before external payment begins.
 _Avoid_: Purchase, Razorpay order
 
 **Payment Attempt**:
-A retry-safe attempt to collect the amount of one Order through a payment
-provider.
-_Avoid_: Payment, transaction
+One explicit presentation of provider checkout for a Provider Order, which may
+be dismissed or produce one Provider Payment.
+_Avoid_: Provider Operation, Payment, transaction
+
+**Provider Operation**:
+A durable, retry-safe logical execution of one Provider Write, identified
+independently from its transport attempts and provider result.
+_Avoid_: Payment Attempt, MCP request
+
+**Provider Write**:
+A request through a Payment Account that changes payment-provider state, such
+as creating a Provider Order or initiating a Payment Action.
+_Avoid_: MCP tool call, money action
+
+**Payment Action**:
+A Provider Write that can authorize, collect, or return Customer funds.
+_Avoid_: Transaction, money action
+
+**Unknown Provider Outcome**:
+The state in which a dispatched Provider Write has no confirmed result, so the
+Storefront must reconcile provider state before treating it as applied or
+retrying it as absent.
+_Avoid_: Failed request, Provider failure
 
 **Provider Order**:
-Razorpay's payment collection record associated with an internal Payment
-Attempt.
+Razorpay's payment collection record for one internal Order. An Order has at
+most one Provider Order, against which multiple Payment Attempts may occur.
 _Avoid_: Order
+
+**Provider Payment**:
+Razorpay's record of one attempt to authorize and collect funds against a
+Provider Order.
+_Avoid_: Payment Attempt, Order, transaction
 
 **Audit Event**:
 An immutable fact describing a meaningful action, decision, state change, or
 external notification.
 _Avoid_: Log line, activity
+
+**Checkout Timeline**:
+The Customer-visible, privacy-safe projection of Audit Events for one
+Conversational Checkout, expressed as outcomes and explanations rather than
+provider payloads or internal traces.
+_Avoid_: Audit log, debug log
+
+**Provider Notification**:
+An authenticated, deduplicated fact delivered asynchronously by a payment
+provider and retained until it can be associated with protected commerce
+records.
+_Avoid_: Webhook request, callback
