@@ -76,7 +76,7 @@ export function CartDrawer({
           {state === "loading" ? (
             <p
               role="status"
-              className="py-10 text-center font-mono text-xs uppercase tracking-widest text-muted-foreground"
+              className="py-10 text-center text-sm text-muted-foreground"
             >
               Loading Cart…
             </p>
@@ -97,7 +97,7 @@ export function CartDrawer({
             <ClipboardCheck />
             Review for checkout
           </Button>
-          <p className="text-center font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+          <p className="text-center text-xs text-muted-foreground">
             Reviews this Cart for checkout. It reserves no inventory and starts
             no payment.
           </p>

@@ -37,14 +37,14 @@ export function Header({
         className="flex items-center gap-2.5"
         aria-label={`${brandName} Storefront`}
       >
-        <span className="grid size-9 place-items-center rounded-md border-2 border-sidebar-border bg-primary text-primary-foreground shadow-hard-sm">
+        <span className="grid size-9 place-items-center rounded-md border-2 border-sidebar-border bg-primary text-primary-foreground">
           <Sparkles className="size-4" />
         </span>
         <span className="text-sm font-bold tracking-tight">{brandName}</span>
       </div>
 
       <div className="flex items-center gap-2">
-        <span className="hidden items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-secondary sm:flex">
+        <span className="hidden items-center gap-1.5 eyebrow text-[10px] text-secondary sm:flex">
           <Radio aria-hidden="true" className="size-3.5" />
           Live catalog
         </span>

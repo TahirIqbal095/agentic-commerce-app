@@ -37,7 +37,7 @@ export function CartPanel({
     >
       <div className="flex items-center justify-between border-b border-border px-5 py-4 sm:px-6">
         <h3 className="text-sm font-semibold tracking-tight">Your Cart</h3>
-        <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+        <p className="eyebrow text-[10px] text-muted-foreground">
           {cart.totalQuantity} {cart.totalQuantity === 1 ? "unit" : "units"}
         </p>
       </div>

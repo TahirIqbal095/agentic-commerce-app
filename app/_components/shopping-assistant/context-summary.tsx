@@ -105,10 +105,10 @@ export function ContextSummary({
       className="mb-8 rounded-lg border-2 border-sidebar-border bg-card p-4 text-card-foreground sm:p-5"
     >
       <div className="mb-3 flex items-center justify-between gap-4">
-        <p className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+        <p className="eyebrow text-[10px] font-bold text-muted-foreground">
           Active preferences
         </p>
-        <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+        <p className="eyebrow text-[10px] text-muted-foreground">
           {`${items.length} active ${items.length === 1 ? "preference" : "preferences"}`}
         </p>
       </div>

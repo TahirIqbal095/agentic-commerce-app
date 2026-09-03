@@ -39,7 +39,7 @@ export function Hero({
       <h1 className="text-balance text-5xl font-bold leading-[1.02] tracking-tight sm:text-7xl lg:text-[5.25rem]">
         Find the thing that
         <span className="mt-3 block">
-          <span className="inline-block rounded-md border-2 border-sidebar-border bg-accent px-4 py-1 text-accent-foreground shadow-hard">
+          <span className="inline-block rounded-md border-2 border-sidebar-border bg-accent px-4 py-1 text-accent-foreground">
             feels just right.
           </span>
         </span>

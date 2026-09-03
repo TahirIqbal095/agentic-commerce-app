@@ -10,20 +10,13 @@ import { cn } from "@/lib/utils";
  * only reinforces it, which is also what keeps this legible to a Customer who
  * does not distinguish colours reliably.
  */
-export function StockState({
-  inStock,
-  className,
-}: {
-  inStock: boolean;
-  className?: string;
-}) {
+export function StockState({ inStock }: { inStock: boolean }) {
   const Icon = inStock ? CircleCheck : CircleSlash;
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest",
+        "inline-flex items-center gap-1.5 eyebrow text-[10px]",
         inStock ? "text-secondary" : "text-accent",
-        className,
       )}
     >
       <Icon aria-hidden="true" className="size-3.5 shrink-0" />

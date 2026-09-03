@@ -73,7 +73,7 @@ function DropdownMenuLabel({
     <DropdownMenuPrimitive.Label
       data-slot="dropdown-menu-label"
       className={cn(
-        "px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground",
+        "px-3 py-1.5 eyebrow text-[10px] text-muted-foreground",
         className,
       )}
       {...props}

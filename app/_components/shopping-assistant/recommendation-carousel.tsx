@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/carousel";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
 import { ProductCard } from "./product-card";
+import { RECOMMENDATION_SLOT_WIDTH } from "./recommendation-slot";
 import type { CartFeedback } from "./types";
 
 function CarouselControls() {
@@ -69,7 +70,7 @@ export function RecommendationCarousel({
         {products.map((product, index) => (
           <CarouselItem
             key={product.id}
-            className="w-[min(82vw,20rem)] sm:w-[min(20rem,calc((100%-1rem)/2.2))] lg:w-[min(20rem,calc((100%-2rem)/2.7))]"
+            className={RECOMMENDATION_SLOT_WIDTH}
           >
             <ProductCard
               product={product}

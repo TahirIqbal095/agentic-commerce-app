@@ -25,9 +25,13 @@ const CATEGORY_BLOCK_COLORS = [
  * @returns The Tailwind background class for that category's block.
  */
 export function categoryBlockColor(category: string): string {
-  let hash = 0;
+  // FNV-1a. A plain character sum lands nearby categories on the same colour,
+  // because lowercase letters cluster and the sum barely moves between them —
+  // which is exactly the case a mixed Recommendation Set needs told apart.
+  let hash = 2166136261;
   for (const character of category.trim().toLowerCase()) {
-    hash = (hash * 31 + character.charCodeAt(0)) % 1_000_003;
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
   }
-  return CATEGORY_BLOCK_COLORS[hash % CATEGORY_BLOCK_COLORS.length];
+  return CATEGORY_BLOCK_COLORS[(hash >>> 0) % CATEGORY_BLOCK_COLORS.length];
 }

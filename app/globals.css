@@ -54,7 +54,13 @@
   --shadow-lg: 0px 0px 0px 0px hsl(0 0% 10.1961% / 0.05), 0px 4px 6px -1px hsl(0 0% 10.1961% / 0.05);
   --shadow-xl: 0px 0px 0px 0px hsl(0 0% 10.1961% / 0.05), 0px 8px 10px -1px hsl(0 0% 10.1961% / 0.05);
   --shadow-2xl: 0px 0px 0px 0px hsl(0 0% 10.1961% / 0.13);
-  --tracking-normal: normal;
+  /*
+   * The theme derives its whole tracking scale with calc() from this token, and
+   * `calc(normal - 0.025em)` is invalid — a keyword is not a length — so every
+   * derived step silently resolved to `normal`. `0em` is the same spacing this
+   * token already meant and makes the scale the theme author wrote work.
+   */
+  --tracking-normal: 0em;
   --spacing: 0.25rem;
 }
 
@@ -189,6 +195,29 @@
     @apply bg-background font-sans text-foreground;
     letter-spacing: var(--tracking-normal);
   }
+}
+
+/*
+ * The Brand's eyebrow treatment: the theme's monospaced face, upper case, wide
+ * tracked. Size, weight, and colour stay at the call site because they carry
+ * meaning — a label on a chart block is not a label on a Cart Summary.
+ */
+/*
+ * A Customer who has asked for reduced motion is never scrolled smoothly,
+ * whoever asked for the scroll — the carousel, an anchor, or the browser.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+  }
+}
+
+@utility eyebrow {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-widest);
 }
 
 @utility shadow-hard {

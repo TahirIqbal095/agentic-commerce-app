@@ -12,8 +12,8 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatMoney } from "@/lib/format-money";
-import { cn } from "@/lib/utils";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
+import { CartFeedbackMessage } from "./cart-feedback-message";
 import { StockState } from "./stock-state";
 import type { CartFeedback } from "./types";
 
@@ -131,17 +131,7 @@ export function ProductDetails({
                 {isAdding ? "Adding…" : "Add to Cart"}
               </Button>
               {cartFeedback ? (
-                <p
-                  role={cartFeedback.kind === "error" ? "alert" : "status"}
-                  className={cn(
-                    "mt-4 text-sm",
-                    cartFeedback.kind === "error"
-                      ? "text-destructive"
-                      : "text-secondary",
-                  )}
-                >
-                  {cartFeedback.message}
-                </p>
+                <CartFeedbackMessage feedback={cartFeedback} className="mt-4" />
               ) : null}
             </>
           ) : null}
@@ -152,7 +142,7 @@ export function ProductDetails({
                   key={name}
                   className="rounded-md border border-border bg-background px-4 py-3"
                 >
-                  <dt className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                  <dt className="eyebrow text-[10px] text-muted-foreground">
                     {formatAttributeName(name)}
                   </dt>
                   <dd className="mt-1 text-sm font-medium">

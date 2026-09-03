@@ -10,13 +10,16 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useTheme } from "./appearance";
+import { useTheme } from "next-themes";
 
 const APPEARANCES = [
   { value: "light", label: "Light", Icon: Sun },
   { value: "dark", label: "Dark", Icon: Moon },
   { value: "system", label: "System", Icon: Monitor },
 ] as const;
+
+/** A store that never changes, so the subscription only reports having mounted. */
+const subscribeToNothing = () => () => {};
 
 /**
  * The Customer's Light, Dark, or System appearance control.
@@ -26,10 +29,12 @@ const APPEARANCES = [
  * itself. The preference itself is stored and defaulted by the appearance
  * library.
  */
-const subscribeToNothing = () => () => {};
-
 export function AppearanceMenu() {
-  const { theme, setTheme, resolvedTheme } = useTheme();
+  const {
+    theme: appearance,
+    setTheme: setAppearance,
+    resolvedTheme: resolvedAppearance,
+  } = useTheme();
   const isMounted = useSyncExternalStore(
     subscribeToNothing,
     () => true,
@@ -37,7 +42,7 @@ export function AppearanceMenu() {
   );
 
   const TriggerIcon =
-    isMounted && resolvedTheme === "dark" ? Moon : isMounted ? Sun : Monitor;
+    isMounted && resolvedAppearance === "dark" ? Moon : isMounted ? Sun : Monitor;
 
   return (
     <DropdownMenu>
@@ -54,8 +59,8 @@ export function AppearanceMenu() {
       <DropdownMenuContent align="end">
         <DropdownMenuLabel>Appearance</DropdownMenuLabel>
         <DropdownMenuRadioGroup
-          value={theme ?? "system"}
-          onValueChange={setTheme}
+          value={appearance ?? "system"}
+          onValueChange={setAppearance}
         >
           {APPEARANCES.map(({ value, label, Icon }) => (
             <DropdownMenuRadioItem key={value} value={value}>

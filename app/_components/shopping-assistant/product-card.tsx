@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { formatMoney } from "@/lib/format-money";
 import { cn } from "@/lib/utils";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
+import { CartFeedbackMessage } from "./cart-feedback-message";
 import { categoryBlockColor } from "./category-block";
 import { StockState } from "./stock-state";
 import type { CartFeedback } from "./types";
@@ -54,7 +55,7 @@ export function ProductCard({
           )}
         >
           {artwork}
-          <span className="absolute bottom-2.5 left-4 font-mono text-[10px] font-bold uppercase tracking-widest text-accent-foreground">
+          <span className="absolute bottom-2.5 left-4 eyebrow text-[10px] font-bold text-accent-foreground">
             {product.category}
           </span>
         </div>
@@ -92,17 +93,7 @@ export function ProductCard({
             </Button>
           </div>
           {cartFeedback ? (
-            <p
-              role={cartFeedback.kind === "error" ? "alert" : "status"}
-              className={cn(
-                "mt-3 text-sm",
-                cartFeedback.kind === "error"
-                  ? "text-destructive"
-                  : "text-secondary",
-              )}
-            >
-              {cartFeedback.message}
-            </p>
+            <CartFeedbackMessage feedback={cartFeedback} className="mt-3" />
           ) : null}
         </CardContent>
       </Card>

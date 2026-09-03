@@ -8,7 +8,7 @@ export function AgentMessage({ children }: { children: ReactNode }) {
         <span className="grid size-6 place-items-center rounded-sm border-2 border-sidebar-border bg-primary text-primary-foreground">
           <Sparkles className="size-3" />
         </span>
-        <p className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+        <p className="eyebrow text-[10px] font-bold text-muted-foreground">
           Commerce Agent
         </p>
       </div>

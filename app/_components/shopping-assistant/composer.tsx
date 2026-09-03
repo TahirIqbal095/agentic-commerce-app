@@ -71,7 +71,7 @@ export function Composer({
             )}
           </Button>
         </div>
-        <div className="flex items-center justify-between gap-3 px-2 pb-1 pt-1.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+        <div className="flex items-center justify-between gap-3 px-2 pb-1 pt-1.5 text-[11px] text-muted-foreground">
           <span className="flex items-center gap-1.5">
             <Radio aria-hidden="true" className="size-3 text-secondary" />
             Searches {brandName}&apos;s live Catalog

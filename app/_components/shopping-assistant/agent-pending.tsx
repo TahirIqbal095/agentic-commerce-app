@@ -1,6 +1,8 @@
 import { Search } from "lucide-react";
 
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
+import { RECOMMENDATION_SLOT_WIDTH } from "./recommendation-slot";
 
 /**
  * The accessible name announced while a Conversation Turn is in flight.
@@ -25,7 +27,7 @@ export function AgentPending() {
     <div className="flex flex-col gap-8">
       <p
         role="status"
-        className="flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-muted-foreground"
+        className="flex items-center gap-2 eyebrow text-xs text-muted-foreground"
       >
         <Search aria-hidden="true" className="size-3.5 shrink-0" />
         {PENDING_TURN_STATUS}
@@ -46,15 +48,11 @@ export function AgentPending() {
       <div
         aria-hidden="true"
         className="flex gap-4 overflow-hidden"
-        data-slot="recommendation-placeholders"
       >
         {[0, 1, 2].map((slot) => (
-          <div
-            key={slot}
-            className="w-[min(82vw,20rem)] shrink-0 sm:w-[min(20rem,calc((100%-1rem)/2.2))] lg:w-[min(20rem,calc((100%-2rem)/2.7))]"
-          >
-            <div className="overflow-hidden rounded-lg border-2 border-sidebar-border bg-card">
-              <Skeleton className="h-28 rounded-none border-b border-border" />
+          <div key={slot} className={cn("shrink-0", RECOMMENDATION_SLOT_WIDTH)}>
+            <div className="overflow-hidden rounded-lg border-2 border-sidebar-border bg-card shadow-hard">
+              <Skeleton className="h-28 rounded-none border-b-2 border-sidebar-border" />
               <div className="flex flex-col gap-3 p-5">
                 <Skeleton className="h-4 w-24" />
                 <Skeleton className="h-5 w-[70%]" />

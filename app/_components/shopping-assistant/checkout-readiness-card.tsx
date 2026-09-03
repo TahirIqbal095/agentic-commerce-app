@@ -59,7 +59,7 @@ export function CheckoutReadinessCard({
             </Badge>
           ) : null}
         </p>
-        <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+        <p className="eyebrow text-[10px] text-muted-foreground">
           Evaluated at Cart version {readiness.cart.version}
         </p>
       </div>
@@ -101,7 +101,7 @@ export function CheckoutReadinessCard({
         <CartPanel cart={readiness.cart} controls={correctionControls} />
       </div>
 
-      <p className="border-t border-border bg-muted px-5 py-3 font-mono text-[10px] uppercase tracking-widest text-muted-foreground sm:px-6">
+      <p className="border-t border-border bg-muted px-5 py-3 text-xs text-muted-foreground sm:px-6">
         This review reserves no inventory and starts no payment.
       </p>
     </section>
