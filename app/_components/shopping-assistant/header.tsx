@@ -1,7 +1,8 @@
-import { MessageSquarePlus, Sparkles } from "lucide-react";
+import { MessageSquarePlus, Radio, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { CartView } from "@/modules/cart/cart";
+import { AppearanceMenu } from "./appearance-menu";
 import type { CartControls } from "./cart-panel";
 import {
   CartDrawer,
@@ -31,22 +32,20 @@ export function Header({
   onCartOpenChange: (open: boolean) => void;
 }) {
   return (
-    <header className="flex items-center justify-between">
+    <header className="flex items-center justify-between gap-3">
       <div
         className="flex items-center gap-2.5"
         aria-label={`${brandName} Storefront`}
       >
-        <span className="grid size-9 place-items-center rounded-xl bg-[#1d2a24] text-white shadow-sm">
+        <span className="grid size-9 place-items-center rounded-md border-2 border-sidebar-border bg-primary text-primary-foreground shadow-hard-sm">
           <Sparkles className="size-4" />
         </span>
-        <span className="text-sm font-semibold tracking-[-0.02em]">
-          {brandName}
-        </span>
+        <span className="text-sm font-bold tracking-tight">{brandName}</span>
       </div>
 
-      <div className="flex items-center gap-3">
-        <span className="hidden items-center gap-2 text-xs text-[#6d766f] sm:flex">
-          <span className="size-1.5 rounded-full bg-[#57a773] shadow-[0_0_0_3px_rgba(87,167,115,0.12)]" />
+      <div className="flex items-center gap-2">
+        <span className="hidden items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-secondary sm:flex">
+          <Radio aria-hidden="true" className="size-3.5" />
           Live catalog
         </span>
         {hasConversation ? (
@@ -54,12 +53,15 @@ export function Header({
             type="button"
             variant="ghost"
             size="sm"
+            aria-label="New conversation"
             onClick={onNewConversation}
-            className="rounded-full"
+            className="max-sm:size-8 max-sm:px-0"
           >
-            <MessageSquarePlus /> New conversation
+            <MessageSquarePlus />
+            <span className="max-sm:sr-only">New conversation</span>
           </Button>
         ) : null}
+        <AppearanceMenu />
         <CartDrawer
           cart={cart}
           state={cartState}

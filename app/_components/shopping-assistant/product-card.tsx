@@ -1,12 +1,13 @@
 import { ArrowRight, Headphones, Package, ShoppingBag } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { formatMoney } from "@/lib/format-money";
 import { cn } from "@/lib/utils";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
+import { categoryBlockColor } from "./category-block";
+import { StockState } from "./stock-state";
 import type { CartFeedback } from "./types";
 
 export function ProductCard({
@@ -36,61 +37,47 @@ export function ProductCard({
 
   return (
     <motion.article
-      initial={{ opacity: 0, y: reduceMotion ? 0 : 10 }}
+      initial={{ opacity: 0, y: reduceMotion ? 0 : 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, delay: reduceMotion ? 0 : index * 0.06 }}
-      whileHover={reduceMotion ? undefined : { y: -3 }}
+      transition={{ duration: 0.2, delay: reduceMotion ? 0 : index * 0.04 }}
+      className="h-full"
     >
-      <Card
-        className={cn(
-          "h-full overflow-hidden border-[#1d2a24]/10 bg-white/75 shadow-sm shadow-[#1d2a24]/5 transition-shadow hover:shadow-lg hover:shadow-[#1d2a24]/8",
-          !product.inStock && "bg-[#eeeae2]/80",
-        )}
-      >
-        <div className="relative grid h-28 place-items-center overflow-hidden border-b border-[#1d2a24]/5 bg-[#e6ebe4] text-[#52675b] [&_svg]:size-12 [&_svg]:stroke-[0.9]">
-          <div className="absolute inset-x-8 -top-12 h-24 rounded-full bg-white/65 blur-2xl" />
-          <span className="relative">{artwork}</span>
-          <span className="absolute bottom-3 left-4 text-[10px] font-semibold uppercase tracking-[0.18em] text-[#708176]">
+      <Card className={cn("h-full overflow-hidden", !product.inStock && "opacity-90")}>
+        <div
+          className={cn(
+            // Chart tokens are saturated fills in both appearances, so the block
+            // takes the theme's foreground-on-a-bright-fill token rather than the
+            // card foreground, which would invert to white and vanish.
+            "relative grid h-28 shrink-0 place-items-center border-b-2 border-sidebar-border text-accent-foreground [&_svg]:size-12 [&_svg]:stroke-[1.25]",
+            categoryBlockColor(product.category),
+            !product.inStock && "grayscale",
+          )}
+        >
+          {artwork}
+          <span className="absolute bottom-2.5 left-4 font-mono text-[10px] font-bold uppercase tracking-widest text-accent-foreground">
             {product.category}
           </span>
         </div>
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between gap-3">
-            <Badge
-              variant="outline"
-              className="border-[#1d2a24]/10 bg-white/40 font-normal text-[#526158]"
-            >
-              {product.category}
-            </Badge>
-            <span
-              className={cn(
-                "flex items-center gap-1.5 text-xs",
-                product.inStock ? "text-emerald-700" : "text-amber-700",
-              )}
-            >
-              <span className="size-1.5 rounded-full bg-current" />
-              {product.inStock ? "In stock" : "Unavailable"}
-            </span>
-          </div>
-          <h2 className="pt-2 text-lg font-semibold tracking-[-0.025em]">
+          <StockState inStock={product.inStock} />
+          <h2 className="text-lg font-semibold leading-snug tracking-tight">
             {product.name}
           </h2>
         </CardHeader>
         <CardContent className="flex flex-1 flex-col">
-          <p className="line-clamp-2 flex-1 text-sm leading-6 text-[#6d766f]">
+          <p className="line-clamp-2 flex-1 text-sm leading-6 text-muted-foreground">
             {product.description}
           </p>
-          <div className="mt-5 flex items-center justify-between gap-3">
-            <p className="text-lg font-semibold">
-              {formatMoney(product.priceMinor, product.currency)}
-            </p>
+          <p className="mt-5 font-mono text-lg font-bold">
+            {formatMoney(product.priceMinor, product.currency)}
+          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
             <Button
               type="button"
               size="sm"
               aria-label={`Add ${product.name} to Cart`}
               disabled={isAdding}
               onClick={onAdd}
-              className="rounded-full bg-[#1d2a24] px-3 text-white hover:bg-[#31463a]"
             >
               {isAdding ? "Adding…" : "Add to Cart"}
             </Button>
@@ -100,7 +87,6 @@ export function ProductCard({
               variant="outline"
               aria-label={`View ${product.name} details`}
               onClick={onView}
-              className="rounded-full border-[#1d2a24]/10 bg-white/70 px-3 text-[#1d2a24] shadow-none hover:bg-[#1d2a24] hover:text-white"
             >
               View details <ArrowRight />
             </Button>
@@ -111,8 +97,8 @@ export function ProductCard({
               className={cn(
                 "mt-3 text-sm",
                 cartFeedback.kind === "error"
-                  ? "text-red-700"
-                  : "text-emerald-700",
+                  ? "text-destructive"
+                  : "text-secondary",
               )}
             >
               {cartFeedback.message}

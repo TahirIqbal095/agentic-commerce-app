@@ -14,14 +14,16 @@ export function CustomerMessage({
 }) {
   return (
     <article className="ml-auto max-w-2xl text-right">
-      <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#7b857e]">
+      <p className="mb-2 font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
         You
       </p>
-      <div className="ml-auto w-fit max-w-full rounded-2xl rounded-tr-md border border-[#1d2a24]/8 bg-white/55 px-5 py-3.5 text-left text-[15px] leading-6 shadow-sm shadow-[#1d2a24]/4">
+      <div className="ml-auto w-fit max-w-full rounded-md border-2 border-sidebar-border bg-card px-5 py-3.5 text-left text-[15px] leading-6 text-card-foreground shadow-hard-sm">
         {message}
       </div>
       {provenanceNote ? (
-        <p className="mt-2 text-[11px] text-[#7b857e]">{provenanceNote}</p>
+        <p className="mt-2 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+          {provenanceNote}
+        </p>
       ) : null}
     </article>
   );

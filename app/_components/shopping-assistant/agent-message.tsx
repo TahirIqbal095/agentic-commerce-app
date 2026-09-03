@@ -4,11 +4,11 @@ import { Sparkles } from "lucide-react";
 export function AgentMessage({ children }: { children: ReactNode }) {
   return (
     <article className="w-full">
-      <div className="mb-3 flex items-center gap-2">
-        <span className="grid size-6 place-items-center rounded-lg bg-[#1d2a24] text-white">
+      <div className="mb-4 flex items-center gap-2">
+        <span className="grid size-6 place-items-center rounded-sm border-2 border-sidebar-border bg-primary text-primary-foreground">
           <Sparkles className="size-3" />
         </span>
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#708176]">
+        <p className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
           Commerce Agent
         </p>
       </div>

@@ -1,6 +1,8 @@
-import { CircleAlert, CircleCheck } from "lucide-react";
+import { CircleAlert, CircleCheck, History } from "lucide-react";
 
+import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import type { CheckoutReadiness } from "@/modules/cart/checkout-readiness";
 import { CartPanel, type CartControls } from "./cart-panel";
 
@@ -15,7 +17,8 @@ import { CartPanel, type CartControls } from "./cart-panel";
  *
  * An outdated card is history. It keeps the result the Customer saw, states
  * that the Cart has moved on, and withdraws its controls so a stale review can
- * never be acted on as if it were current.
+ * never be acted on as if it were current. Its historical standing is carried
+ * by a badge and by the warning's words as well as by the accent colour.
  */
 export function CheckoutReadinessCard({
   readiness,
@@ -33,36 +36,48 @@ export function CheckoutReadinessCard({
   return (
     <section
       aria-label="Checkout readiness"
-      className="overflow-hidden rounded-3xl border border-[#1d2a24]/10 bg-white/70 shadow-sm"
+      className={cn(
+        "overflow-hidden rounded-lg border-2 bg-card text-card-foreground",
+        isOutdated ? "border-accent" : "border-sidebar-border",
+      )}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1d2a24]/10 px-5 py-4 sm:px-6">
-        <p className="flex items-center gap-2 text-sm font-semibold">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-4 sm:px-6">
+        <p className="flex items-center gap-2 text-sm font-semibold tracking-tight">
           {isReady ? (
-            <CircleCheck className="size-4 text-[#57a773]" />
+            <CircleCheck aria-hidden="true" className="size-4 text-secondary" />
           ) : (
-            <CircleAlert className="size-4 text-red-700" />
+            <CircleAlert
+              aria-hidden="true"
+              className="size-4 text-destructive"
+            />
           )}
           {isReady ? "Ready for checkout" : "Not ready for checkout"}
           {isOutdated ? (
-            <Badge variant="secondary" className="ml-1 font-medium">
+            <Badge variant="accent" className="ml-1">
+              <History aria-hidden="true" />
               Outdated
             </Badge>
           ) : null}
         </p>
-        <p className="text-xs text-[#708176]">
+        <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
           Evaluated at Cart version {readiness.cart.version}
         </p>
       </div>
 
       {isOutdated ? (
-        <p className="border-b border-[#1d2a24]/10 px-5 py-4 text-sm text-[#708176] sm:px-6">
-          The Cart changed after this review. Review the Cart again for a
-          current result.
-        </p>
+        <div className="border-b border-border px-5 py-4 sm:px-6">
+          <Alert variant="warning">
+            <History aria-hidden="true" />
+            <span>
+              The Cart changed after this review. Review the Cart again for a
+              current result.
+            </span>
+          </Alert>
+        </div>
       ) : null}
 
       {readiness.blockers.length > 0 ? (
-        <ul className="divide-y divide-[#1d2a24]/10">
+        <ul className="divide-y divide-border">
           {readiness.blockers.map((blocker) => (
             <li
               key={
@@ -70,8 +85,12 @@ export function CheckoutReadinessCard({
                   ? `${blocker.code}:${blocker.productId}`
                   : blocker.code
               }
-              className="px-5 py-4 text-sm text-red-700 sm:px-6"
+              className="flex items-start gap-2.5 px-5 py-4 text-sm text-destructive sm:px-6"
             >
+              <CircleAlert
+                aria-hidden="true"
+                className="mt-0.5 size-4 shrink-0"
+              />
               {blocker.message}
             </li>
           ))}
@@ -82,7 +101,7 @@ export function CheckoutReadinessCard({
         <CartPanel cart={readiness.cart} controls={correctionControls} />
       </div>
 
-      <p className="bg-[#eef1eb] px-5 py-3 text-xs text-[#708176] sm:px-6">
+      <p className="border-t border-border bg-muted px-5 py-3 font-mono text-[10px] uppercase tracking-widest text-muted-foreground sm:px-6">
         This review reserves no inventory and starts no payment.
       </p>
     </section>

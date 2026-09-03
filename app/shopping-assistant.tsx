@@ -515,16 +515,8 @@ export function ShoppingAssistant({
   };
 
   return (
-    <main className="min-h-screen bg-[#f4f1eb] text-[#1d2a24]">
-      <div
-        className="pointer-events-none fixed inset-0 overflow-hidden"
-        aria-hidden="true"
-      >
-        <div className="absolute left-1/2 -top-112 size-192 -translate-x-1/2 rounded-full bg-white/80 blur-3xl" />
-        <div className="absolute -bottom-80 -right-72 size-152 rounded-full bg-[#dce5db]/50 blur-3xl" />
-      </div>
-
-      <div className="relative mx-auto flex min-h-screen w-full max-w-6xl flex-col px-5 pb-52 pt-5 sm:px-8 sm:pb-56 sm:pt-7">
+    <main className="min-h-screen bg-background text-foreground">
+      <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 pb-44 pt-5 sm:px-8 sm:pb-48 sm:pt-7">
         <Header
           brandName={brandName}
           cart={cart}

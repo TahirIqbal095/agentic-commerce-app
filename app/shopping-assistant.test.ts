@@ -1185,3 +1185,103 @@ test("a replayed retry frees its key so the next Customer action still applies",
   assert.equal(keys[0], keys[1]);
   assert.notEqual(keys[1], keys[2]);
 });
+
+test("a pending Conversation Turn announces the Catalog search once and reports the results region busy", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  installBrowser(dom);
+  let resolveTurn!: (response: Response) => void;
+  const turnResponse = new Promise<Response>((resolve) => {
+    resolveTurn = resolve;
+  });
+  globalThis.fetch = async (input, init) => {
+    if (input === "/api/agent/conversation") {
+      return Response.json({ data: null });
+    }
+    if (input === "/api/cart" && !init?.method) {
+      return Response.json({
+        data: {
+          id: null,
+          version: 0,
+          items: [],
+          totalQuantity: 0,
+          subtotalMinor: 0,
+          currency: "INR",
+        },
+      });
+    }
+    if (input === "/api/agent/message") return turnResponse;
+    throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${input}`);
+  };
+
+  const [{ render, cleanup, waitFor }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(
+    React.createElement(ShoppingAssistant, {
+      brandName: "Arc",
+      resumeConversation: true,
+    }),
+  );
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  await user.type(
+    view.getByRole("textbox", { name: /message/i }),
+    "Show me running shoes",
+  );
+  await user.click(view.getByRole("button", { name: /send/i }));
+
+  const transcript = await view.findByRole("region", {
+    name: "Conversation Transcript",
+  });
+  assert.equal(transcript.getAttribute("aria-busy"), "true");
+  assert.deepEqual(
+    view.getAllByRole("status").map((status) => status.textContent),
+    ["Searching the Catalog"],
+  );
+
+  resolveTurn(
+    Response.json({
+      data: {
+        status: "COMPLETED",
+        conversationId: "41000000-0000-4000-8000-000000000001",
+        message: "Here is a shortlist.",
+        intentBrief: {
+          goal: "Find running shoes",
+          constraints: createEmptyConversationContext().productConstraints,
+          knownEntities: [],
+          missingInformation: [],
+          confidence: 1,
+          requestedEffects: [],
+        },
+        products: [
+          {
+            id: "21000000-0000-4000-8000-000000000002",
+            slug: "road-two",
+            name: "Road Two",
+            description: "A daily road-running shoe.",
+            category: "Running",
+            priceMinor: 390000,
+            currency: "INR",
+            inStock: true,
+            attributes: {},
+          },
+        ],
+      },
+    }),
+  );
+
+  assert.ok(await view.findByRole("region", { name: "Recommendation Set" }));
+  await waitFor(() =>
+    assert.equal(view.queryAllByRole("status").length, 0),
+  );
+  assert.equal(transcript.getAttribute("aria-busy"), "false");
+});

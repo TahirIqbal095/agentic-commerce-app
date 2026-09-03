@@ -22,12 +22,8 @@ export function IntentSummary({ intent }: { intent: ShoppingIntent }) {
   return (
     <div className="flex max-w-2xl flex-wrap gap-2">
       {labels.map((label) => (
-        <Badge
-          key={label}
-          variant="outline"
-          className="border-[#1d2a24]/10 bg-white/45 font-normal text-[#526158]"
-        >
-          <Check className="size-3" /> {label}
+        <Badge key={label} variant="outline" className="font-normal">
+          <Check aria-hidden="true" /> {label}
         </Badge>
       ))}
     </div>

@@ -1,14 +1,20 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { DM_Sans, Space_Mono } from "next/font/google";
 import "./globals.css";
+import { AppearanceProvider } from "./_components/shopping-assistant/appearance";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+/**
+ * The typefaces the Brand's theme names. The theme's font tokens point at
+ * these families, so loading anything else would leave the tokens unreachable.
+ */
+const dmSans = DM_Sans({
+  variable: "--font-dm-sans",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const spaceMono = Space_Mono({
+  variable: "--font-space-mono",
+  weight: ["400", "700"],
   subsets: ["latin"],
 });
 
@@ -21,9 +27,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
+      className={`${dmSans.variable} ${spaceMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <AppearanceProvider>{children}</AppearanceProvider>
+      </body>
     </html>
   );
 }

@@ -1,12 +1,14 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { CircleAlert } from "lucide-react";
 
+import { Alert } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import { isCustomerActionEntry } from "@/modules/agent/customer-action-entry";
 import type { CartView } from "@/modules/cart/cart";
 import { isCheckoutReadinessOutdated } from "@/modules/cart/checkout-readiness";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
 import { AgentMessage } from "./agent-message";
-import { AgentProgress } from "./agent-progress";
+import { AgentPending } from "./agent-pending";
 import { CartPanel, type CartControls } from "./cart-panel";
 import { CheckoutReadinessCard } from "./checkout-readiness-card";
 import { CustomerMessage } from "./customer-message";
@@ -47,6 +49,7 @@ export function ResultArea({
 
   return (
     <section
+      aria-label="Conversation Transcript"
       aria-live="polite"
       aria-busy={isLoading}
       className="w-full space-y-7"
@@ -89,12 +92,12 @@ export function ResultArea({
               {isPending ? (
                 <motion.div
                   key="loading"
-                  initial={{ opacity: 0, y: reduceMotion ? 0 : 8 }}
+                  initial={{ opacity: 0, y: reduceMotion ? 0 : 6 }}
                   animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
+                  transition={{ duration: reduceMotion ? 0 : 0.18 }}
                 >
                   <AgentMessage>
-                    <AgentProgress />
+                    <AgentPending />
                   </AgentMessage>
                 </motion.div>
               ) : null}
@@ -102,13 +105,15 @@ export function ResultArea({
               {turn.error ? (
                 <motion.div
                   key="error"
-                  initial={{ opacity: 0, y: 8 }}
+                  initial={{ opacity: 0, y: reduceMotion ? 0 : 6 }}
                   animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: reduceMotion ? 0 : 0.18 }}
                 >
                   <AgentMessage>
-                    <div className="rounded-2xl border border-red-200 bg-red-50/90 px-5 py-4 text-sm text-red-700">
-                      {turn.error}
-                    </div>
+                    <Alert>
+                      <CircleAlert aria-hidden="true" />
+                      <span>{turn.error}</span>
+                    </Alert>
                   </AgentMessage>
                 </motion.div>
               ) : null}
@@ -116,9 +121,9 @@ export function ResultArea({
               {turn.result ? (
                 <motion.div
                   key="result"
-                  initial={{ opacity: 0, y: reduceMotion ? 0 : 10 }}
+                  initial={{ opacity: 0, y: reduceMotion ? 0 : 8 }}
                   animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.4 }}
+                  transition={{ duration: reduceMotion ? 0 : 0.22 }}
                 >
                   <AgentMessage>
                     <div className="mb-8 flex flex-col gap-5">
@@ -127,7 +132,7 @@ export function ResultArea({
                           "max-w-3xl text-balance font-medium",
                           isNeedsInput
                             ? "text-base leading-7 sm:text-lg"
-                            : "text-2xl leading-snug tracking-[-0.025em] sm:text-3xl",
+                            : "text-2xl font-semibold leading-snug tracking-tight sm:text-3xl",
                         )}
                       >
                         {turn.result.message}
