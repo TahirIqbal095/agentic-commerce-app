@@ -15,10 +15,7 @@ export type GuestSession = {
 
 export type GuestSessionStore = {
   findActive(tokenHash: string, now: Date): Promise<GuestSession | null>;
-  create(input: {
-    tokenHash: string;
-    expiresAt: Date;
-  }): Promise<GuestSession>;
+  create(input: { tokenHash: string; expiresAt: Date }): Promise<GuestSession>;
   refresh(id: string, expiresAt: Date): Promise<void>;
 };
 
@@ -89,8 +86,7 @@ function createGuestSessionBoundary<Arguments extends unknown[]>(
     const tokenHash = hashToken(token);
     const expiresAt = guestSessionExpiry(now);
     const guestSession =
-      existingSession ??
-      (await options.store.create({ tokenHash, expiresAt }));
+      existingSession ?? (await options.store.create({ tokenHash, expiresAt }));
     if (existingSession) {
       await options.store.refresh(existingSession.id, expiresAt);
     }
@@ -181,8 +177,7 @@ export function createStorefrontBrowsingRoute<Arguments extends unknown[]>(
   handler: (request: Request, ...arguments_: Arguments) => Promise<Response>,
 ): (request: Request, ...arguments_: Arguments) => Promise<Response> {
   return createGuestSessionBrowsingRoute(
-    (request, _guestSession, ...arguments_) =>
-      handler(request, ...arguments_),
+    (request, _guestSession, ...arguments_) => handler(request, ...arguments_),
     { store: createDatabaseGuestSessionStore(storefrontDatabase) },
   );
 }

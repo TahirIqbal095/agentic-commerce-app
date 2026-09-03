@@ -236,7 +236,9 @@ export function isCheckoutReadinessOutdated(
  * Reload paths use it so a Transcript renders a stored card only when its
  * status, evaluated Cart, and blockers are all present.
  */
-export function isCheckoutReadiness(value: unknown): value is CheckoutReadiness {
+export function isCheckoutReadiness(
+  value: unknown,
+): value is CheckoutReadiness {
   if (typeof value !== "object" || value === null) return false;
   const { status, cart, blockers } = value as {
     status?: unknown;
