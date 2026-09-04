@@ -20,7 +20,7 @@ import { products } from "@/db/schema/catalog";
 import { guestSessions } from "@/db/schema/identity";
 import { createCartModule } from "@/modules/cart/cart";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
-import { cartConvertedEvent } from "@/modules/checkout/checkout-audit";
+import { confirmOrderPaid } from "@/modules/checkout/order-payment";
 import { createCheckoutAuditLog } from "@/modules/checkout/checkout-audit";
 import {
   createCheckoutOrderStore,
@@ -147,22 +147,17 @@ async function readOrderStatus(orderId: string) {
   return row?.status;
 }
 
-/** Confirms a capture the way both production paths do. */
-function confirmCapture(order: { id: string; cartId: string }) {
-  return orderStore.markOrderPaid({
-    orderId: order.id,
-    cartId: order.cartId,
-    now: new Date(),
-    recordConversion: (executor) =>
-      audit.record(
-        cartConvertedEvent({
-          cartId: order.cartId,
-          orderId: order.id,
-          proposalId: CART_ID,
-          guestSessionId: GUEST_SESSION_ID,
-        }),
-        executor,
-      ),
+/** Confirms a capture through the one path both production callers use. */
+function confirmCapture(order: {
+  id: string;
+  cartId: string;
+  proposalId: string;
+}) {
+  return confirmOrderPaid({
+    orders: orderStore,
+    audit,
+    order: { ...order, guestSessionId: GUEST_SESSION_ID },
+    occurredAt: new Date(),
   });
 }
 

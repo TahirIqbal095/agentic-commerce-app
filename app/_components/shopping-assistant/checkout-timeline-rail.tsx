@@ -30,7 +30,7 @@ export function CheckoutTimelineRail({
   entries: CheckoutTimelineEntry[];
 }) {
   return (
-    <div className="sticky top-[calc(var(--storefront-header-height)+2rem)] mt-14 max-h-[calc(100vh-var(--storefront-header-height)-4rem)] w-80 shrink-0 self-start overflow-y-auto rounded-lg border-2 border-sidebar-border bg-card text-card-foreground sm:mt-20">
+    <div className="sticky top-[calc(var(--storefront-header-height)+2rem)] mt-14 max-h-[calc(100vh-var(--storefront-header-height)-4rem)] w-80 shrink-0 self-start overflow-y-auto rounded-lg border-sidebar-border bg-card text-card-foreground sm:mt-20">
       <CheckoutTimeline entries={entries} />
     </div>
   );

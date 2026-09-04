@@ -176,7 +176,6 @@ export function fakeOrderStore(): CheckoutOrderStore & {
   providerOrders: Map<string, StoredProviderOrder>;
   attempts: FakeAttempt[];
   payments: Map<string, { captured: boolean; providerStatus: string }>;
-  convertedCarts: Set<string>;
   timeline: CheckoutAuditRecord[];
 } {
   const orders = new Map<string, StoredOrder>();
@@ -204,7 +203,6 @@ export function fakeOrderStore(): CheckoutOrderStore & {
     providerOrders,
     attempts,
     payments,
-    convertedCarts,
     timeline,
 
     async consumeApproval(input) {

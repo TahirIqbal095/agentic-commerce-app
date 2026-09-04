@@ -21,7 +21,8 @@ import { createCheckoutReadinessReview } from "@/modules/cart/checkout-readiness
 import type { RazorpayTestConfiguration } from "@/modules/payments/razorpay-config";
 import type { RazorpayProviderGateway } from "@/modules/payments/razorpay-gateway";
 import type { ProviderOrderResult } from "@/modules/payments/razorpay-tools";
-import { cartConvertedEvent, type CheckoutAuditLog } from "./checkout-audit";
+import type { CheckoutAuditLog } from "./checkout-audit";
+import { confirmOrderPaid } from "./order-payment";
 import {
   CHECKOUT_MAX_PAYMENT_ATTEMPTS,
   CHECKOUT_MAX_RECONCILIATION_READS,
@@ -925,6 +926,18 @@ export function createCheckoutAuthority(
         return finishOrExhaust(order, operation);
       }
 
+      // The Order reaching its paid state and its Cart becoming order history
+      // commit together, so no crash can leave a Customer holding a live Cart
+      // full of Products they have already paid for. It stays ahead of the
+      // events that describe it: a crash between the two under-reports a paid
+      // Order, which reconciliation corrects, where the other order would have
+      // left a timeline claiming an Order was paid when it was not.
+      await confirmOrderPaid({
+        orders,
+        audit,
+        order,
+        occurredAt: now(),
+      });
       await audit.record({
         entityType: "ProviderPayment",
         entityId: payment.value.providerPaymentId,
@@ -963,26 +976,6 @@ export function createCheckoutAuthority(
           occurredAt: now(),
         });
       }
-
-      // The Order reaching its paid state and its Cart becoming order history
-      // commit together, so no crash can leave a Customer holding a live Cart
-      // full of Products they have already paid for.
-      await orders.markOrderPaid({
-        orderId: order.id,
-        cartId: order.cartId,
-        now: now(),
-        recordConversion: (executor) =>
-          audit.record(
-            cartConvertedEvent({
-              cartId: order.cartId,
-              orderId: order.id,
-              proposalId: order.proposalId,
-              guestSessionId: order.guestSessionId,
-              occurredAt: now(),
-            }),
-            executor,
-          ),
-      });
 
       const paid = (await orders.findOrder(order.id)) ?? { ...order, status: "PAID" as const };
       return statusFor(paid, operation);
