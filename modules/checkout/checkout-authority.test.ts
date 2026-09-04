@@ -7,6 +7,7 @@ import {
   enabledRazorpay,
   fakeAuditLog,
   fakeCartReview,
+  fakeNotificationInbox,
   fakeOrderStore,
   fakeProposalStore,
   fakeProviderGateway,
@@ -33,6 +34,7 @@ function authorityWith(
   const orders = fakeOrderStore();
   const audit = fakeAuditLog();
   const provider = fakeProviderGateway(options.script ?? {});
+  const notifications = fakeNotificationInbox();
   let issued = 0;
   const authority = createCheckoutAuthority({
     guestSessionId: GUEST_SESSION_ID,
@@ -43,11 +45,12 @@ function authorityWith(
     provider: provider.gateway,
     configuration: options.configuration ?? enabledRazorpay,
     audit: audit.log,
+    notifications: notifications.inbox,
     now: options.clock ?? (() => NOW),
     newId: () =>
       `61000000-0000-4000-8000-${String(++issued).padStart(12, "0")}`,
   });
-  return { authority, proposals, orders, audit, provider };
+  return { authority, proposals, orders, audit, provider, notifications };
 }
 
 /** Prepares a proposal and approves it, the ordinary path a Customer takes. */
@@ -170,6 +173,72 @@ test("absent Razorpay Test credentials disable checkout with an explanation", as
 
   assert.equal(preparation.status, "UNAVAILABLE");
   assert.deepEqual(provider.calls, []);
+});
+
+test("a Cart outside the bounds records which bound refused it", async () => {
+  const { authority, audit } = authorityWith({
+    cart: () =>
+      reviewableCart({
+        subtotalMinor: 6_000_000,
+        items: [
+          {
+            ...reviewableCart().items[0],
+            quantity: 2,
+            cartPriceMinor: 3_000_000,
+            subtotalMinor: 6_000_000,
+          },
+        ],
+        totalQuantity: 2,
+      }),
+  });
+
+  await authority.prepare({ commandKey: COMMAND_KEY });
+
+  const [refusal] = audit.events.filter(
+    (event) => event.eventType === "CHECKOUT_UNAVAILABLE",
+  );
+  assert.equal(refusal.reasonCode, "CHECKOUT_BOUNDS_EXCEEDED");
+  assert.equal(refusal.detail, "TOTAL_ABOVE_MAXIMUM");
+  assert.equal(refusal.amountMinor, 6_000_000);
+  assert.equal(refusal.currency, "INR");
+  assert.equal(refusal.operationKey, COMMAND_KEY);
+  assert.equal(refusal.correlationId, null);
+  // There is no Order and so no Checkout Timeline for it to appear in.
+  assert.equal(refusal.customerVisible ?? false, false);
+});
+
+test("an unconfigured Brand refuses checkout without writing a row per request", async () => {
+  const { authority, audit } = authorityWith({
+    configuration: {
+      status: "DISABLED",
+      reasonCode: "RAZORPAY_CREDENTIALS_ABSENT",
+      explanation: "Checkout is unavailable.",
+    },
+  });
+
+  for (const commandKey of [COMMAND_KEY, APPROVAL_KEY]) {
+    await authority.prepare({ commandKey });
+  }
+
+  // The reason never changes and the configuration already states it, so
+  // repeating the request must not grow the Brand's audit history.
+  assert.deepEqual(audit.events, []);
+});
+
+test("a Cart that is not ready records nothing, because nothing was refused", async () => {
+  const { authority, audit } = authorityWith({
+    cart: () =>
+      reviewableCart({
+        items: [{ ...reviewableCart().items[0], isAvailable: false }],
+      }),
+  });
+
+  await authority.prepare({ commandKey: COMMAND_KEY });
+
+  assert.deepEqual(
+    audit.events.map((event) => event.eventType),
+    [],
+  );
 });
 
 test("an approved proposal creates exactly one Order, Operation, and Provider Order", async () => {
@@ -461,6 +530,69 @@ test("an exact reconciled Provider Order recovers the checkout without duplicati
   );
 });
 
+test("evidence held before the Provider Order existed is applied once it does", async () => {
+  const { checkout, notifications } = await approvedCheckout();
+
+  assert.deepEqual(notifications.released, [
+    checkout.providerOrder!.providerOrderId,
+  ]);
+});
+
+test("a reconciled Provider Order also releases the evidence held for it", async () => {
+  let dispatched: { receipt: string; notes: Record<string, string> } | null =
+    null;
+  const { checkout, notifications } = await approvedCheckout({
+    createOrder: [
+      (input) => {
+        dispatched = { receipt: input.receipt, notes: input.notes };
+        return {
+          status: "OUTCOME_UNKNOWN",
+          reasonCode: "PROVIDER_RESPONSE_LOST",
+          message: "Razorpay's answer did not arrive.",
+        };
+      },
+    ],
+    findByReceipt: [
+      () => ({
+        status: "FOUND",
+        value: providerOrderForRequest({
+          amountMinor: 1599700,
+          currency: "INR",
+          receipt: dispatched!.receipt,
+          notes: dispatched!.notes,
+        }),
+      }),
+    ],
+  });
+
+  assert.equal(checkout.providerOperation.status, "SUCCEEDED");
+  assert.deepEqual(notifications.released, [
+    checkout.providerOrder!.providerOrderId,
+  ]);
+});
+
+test("a failed association never undoes the verified Provider Order", async () => {
+  const context = authorityWith({});
+  context.notifications.failWith(
+    new Error("the notification inbox is unreachable"),
+  );
+  const preparation = await context.authority.prepare({
+    commandKey: COMMAND_KEY,
+  });
+  if (preparation.status !== "PREPARED") throw new Error("unreachable");
+
+  const outcome = await context.authority.approve({
+    proposalId: preparation.proposal.id,
+    approvalKey: APPROVAL_KEY,
+    approvedTotalMinor: preparation.proposal.checkoutTotalMinor,
+    currency: "INR",
+  });
+
+  if (!("checkout" in outcome)) throw new Error("approval was refused");
+  assert.equal(outcome.checkout.providerOperation.status, "SUCCEEDED");
+  assert.ok(outcome.checkout.providerOrder);
+});
+
 test("confirmed absence permits one more attempt with identical inputs", async () => {
   const { checkout, provider, orders } = await approvedCheckout({
     createOrder: [
@@ -641,6 +773,39 @@ test("an Order is paid only from Razorpay's own captured state", async () => {
   assert.equal([...orders.orders.values()][0].status, "PAID");
 });
 
+test("an Order Razorpay's own update already paid is not said to be paid twice", async () => {
+  const { checkout, authority, orders, audit } = await approvedCheckout({
+    payment: {
+      status: "FOUND",
+      value: {
+        providerPaymentId: "pay_TEST1",
+        providerOrderId: "order_TEST1",
+        amountMinor: 1599700,
+        currency: "INR",
+        status: "captured",
+        captured: true,
+      },
+    },
+  });
+  const ticket = await authority.openPaymentAttempt(checkout.orderId);
+  if (!("attemptId" in ticket)) throw new Error("launch was refused");
+  // An authenticated Provider Notification confirmed the capture first and
+  // said so; the browser callback then arrives for the same payment.
+  await orders.setOrderStatus(checkout.orderId, "PAID");
+
+  await authority.resolvePaymentAttempt(checkout.orderId, ticket.attemptId, {
+    outcome: "COMPLETED",
+    paymentId: "pay_TEST1",
+    providerOrderId: ticket.providerOrderId,
+    signature: "valid-signature",
+  });
+
+  assert.equal(
+    audit.events.filter((event) => event.eventType === "ORDER_PAID").length,
+    0,
+  );
+});
+
 test("a verified callback Razorpay has not captured leaves the Order unpaid", async () => {
   const { checkout, authority, orders } = await approvedCheckout({
     payment: {
@@ -716,7 +881,9 @@ test("no Audit Event carries a credential, a signature, or Conversation text", a
   }
   for (const event of audit.events) {
     assert.ok(event.reasonCode.length > 0);
-    assert.ok(event.correlationId.length > 0);
+    // Every event of a checkout that reached an Order correlates on the one
+    // Checkout Proposal behind it, so the timeline can be read as one story.
+    assert.ok((event.correlationId ?? "").length > 0);
     assert.ok(event.actorType);
     assert.equal(event.guestSessionId, GUEST_SESSION_ID);
   }

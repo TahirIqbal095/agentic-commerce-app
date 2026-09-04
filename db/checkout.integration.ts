@@ -23,7 +23,10 @@ import {
   createCheckoutProposalStore,
 } from "@/modules/checkout/checkout-store";
 import type { CheckoutProposal } from "@/modules/checkout/checkout-proposal";
-import { createProviderNotificationInbox } from "@/modules/checkout/provider-notification-inbox";
+import {
+  createProviderNotificationInbox,
+  heldNotificationCount,
+} from "@/modules/checkout/provider-notification-inbox";
 import { cleanupExpiredGuestSessions } from "@/modules/identity/guest-session";
 
 /**
@@ -366,6 +369,30 @@ test("a repeated Razorpay event ID is recognized rather than applied twice", asy
     .from(providerNotifications)
     .where(eq(providerNotifications.eventId, "evt_TEST_DEDUPE"));
   assert.equal(stored.length, 1);
+
+  // Retention and deduplication are what a Brand operator must be able to
+  // explain later, so each leaves its own operational evidence behind.
+  const recorded = await db
+    .select({
+      eventType: auditEvents.eventType,
+      customerVisible: auditEvents.customerVisible,
+      correlationId: auditEvents.correlationId,
+    })
+    .from(auditEvents)
+    .where(eq(auditEvents.entityId, "evt_TEST_DEDUPE"))
+    .orderBy(auditEvents.occurredAt, auditEvents.createdAt);
+  assert.deepEqual(
+    recorded.map((event) => event.eventType),
+    ["PROVIDER_NOTIFICATION_HELD", "PROVIDER_NOTIFICATION_DUPLICATE"],
+  );
+  assert.deepEqual(
+    recorded.map((event) => event.customerVisible),
+    [false, false],
+  );
+  assert.deepEqual(
+    recorded.map((event) => event.correlationId),
+    [null, null],
+  );
 });
 
 test("an early notification is applied once its Provider Order becomes known", async (t) => {
@@ -416,6 +443,68 @@ test("an early notification is applied once its Provider Order becomes known", a
   assert.ok(held.appliedAt);
 });
 
+test("held evidence is applied the moment its Provider Order is attached", async (t) => {
+  const proposal = await saveProposal();
+  t.after(clearCheckoutData);
+  const outcome = await consume(proposal);
+  if (outcome.status === "REFUSED") assert.fail(outcome.reason);
+  const inbox = createProviderNotificationInbox({
+    database: db,
+    orders: orderStore,
+    audit,
+  });
+
+  assert.equal(
+    (
+      await inbox.receive({
+        eventId: "evt_TEST_RACED",
+        eventType: "payment.captured",
+        providerOrderId: "order_TEST_RACED",
+        providerPaymentId: "pay_TEST_RACED",
+        providerStatus: "captured",
+        amountMinor: 699800,
+        currency: "INR",
+        occurredAt: new Date(),
+      })
+    ).status,
+    "HELD",
+  );
+  await orderStore.attachProviderOrder({
+    orderId: outcome.order.id,
+    operationId: outcome.operation.id,
+    providerOrder: {
+      providerOrderId: "order_TEST_RACED",
+      receipt: outcome.operation.id,
+      amountMinor: 699800,
+      currency: "INR",
+      providerStatus: "created",
+    },
+    notes: {},
+  });
+
+  // No second delivery arrives: association alone must release the evidence.
+  assert.equal(await inbox.releaseHeldFor("order_TEST_RACED"), 1);
+
+  const [order] = await db
+    .select({ status: orders.status })
+    .from(orders)
+    .where(eq(orders.id, outcome.order.id));
+  assert.equal(order.status, "PAID");
+  assert.equal(await heldNotificationCount(db), 0);
+  // Releasing twice must not apply the same evidence again.
+  assert.equal(await inbox.releaseHeldFor("order_TEST_RACED"), 0);
+
+  // A capture confirmed only asynchronously must still end the Customer's
+  // timeline with their Order being paid, exactly as the callback path does.
+  const timeline = await orderStore.readTimeline(outcome.order.proposalId);
+  assert.deepEqual(
+    timeline
+      .map((entry) => entry.eventType)
+      .filter((eventType) => eventType !== "ORDER_CREATED"),
+    ["PROVIDER_NOTIFICATION_RECEIVED", "ORDER_PAID"],
+  );
+});
+
 test("protected commerce evidence survives the Guest Session that created it", async (t) => {
   const proposal = await saveProposal();
   t.after(clearCheckoutData);
@@ -463,7 +552,7 @@ test("protected commerce evidence survives the Guest Session that created it", a
   });
 });
 
-test("Audit Events are readable in the order they occurred, and only when visible", async (t) => {
+test("Audit Events are readable in the order they were recorded, and only when visible", async (t) => {
   const proposal = await saveProposal();
   t.after(clearCheckoutData);
   const outcome = await consume(proposal);
@@ -480,12 +569,27 @@ test("Audit Events are readable in the order they occurred, and only when visibl
     customerVisible: false,
     occurredAt: new Date(Date.now() + 1000),
   });
+  // Evidence Razorpay timestamped before the Order existed. It is learned last
+  // and must be told last, or a Customer would read the capture above the
+  // payment that was captured.
+  await audit.record({
+    entityType: "ProviderNotification",
+    entityId: "evt_TEST_LATE_ARRIVAL",
+    correlationId: proposal.id,
+    actorType: "RAZORPAY",
+    eventType: "PROVIDER_NOTIFICATION_RECEIVED",
+    reasonCode: "payment.captured",
+    message: "Razorpay confirmed that this test payment was captured.",
+    guestSessionId: GUEST_SESSION_ID,
+    customerVisible: true,
+    occurredAt: new Date(Date.now() - 3_600_000),
+  });
 
   const timeline = await orderStore.readTimeline(proposal.id);
 
   assert.deepEqual(
     timeline.map((entry) => entry.eventType),
-    ["ORDER_CREATED"],
+    ["ORDER_CREATED", "PROVIDER_NOTIFICATION_RECEIVED"],
   );
   const everything = await db
     .select({ id: auditEvents.id })
@@ -496,5 +600,5 @@ test("Audit Events are readable in the order they occurred, and only when visibl
         eq(auditEvents.environmentMode, "TEST"),
       ),
     );
-  assert.equal(everything.length, 2);
+  assert.equal(everything.length, 3);
 });

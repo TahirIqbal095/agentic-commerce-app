@@ -21,6 +21,7 @@ import {
 import type { RazorpayProviderGateway } from "@/modules/payments/razorpay-gateway";
 import type { GuestSession } from "@/modules/identity/guest-session";
 import { createCheckoutAuditLog } from "./checkout-audit";
+import { createCheckoutFaultInjector } from "./checkout-fault";
 import {
   createCheckoutAuthority,
   type CheckoutAuthority,
@@ -29,29 +30,11 @@ import {
   createCheckoutOrderStore,
   createCheckoutProposalStore,
 } from "./checkout-store";
-
-/**
- * Whether the deterministic post-dispatch timeout fault is armed.
- *
- * It exists so the graceful recovery from an Unknown Provider Outcome can be
- * demonstrated and tested repeatably. It is available only outside production
- * and only when the environment sets it, so no Customer input and no production
- * build can activate it.
- */
-function faultInjector(): (() => boolean) | undefined {
-  if (
-    process.env.NODE_ENV === "production" ||
-    process.env.CHECKOUT_FAULT !== "LOSE_CREATE_ORDER_RESPONSE"
-  ) {
-    return undefined;
-  }
-  let remaining = 1;
-  return () => remaining-- > 0;
-}
+import { createProviderNotificationInbox } from "./provider-notification-inbox";
 
 export function storefrontRazorpayGateway(): RazorpayProviderGateway {
   const configuration = storefrontRazorpayConfiguration();
-  const loseNextWriteResponse = faultInjector();
+  const loseNextWriteResponse = createCheckoutFaultInjector(process.env);
   return createRazorpayMcpAdapter({
     basicAuthorization: () =>
       configuration.status === "ENABLED"
@@ -66,14 +49,24 @@ export function createStorefrontCheckoutAuthority(
   guestSession: GuestSession,
   brandName = "the Storefront",
 ): CheckoutAuthority {
+  const orders = createCheckoutOrderStore(db);
+  const audit = createCheckoutAuditLog(db);
   return createCheckoutAuthority({
     guestSessionId: guestSession.id,
     brandName,
     cartReview: createCartReviewRead(guestSession.id, createCartModule),
     proposals: createCheckoutProposalStore(guestSession.id, db),
-    orders: createCheckoutOrderStore(db),
+    orders,
     provider: storefrontRazorpayGateway(),
     configuration: storefrontRazorpayConfiguration(),
-    audit: createCheckoutAuditLog(db),
+    audit,
+    // The webhook route and the authority hold two halves of one inbox, so a
+    // delivery that raced ahead of the Provider Order is applied by whichever
+    // of the two learns about that Provider Order first.
+    notifications: createProviderNotificationInbox({
+      database: db,
+      orders,
+      audit,
+    }),
   });
 }

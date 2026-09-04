@@ -18,6 +18,7 @@ import {
   createCheckoutApprovalRoute,
   createCheckoutCallbackRoute,
   createCheckoutProposalRoute,
+  createCheckoutReconcileRoute,
   createCheckoutStatusRoute,
   createPaymentAttemptRoute,
 } from "./route-factory";
@@ -167,6 +168,14 @@ function post(url: string, body?: unknown, cookie?: string) {
 }
 
 const orderContext = { params: Promise.resolve({ orderId: ORDER_ID }) };
+
+/** Builds the reconcile route over one authority, the only thing that varies. */
+function reconcileRoute(authority: CheckoutAuthority) {
+  return createCheckoutReconcileRoute({
+    store: memoryGuestSessionStore(),
+    createAuthority: () => authority,
+  });
+}
 
 test("preparing a checkout records the entry the Transcript will show", async () => {
   const { authority, calls } = fakeAuthority();
@@ -363,6 +372,119 @@ test("a checkout another Guest Session owns is answered 404", async () => {
   );
 
   assert.equal(response.status, 404);
+});
+
+test("reading a checkout returns its authoritative state and its timeline", async () => {
+  const timeline = [
+    {
+      id: "audit-1",
+      occurredAt: "2026-09-04T10:00:00.000Z",
+      title: "Checkout prepared",
+      explanation: "A checkout was prepared for the exact Cart total.",
+      detail: "Cart version 4",
+    },
+  ];
+  const { authority, calls } = fakeAuthority({
+    async readStatus(id) {
+      calls.push({ operation: "readStatus", input: id });
+      return { ...checkoutStatus, orderId: id, timeline };
+    },
+  });
+  const route = createCheckoutStatusRoute({
+    store: memoryGuestSessionStore(),
+    createAuthority: () => authority,
+  });
+
+  const response = await route(
+    new Request(`http://localhost/api/checkout/${ORDER_ID}`),
+    orderContext,
+  );
+
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as { data: CheckoutStatusView };
+  assert.equal(payload.data.orderId, ORDER_ID);
+  assert.deepEqual(payload.data.timeline, timeline);
+  assert.deepEqual(calls, [{ operation: "readStatus", input: ORDER_ID }]);
+});
+
+test("a checkout identifier that is not a UUID never reaches the authority", async () => {
+  const { authority, calls } = fakeAuthority();
+  const route = createCheckoutStatusRoute({
+    store: memoryGuestSessionStore(),
+    createAuthority: () => authority,
+  });
+
+  const response = await route(
+    new Request("http://localhost/api/checkout/not-a-uuid"),
+    { params: Promise.resolve({ orderId: "not-a-uuid" }) },
+  );
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(calls, []);
+});
+
+test("reconciliation spends one bounded read and returns what it learned", async () => {
+  const reconciled: CheckoutStatusView = {
+    ...checkoutStatus,
+    providerOperation: {
+      status: "SUCCEEDED",
+      reconciliationReadsUsed: 2,
+      canCheckStatus: false,
+    },
+  };
+  const { authority, calls } = fakeAuthority({
+    async reconcile(id) {
+      calls.push({ operation: "reconcile", input: id });
+      return reconciled;
+    },
+  });
+  const response = await reconcileRoute(authority)(
+    post(`http://localhost/api/checkout/${ORDER_ID}/reconcile`),
+    orderContext,
+  );
+
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as { data: CheckoutStatusView };
+  assert.deepEqual(payload.data, reconciled);
+  assert.deepEqual(calls, [{ operation: "reconcile", input: ORDER_ID }]);
+});
+
+test("a reconciliation for a checkout this browser does not own is 404", async () => {
+  const { authority } = fakeAuthority({
+    async reconcile() {
+      return {
+        status: "REFUSED",
+        reasonCode: "ORDER_NOT_FOUND",
+        message: "That checkout is not available.",
+      };
+    },
+  });
+  const response = await reconcileRoute(authority)(
+    post(`http://localhost/api/checkout/${ORDER_ID}/reconcile`),
+    orderContext,
+  );
+
+  assert.equal(response.status, 404);
+  const payload = (await response.json()) as { error: { code: string } };
+  assert.equal(payload.error.code, "ORDER_NOT_FOUND");
+});
+
+test("a reconciliation failure is answered without leaking why", async () => {
+  const { authority } = fakeAuthority({
+    async reconcile() {
+      throw new Error("the provider adapter exploded");
+    },
+  });
+  const response = await reconcileRoute(authority)(
+    post(`http://localhost/api/checkout/${ORDER_ID}/reconcile`),
+    orderContext,
+  );
+
+  assert.equal(response.status, 500);
+  assert.equal(
+    (await response.text()).includes("the provider adapter exploded"),
+    false,
+  );
 });
 
 test("opening a Payment Attempt returns the publishable key and nothing secret", async () => {

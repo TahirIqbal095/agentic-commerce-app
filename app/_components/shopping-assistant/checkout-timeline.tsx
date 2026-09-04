@@ -11,6 +11,13 @@ import type { CheckoutTimelineEntry } from "@/modules/checkout/checkout-status";
  * projection allowed: no secret, signature, payment instrument, OTP, raw
  * provider payload, or implementation name can appear here, because none of
  * them reached the Audit Event it was projected from.
+ *
+ * The account ends by saying how long the Customer keeps it. This release has
+ * no Customer accounts and no contact-based recovery, so the Guest Session
+ * cookie in this browser is the only thing that can reach this checkout —
+ * telling the Customer that plainly is part of being honest about a test-only
+ * demonstration, not a footnote about it. The Brand's own evidence outlives
+ * the session either way (ADR-0011).
  */
 export function CheckoutTimeline({
   entries,
@@ -56,6 +63,11 @@ export function CheckoutTimeline({
           </li>
         ))}
       </ol>
+      <p className="mt-4 text-xs text-muted-foreground">
+        This timeline is kept for this browser only. Clearing your browser data
+        or letting this session expire ends your access to it, and it cannot be
+        recovered.
+      </p>
     </section>
   );
 }

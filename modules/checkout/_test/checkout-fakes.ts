@@ -31,6 +31,7 @@ import type {
   StoredProviderOperation,
   StoredProviderOrder,
 } from "../checkout-store";
+import type { HeldNotificationRelease } from "../provider-notification-inbox";
 import type { CheckoutAuditRecord } from "../checkout-timeline";
 import type { OrderStatus, PaymentAttemptStatus } from "../checkout-status";
 
@@ -84,6 +85,33 @@ export function fakeAuditLog() {
     },
   };
   return { events, log };
+}
+
+/**
+ * A stand-in for the durable Provider Notification inbox.
+ *
+ * It records which Provider Order the authority asked it to associate, so a
+ * test can prove that evidence delivered before that Provider Order existed is
+ * released at the moment it does — and that a broken inbox never rolls back a
+ * Provider Order the Storefront already verified.
+ */
+export function fakeNotificationInbox() {
+  const released: string[] = [];
+  let failure: Error | null = null;
+  const inbox: HeldNotificationRelease = {
+    async releaseHeldFor(providerOrderId) {
+      released.push(providerOrderId);
+      if (failure) throw failure;
+      return 0;
+    },
+  };
+  return {
+    released,
+    inbox,
+    failWith(error: Error) {
+      failure = error;
+    },
+  };
 }
 
 export function fakeProposalStore(): CheckoutProposalStore & {

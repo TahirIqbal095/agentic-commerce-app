@@ -1,6 +1,6 @@
 import type { RazorpayTestConfiguration } from "@/modules/payments/razorpay-config";
 import { readProviderNotification } from "@/modules/payments/provider-notification";
-import type { ProviderNotificationInbox } from "@/modules/checkout/provider-notification-inbox";
+import type { ProviderNotificationIntake } from "@/modules/checkout/provider-notification-inbox";
 
 const RAZORPAY_SIGNATURE_HEADER = "x-razorpay-signature";
 
@@ -20,7 +20,7 @@ const RAZORPAY_SIGNATURE_HEADER = "x-razorpay-signature";
  */
 export function createProviderNotificationRoute(options: {
   configuration: RazorpayTestConfiguration;
-  createInbox: () => ProviderNotificationInbox;
+  createInbox: () => ProviderNotificationIntake;
 }) {
   return async function POST(request: Request): Promise<Response> {
     if (options.configuration.status === "DISABLED") {

@@ -139,7 +139,8 @@ and is never run by ordinary CI.
 This checkout revalidates Product availability and stock when Approval is
 consumed but does **not** reserve, decrement, release, or fulfil inventory.
 Customer access to a Checkout Timeline ends when the Guest Session cookie is
-lost or expires; the Brand's Orders, Provider Operations, Payment Attempts,
-Provider Payments, and Audit Events survive that expiry for reconciliation.
-Production payment enablement stays blocked until inventory commitment and
-late-payment behaviour are designed.
+lost or expires, and the timeline says so where the Customer reads it; the
+Brand's Orders, Provider Operations, Payment Attempts, Provider Payments, and
+Audit Events survive that expiry for reconciliation. Production payment
+enablement stays blocked until inventory commitment and late-payment behaviour
+are designed.

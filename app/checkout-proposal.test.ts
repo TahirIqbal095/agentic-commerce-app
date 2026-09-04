@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { openStorefront, preparedEntry, readyCart, statusView } from "./_test/checkout";
+import { createEmptyConversationContext } from "@/modules/agent/intent";
 
 /** The checkout a refreshed browser finds already finished on the server. */
 const reloadedStatus = statusView({ status: "PAID" });
@@ -87,6 +88,112 @@ test("the Approval control names the exact amount and its Razorpay Test conseque
     within(card).getByText(
       "This checkout reserves no inventory and does not arrange fulfilment.",
     ),
+  );
+});
+
+test("asking to check out conversationally prepares the same exact proposal", async (t) => {
+  const { view, within, say, requests } = await openStorefront(t, browser(), {
+    routes: {
+      proposal: () => {
+        throw new Error("the Cart control must not be what prepared this");
+      },
+      message: () =>
+        Response.json({
+          data: {
+            status: "COMPLETED",
+            conversationId: "41000000-0000-4000-8000-000000000001",
+            message:
+              "Here's your checkout. Check the amount, then approve it yourself.",
+            intentBrief: {
+              goal: "Check out",
+              constraints: createEmptyConversationContext().productConstraints,
+              knownEntities: [],
+              missingInformation: [],
+              confidence: 1,
+              requestedEffects: ["START_CHECKOUT"],
+            },
+            products: [],
+            checkout: preparedEntry().preparation,
+          },
+        }),
+    },
+  });
+
+  await say("I'd like to check out now");
+
+  // The same amounts, the same explicit zeros, and the same Approval control
+  // the Cart's Check out produces: one orchestrator, reached two ways.
+  const card = await view.findByRole("region", { name: "Checkout proposal" });
+  assert.equal(
+    within(card).getByLabelText("Total to pay").textContent,
+    "₹15,997",
+  );
+  assert.equal(within(card).getByLabelText("Discount").textContent, "₹0");
+  assert.ok(
+    within(card).getByRole("button", {
+      name: "Approve and pay ₹15,997 with Razorpay Test Checkout",
+    }),
+  );
+  assert.equal(
+    requests.some((request) => request.includes("/api/checkout/proposal")),
+    false,
+  );
+});
+
+test("typed words never approve a payment, however plainly they are meant", async (t) => {
+  const approvals: unknown[] = [];
+  const { view, user, within, say, openCart, requests } = await openStorefront(
+    t,
+    browser(),
+    {
+      routes: {
+        proposal: () => Response.json({ data: preparedEntry() }),
+        approval: (body) => {
+          approvals.push(body);
+          return Response.json({ data: null });
+        },
+        message: () =>
+          Response.json({
+            data: {
+              status: "COMPLETED",
+              conversationId: "41000000-0000-4000-8000-000000000001",
+              message:
+                "Approve the exact amount yourself — I cannot approve a payment for you.",
+              intentBrief: {
+                goal: "Confirm checkout",
+                constraints:
+                  createEmptyConversationContext().productConstraints,
+                knownEntities: [],
+                missingInformation: [],
+                confidence: 1,
+                requestedEffects: [],
+              },
+              products: [],
+            },
+          }),
+      },
+    },
+  );
+
+  const drawer = await openCart();
+  await user.click(within(drawer).getByRole("button", { name: "Check out" }));
+  await view.findByRole("region", { name: "Checkout proposal" });
+
+  for (const words of ["yes", "buy it", "confirm, pay now"]) {
+    await say(words);
+  }
+
+  assert.deepEqual(approvals, []);
+  assert.equal(
+    requests.some((request) => request.includes("/api/checkout/approval")),
+    false,
+  );
+  // The proposal is still waiting for the one control that can authorize it.
+  const card = await view.findByRole("region", { name: "Checkout proposal" });
+  assert.ok(
+    within(card).getByRole("button", {
+      name: "Approve and pay ₹15,997 with Razorpay Test Checkout",
+    }),
   );
 });
 

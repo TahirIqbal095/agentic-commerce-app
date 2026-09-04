@@ -25,6 +25,11 @@ export type CheckoutAuditActor = "CUSTOMER" | "SYSTEM" | "RAZORPAY" | "AGENT";
  * Each is a fact about what happened, never a description of how it was
  * implemented: no MCP, transport, or adapter name appears, because these codes
  * reach the Customer-facing Checkout Timeline through a fixed projection.
+ *
+ * An unauthenticated Provider Notification is deliberately absent. Recording
+ * one would let anyone who can reach the webhook endpoint write rows into the
+ * Brand's audit history, so a delivery that fails HMAC verification is refused
+ * at the route and leaves no trace behind it.
  */
 export type CheckoutEventType =
   | "CHECKOUT_PROPOSAL_PREPARED"
@@ -50,8 +55,7 @@ export type CheckoutEventType =
   | "ORDER_PAYMENT_FAILED"
   | "PROVIDER_NOTIFICATION_RECEIVED"
   | "PROVIDER_NOTIFICATION_DUPLICATE"
-  | "PROVIDER_NOTIFICATION_HELD"
-  | "PROVIDER_NOTIFICATION_REFUSED";
+  | "PROVIDER_NOTIFICATION_HELD";
 
 export type CheckoutAuditEvent = {
   entityType: string;
@@ -61,9 +65,12 @@ export type CheckoutAuditEvent = {
    *
    * Correlating on the proposal rather than the Order means preparation,
    * policy, and Approval — all of which happen before an Order exists — belong
-   * to the same story as the payment that follows them.
+   * to the same story as the payment that follows them. It is `null` only for
+   * evidence that belongs to no checkout: a preparation refused before a
+   * proposal existed, or a Razorpay delivery for a Provider Order we have not
+   * yet attached.
    */
-  correlationId: string;
+  correlationId: string | null;
   actorType: CheckoutAuditActor;
   eventType: CheckoutEventType;
   reasonCode: string;

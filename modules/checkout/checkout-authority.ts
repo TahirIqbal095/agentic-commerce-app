@@ -40,6 +40,7 @@ import type {
   StoredOrder,
   StoredProviderOperation,
 } from "./checkout-store";
+import type { HeldNotificationRelease } from "./provider-notification-inbox";
 import type { CheckoutStatusView, OrderStatus } from "./checkout-status";
 import { projectCheckoutTimeline } from "./checkout-timeline";
 
@@ -109,6 +110,20 @@ export type CheckoutAuthorityOptions = {
   provider: RazorpayProviderGateway;
   configuration: RazorpayTestConfiguration;
   audit: CheckoutAuditLog;
+  /**
+   * Releases Provider Notifications that arrived before this checkout had a
+   * Provider Order to attach them to.
+   *
+   * Razorpay may deliver `payment.captured` before — or instead of — the
+   * browser callback, and a delivery that names a Provider Order we have not
+   * yet stored cannot be associated. Attaching one is therefore the moment
+   * association becomes possible, so the authority tells the inbox rather than
+   * leaving valid evidence waiting for a second delivery that may never come.
+   *
+   * It is required rather than optional: a composition that forgot to wire it
+   * would silently stop honouring ADR-0014, and no test could see the gap.
+   */
+  notifications: HeldNotificationRelease;
   now?: () => Date;
   newId?: () => string;
 };
@@ -279,7 +294,52 @@ export function createCheckoutAuthority(
       customerVisible: true,
       occurredAt: now(),
     });
+    // Only now, with the Provider Order recorded and its creation explained,
+    // may evidence that arrived ahead of it be applied. The Checkout Timeline
+    // reads events in receipt order for exactly this reason: a capture Razorpay
+    // timestamped earlier must still be told after the payment it captured.
+    await releaseHeldNotifications(order, providerOrder.providerOrderId);
     return { ...operation, status: "SUCCEEDED" as const, blockedReason: null };
+  }
+
+  /**
+   * Applies whatever Razorpay already told us about this Provider Order.
+   *
+   * A failure here must never undo a Provider Order the Storefront has just
+   * verified: the evidence stays held and is applied on the next delivery or
+   * the next release, whereas rolling back a verified Provider Order would
+   * invite a second `create_order` for one that already exists.
+   *
+   * So the failure is recorded rather than logged. The evidence really is still
+   * held, which is what `PROVIDER_NOTIFICATION_HELD` says, and a Brand operator
+   * asked later why a paid Razorpay payment took a second delivery to show up
+   * needs that fact in the audit history rather than in a server's stdout.
+   */
+  async function releaseHeldNotifications(
+    order: StoredOrder,
+    providerOrderId: string,
+  ) {
+    try {
+      await options.notifications.releaseHeldFor(providerOrderId);
+    } catch {
+      await audit
+        .record({
+          entityType: "ProviderOrder",
+          entityId: providerOrderId,
+          correlationId: order.proposalId,
+          actorType: "SYSTEM",
+          eventType: "PROVIDER_NOTIFICATION_HELD",
+          reasonCode: "HELD_EVIDENCE_RELEASE_FAILED",
+          message:
+            "An earlier Razorpay update for this payment could not be applied yet. It stays retained until the next update or status check.",
+          providerReference: providerOrderId,
+          guestSessionId: order.guestSessionId,
+          occurredAt: now(),
+        })
+        // Nothing is left to try: the audit history is the recovery, and the
+        // verified Provider Order must survive either way.
+        .catch(() => undefined);
+    }
   }
 
   async function blockOperation(
@@ -486,6 +546,11 @@ export function createCheckoutAuthority(
   const authority: CheckoutAuthority = {
     async prepare({ commandKey }) {
       if (configuration.status === "DISABLED") {
+        // Deliberately unrecorded. A Brand with no Test Mode credentials
+        // refuses every checkout for the same unchanging reason, which its
+        // configuration already states; writing that constant once per request
+        // would let anyone with a Guest Session grow the audit history without
+        // adding a single fact to it.
         return {
           status: "UNAVAILABLE",
           reasonCode: configuration.reasonCode,
@@ -506,6 +571,9 @@ export function createCheckoutAuthority(
       });
 
       if (preparation.status !== "PREPARED") {
+        if (preparation.status === "UNAVAILABLE") {
+          await recordUnavailable(commandKey, preparation, readiness.cart);
+        }
         return preparation;
       }
 
@@ -874,23 +942,28 @@ export function createCheckoutAuthority(
         customerVisible: true,
         occurredAt: now(),
       });
-      await audit.record({
-        entityType: "Order",
-        entityId: order.id,
-        correlationId: order.proposalId,
-        actorType: "SYSTEM",
-        eventType: "ORDER_PAID",
-        reasonCode: "ORDER_PAID",
-        message:
-          "This Order is paid in Razorpay Test Mode. No real money moved and no inventory was reserved.",
-        priorState: order.status,
-        newState: "PAID",
-        amountMinor: order.totalMinor,
-        currency: order.currency,
-        guestSessionId: order.guestSessionId,
-        customerVisible: true,
-        occurredAt: now(),
-      });
+      // An authenticated Provider Notification may already have confirmed this
+      // capture and said so. The Order is paid either way, but a Customer must
+      // read that once, not once per source of evidence.
+      if (order.status !== "PAID") {
+        await audit.record({
+          entityType: "Order",
+          entityId: order.id,
+          correlationId: order.proposalId,
+          actorType: "SYSTEM",
+          eventType: "ORDER_PAID",
+          reasonCode: "ORDER_PAID",
+          message:
+            "This Order is paid in Razorpay Test Mode. No real money moved and no inventory was reserved.",
+          priorState: order.status,
+          newState: "PAID",
+          amountMinor: order.totalMinor,
+          currency: order.currency,
+          guestSessionId: order.guestSessionId,
+          customerVisible: true,
+          occurredAt: now(),
+        });
+      }
 
       const paid = (await orders.findOrder(order.id)) ?? { ...order, status: "PAID" as const };
       return statusFor(paid, operation);
@@ -972,6 +1045,45 @@ export function createCheckoutAuthority(
       return "The amount changed after this proposal. Check out again for a current amount.";
     }
     return null;
+  }
+
+  /**
+   * Records a Cart the Storefront refused to prepare a checkout for.
+   *
+   * A Cart outside the bounds is a decision about that Cart, so it leaves the
+   * same shape of evidence as a checkout that went ahead: which command asked,
+   * which bound refused it, and the amount and currency that were out of range.
+   * There is no Checkout Proposal to correlate on and no Order to project onto,
+   * so the event is operational rather than Customer-visible — the Customer
+   * already has the bound named on the unavailable card.
+   *
+   * @param commandKey - The Customer command this refusal answers.
+   * @param preparation - The refusal, carrying its reason and its bounds.
+   * @param cart - The Cart that was read and judged.
+   */
+  async function recordUnavailable(
+    commandKey: string,
+    preparation: Extract<CheckoutPreparation, { status: "UNAVAILABLE" }>,
+    cart: { subtotalMinor: number; currency: string },
+  ) {
+    await audit.record({
+      entityType: "CheckoutPreparation",
+      entityId: commandKey,
+      correlationId: null,
+      actorType: "SYSTEM",
+      eventType: "CHECKOUT_UNAVAILABLE",
+      reasonCode: preparation.reasonCode,
+      message: preparation.explanation,
+      detail:
+        preparation.violations
+          .map((violation) => violation.code)
+          .join(", ") || null,
+      amountMinor: cart.subtotalMinor,
+      currency: cart.currency,
+      operationKey: commandKey,
+      guestSessionId: options.guestSessionId,
+      occurredAt: now(),
+    });
   }
 
   async function recordPreparation(proposal: CheckoutProposal) {

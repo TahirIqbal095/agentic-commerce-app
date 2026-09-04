@@ -90,6 +90,8 @@ export function preparedEntry(
 
 export type CheckoutRoutes = {
   cartCommand?: (command: { type: string; productId: string }) => Response;
+  /** One Conversation Turn, so a test can prove what typed words cannot do. */
+  message?: (body: unknown) => Promise<Response> | Response;
   proposal?: () => Promise<Response> | Response;
   approval?: (body: unknown) => Promise<Response> | Response;
   status?: () => Promise<Response> | Response;
@@ -133,6 +135,9 @@ export async function openStorefront(
     }
     if (url === "/api/cart" && routes.cartCommand) {
       return routes.cartCommand(body as { type: string; productId: string });
+    }
+    if (url === "/api/agent/message" && routes.message) {
+      return routes.message(body);
     }
     if (url === "/api/checkout/proposal" && routes.proposal) {
       return routes.proposal();
@@ -184,6 +189,14 @@ export async function openStorefront(
     requests,
     launches,
     within: testingLibrary.within,
+    /** Types one Customer message and sends it, as the Composer would. */
+    async say(message: string) {
+      await user.type(
+        await view.findByRole("textbox", { name: /message/i }),
+        message,
+      );
+      await user.click(await view.findByRole("button", { name: /send/i }));
+    },
     async openCart() {
       await user.click(
         await view.findByRole("button", { name: `Cart · ${cart.totalQuantity}` }),

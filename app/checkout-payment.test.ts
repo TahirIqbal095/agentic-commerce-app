@@ -226,6 +226,22 @@ test("an Order that exhausted its launches is terminal and invites a fresh start
   assert.ok(within(card).getByRole("button", { name: "Return to shopping" }));
 });
 
+test("the Checkout Timeline says it lives only in this browser session", async (t) => {
+  const { view, within } = await approveAndPay(t, {
+    launch: () => capturedPayment,
+    afterCallback: statusView({ status: "PAID", timeline: paidTimeline }),
+  });
+
+  const timelineRegion = await view.findByRole("region", {
+    name: "Checkout timeline",
+  });
+  assert.ok(
+    within(timelineRegion).getByText(
+      "This timeline is kept for this browser only. Clearing your browser data or letting this session expire ends your access to it, and it cannot be recovered.",
+    ),
+  );
+});
+
 test("every checkout surface repeats that this is Test Mode", async (t) => {
   const { view, within } = await approveAndPay(t, {
     launch: () => capturedPayment,

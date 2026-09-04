@@ -574,6 +574,18 @@ export function createCheckoutOrderStore(
       return row !== undefined;
     },
 
+    /**
+     * Reads one checkout's Customer-visible events in the order the Storefront
+     * came to know them.
+     *
+     * Receipt time orders the account rather than occurrence time, because
+     * Razorpay's own clock can run behind ours: a `payment.captured` delivered
+     * while the Provider Order was still unattached carries an occurrence time
+     * earlier than the moment we recorded creating that Provider Order, and
+     * sorting on it would show a Customer the capture above the payment it
+     * captured. Both times are kept; the timeline reads the one that produces a
+     * story rather than a contradiction.
+     */
     async readTimeline(correlationId) {
       return database
         .select({
@@ -591,7 +603,7 @@ export function createCheckoutOrderStore(
             eq(auditEvents.customerVisible, true),
           ),
         )
-        .orderBy(asc(auditEvents.occurredAt), asc(auditEvents.id));
+        .orderBy(asc(auditEvents.createdAt), asc(auditEvents.id));
     },
   };
   return Object.freeze(store);

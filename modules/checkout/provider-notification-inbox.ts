@@ -22,7 +22,7 @@ import type {
   ProviderNotificationFacts,
 } from "@/modules/payments/provider-notification";
 import { notificationReportsCapture } from "@/modules/payments/provider-notification";
-import type { CheckoutAuditLog } from "./checkout-audit";
+import type { CheckoutAuditLog, CheckoutEventType } from "./checkout-audit";
 import type { CheckoutOrderStore } from "./checkout-store";
 
 export type NotificationReceipt =
@@ -30,9 +30,36 @@ export type NotificationReceipt =
   | { status: "DUPLICATE" }
   | { status: "HELD" };
 
-export interface ProviderNotificationInbox {
+/**
+ * Razorpay's own half of the inbox: delivering evidence, and nothing else.
+ *
+ * The webhook route holds exactly this. Releasing evidence is not Razorpay's
+ * to trigger, so that half is deliberately out of the route's reach.
+ */
+export interface ProviderNotificationIntake {
   receive(facts: ProviderNotificationFacts): Promise<NotificationReceipt>;
 }
+
+/**
+ * The checkout authority's half: applying evidence that arrived too early.
+ *
+ * The authority is the only place that can make association possible, because
+ * it is the only place that attaches a verified Provider Order — so it is given
+ * exactly this one call and never `receive`.
+ */
+export interface HeldNotificationRelease {
+  /**
+   * Applies the evidence that arrived before this Provider Order was known.
+   *
+   * @param providerOrderId - The Provider Order that has just become known.
+   * @returns How many held events became commerce state.
+   */
+  releaseHeldFor(providerOrderId: string): Promise<number>;
+}
+
+export interface ProviderNotificationInbox
+  extends ProviderNotificationIntake,
+    HeldNotificationRelease {}
 
 export type ProviderNotificationInboxOptions = {
   database?: DbExecutor;
@@ -95,10 +122,6 @@ export function createProviderNotificationInbox(
         currency: facts.currency ?? "INR",
       });
     }
-    if (captured && association.status !== "PAID") {
-      await options.orders.setOrderStatus(association.orderId, "PAID");
-    }
-
     await options.audit.record({
       entityType: "ProviderNotification",
       entityId: facts.eventId,
@@ -119,16 +142,44 @@ export function createProviderNotificationInbox(
       customerVisible: true,
       occurredAt: facts.occurredAt,
     });
+
+    // Razorpay may confirm a capture before — or instead of — the browser
+    // callback, so this is a path to a paid Order in its own right. It must
+    // leave the same Order paid event behind as the callback path, or a
+    // Customer whose payment was only ever confirmed asynchronously would read
+    // a timeline that stops short of saying their Order is paid.
+    if (captured && association.status !== "PAID") {
+      await options.orders.setOrderStatus(association.orderId, "PAID");
+      await options.audit.record({
+        entityType: "Order",
+        entityId: association.orderId,
+        correlationId: association.proposalId,
+        actorType: "SYSTEM",
+        eventType: "ORDER_PAID",
+        reasonCode: "ORDER_PAID",
+        message:
+          "This Order is paid in Razorpay Test Mode. No real money moved and no inventory was reserved.",
+        priorState: association.status,
+        newState: "PAID",
+        amountMinor: facts.amountMinor,
+        currency: facts.currency,
+        providerReference: facts.providerOrderId,
+        guestSessionId: association.guestSessionId,
+        customerVisible: true,
+        occurredAt: facts.occurredAt,
+      });
+    }
   }
 
   /**
    * Re-examines events that arrived before their Provider Order existed.
    *
-   * Held events are replayed in arrival order whenever a later delivery for the
-   * same Provider Order can be associated, so an early `payment.captured` is
-   * eventually applied rather than lost.
+   * Held events are replayed in arrival order the moment association becomes
+   * possible — either because the checkout authority has just attached the
+   * Provider Order, or because a later associable delivery arrived for it — so
+   * an early `payment.captured` is applied rather than lost.
    */
-  async function drainHeld(providerOrderId: string) {
+  async function drainHeld(providerOrderId: string): Promise<number> {
     const held = await database
       .select()
       .from(providerNotifications)
@@ -140,6 +191,7 @@ export function createProviderNotificationInbox(
       )
       .orderBy(asc(providerNotifications.receivedAt));
 
+    let applied = 0;
     for (const row of held) {
       const association = await associate(row.providerOrderId);
       if (!association) continue;
@@ -160,10 +212,48 @@ export function createProviderNotificationInbox(
         .update(providerNotifications)
         .set({ appliedAt: now() })
         .where(eq(providerNotifications.id, row.id));
+      applied += 1;
     }
+    return applied;
+  }
+
+  /**
+   * Records that an authenticated delivery changed nothing, and why.
+   *
+   * A Brand operator asked to explain payment behavior needs the deliveries
+   * that were set aside as much as the ones that were applied: a repeat proves
+   * deduplication held, and a hold proves valid evidence was retained rather
+   * than guessed at or dropped. Neither is a Customer-facing moment, so neither
+   * is Customer-visible and neither has a Customer-facing title to project
+   * through.
+   *
+   * Only authenticated deliveries reach here, so the rows one caller can add
+   * are bounded by Razorpay's own retry behavior.
+   */
+  async function recordUnapplied(
+    facts: ProviderNotificationFacts,
+    association: Awaited<ReturnType<typeof associate>>,
+    outcome: { eventType: CheckoutEventType; message: string },
+  ) {
+    await options.audit.record({
+      entityType: "ProviderNotification",
+      entityId: facts.eventId,
+      correlationId: association?.proposalId ?? null,
+      actorType: "RAZORPAY",
+      eventType: outcome.eventType,
+      reasonCode: facts.eventType,
+      message: outcome.message,
+      amountMinor: facts.amountMinor,
+      currency: facts.currency,
+      providerReference: facts.providerOrderId,
+      guestSessionId: association?.guestSessionId ?? null,
+      occurredAt: facts.occurredAt,
+    });
   }
 
   const inbox: ProviderNotificationInbox = {
+    releaseHeldFor: drainHeld,
+
     async receive(facts) {
       const association = await associate(facts.providerOrderId);
       const [stored] = await database
@@ -182,8 +272,22 @@ export function createProviderNotificationInbox(
         .onConflictDoNothing({ target: providerNotifications.eventId })
         .returning({ id: providerNotifications.id });
 
-      if (!stored) return { status: "DUPLICATE" };
-      if (!association) return { status: "HELD" };
+      if (!stored) {
+        await recordUnapplied(facts, association, {
+          eventType: "PROVIDER_NOTIFICATION_DUPLICATE",
+          message:
+            "Razorpay delivered this event again. It was recognized and applied only once.",
+        });
+        return { status: "DUPLICATE" };
+      }
+      if (!association) {
+        await recordUnapplied(facts, null, {
+          eventType: "PROVIDER_NOTIFICATION_HELD",
+          message:
+            "Razorpay sent an update for a payment this Storefront has not attached yet. It is retained until it can be associated.",
+        });
+        return { status: "HELD" };
+      }
 
       await apply(facts, association);
       if (facts.providerOrderId) await drainHeld(facts.providerOrderId);

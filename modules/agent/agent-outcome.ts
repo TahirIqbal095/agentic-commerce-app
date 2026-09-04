@@ -1,5 +1,5 @@
 import type { CatalogProduct } from "../catalog/types";
-import type { CartItemRemovalUndo, CartView } from "../cart/cart";
+import type { CartView } from "../cart/cart";
 import type { CheckoutPreparation } from "../checkout/checkout-proposal";
 import type { IntentBrief, ShoppingIntent } from "./intent";
 
@@ -11,7 +11,6 @@ export type CompletedAgentOutcome = {
   products: CatalogProduct[];
   intent?: never;
   cart?: CartView;
-  cartItemRemovalUndo?: CartItemRemovalUndo;
   /**
    * The deterministic checkout the Storefront prepared for this Turn.
    *

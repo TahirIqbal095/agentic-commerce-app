@@ -7,6 +7,7 @@ import {
 } from "@/modules/agent/commerce-agent";
 import type { CatalogModule } from "@/modules/catalog/catalog";
 import type { CartModule } from "@/modules/cart/cart";
+import { createCartInspection } from "@/modules/cart/cart-inspection";
 import {
   createConversationModule,
   ConversationAccessError,
@@ -462,7 +463,12 @@ function createConversationPost({
     catalog,
     analyzer,
     createConversationModule(guestSessionId, repository),
-    { agentLoop, cart },
+    {
+      agentLoop,
+      ...(cart
+        ? { cartInspection: createCartInspection(guestSessionId, () => cart) }
+        : {}),
+    },
   );
   return createPostHandler(async () => agent);
 }
@@ -471,6 +477,7 @@ test("returns the Customer's active Cart in stable first-added order without rep
   const repository = createInMemoryConversationRepository();
   const retainedCart = {
     id: "31000000-0000-4000-8000-000000000001",
+    version: 2,
     items: [
       {
         productId: "21000000-0000-4000-8000-000000000002",
@@ -554,6 +561,7 @@ test("returns the Customer's active Cart in stable first-added order without rep
 test("returns a clear zero-quantity summary when the Customer's Cart is empty", async () => {
   const emptyCart = {
     id: null,
+    version: 0,
     items: [],
     totalQuantity: 0,
     subtotalMinor: 0,
