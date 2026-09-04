@@ -10,6 +10,7 @@ import { Header } from "./_components/shopping-assistant/header";
 import { Hero } from "./_components/shopping-assistant/hero";
 import { ProductDetails } from "./_components/shopping-assistant/product-details";
 import { ResultArea } from "./_components/shopping-assistant/result-area";
+import { useTranscriptScroll } from "./_components/shopping-assistant/transcript-scroll";
 import type {
   AgentResult,
   CartFeedback,
@@ -95,6 +96,20 @@ function isTurn(
   turnId: string,
 ): entry is Extract<TranscriptEntry, { customerMessage: string }> {
   return entry.id === turnId && !isCustomerActionEntry(entry);
+}
+
+/**
+ * Whether this Transcript entry has the answer it was waiting for.
+ *
+ * A Customer Action Entry is answered the moment it exists, because the
+ * deterministic result it carries arrived with it. A Conversation Turn is
+ * answered when the Commerce Agent's result — or the reason there is none —
+ * replaces its pending placeholder.
+ */
+function isAnswered(entry: TranscriptEntry) {
+  return (
+    isCustomerActionEntry(entry) || entry.result !== null || entry.error !== null
+  );
 }
 
 /**
@@ -185,6 +200,10 @@ export function ShoppingAssistant({
   >({});
   const mutationKeys = useRef(new Map<string, string>());
   const approvalKeys = useRef(new Map<string, string>());
+  const transcriptScroll = useTranscriptScroll({
+    entryCount: entries.length,
+    answeredCount: entries.filter(isAnswered).length,
+  });
 
   /**
    * Returns the idempotency key for one Checkout Proposal's Approval.
@@ -276,6 +295,7 @@ export function ShoppingAssistant({
       .then((conversation) => {
         if (!active || !conversation) return;
         setConversationId(conversation.conversationId);
+        if (conversation.transcript.length > 0) transcriptScroll.markResumed();
         setEntries(conversation.transcript);
         setContextSummary(conversation.contextSummary);
         void resumeCheckouts(conversation.transcript, () => active);

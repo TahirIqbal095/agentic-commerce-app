@@ -117,7 +117,7 @@ export async function openStorefront(
     launch?: () => Promise<CheckoutLaunchResult> | CheckoutLaunchResult;
   } = {},
 ) {
-  installBrowser(dom);
+  const scrolls = installBrowser(dom);
   const cart = options.cart ?? readyCart;
   const routes = options.routes ?? {};
   const requests: string[] = [];
@@ -188,6 +188,7 @@ export async function openStorefront(
     user,
     requests,
     launches,
+    scrolls,
     within: testingLibrary.within,
     /** Types one Customer message and sends it, as the Composer would. */
     async say(message: string) {
