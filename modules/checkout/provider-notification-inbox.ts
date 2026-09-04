@@ -23,6 +23,7 @@ import type {
 } from "@/modules/payments/provider-notification";
 import { notificationReportsCapture } from "@/modules/payments/provider-notification";
 import type { CheckoutAuditLog, CheckoutEventType } from "./checkout-audit";
+import { confirmOrderPaid } from "./order-payment";
 import type { CheckoutOrderStore } from "./checkout-store";
 
 export type NotificationReceipt =
@@ -88,6 +89,7 @@ export function createProviderNotificationInbox(
         orderId: providerOrders.orderId,
         proposalId: orders.proposalId,
         guestSessionId: orders.guestSessionId,
+        cartId: orders.cartId,
         status: orders.status,
       })
       .from(providerOrders)
@@ -149,7 +151,20 @@ export function createProviderNotificationInbox(
     // Customer whose payment was only ever confirmed asynchronously would read
     // a timeline that stops short of saying their Order is paid.
     if (captured && association.status !== "PAID") {
-      await options.orders.setOrderStatus(association.orderId, "PAID");
+      // The same operation the browser callback uses, so a Customer whose
+      // capture was only ever confirmed asynchronously has their Cart become
+      // order history exactly as one whose browser was still open does.
+      await confirmOrderPaid({
+        orders: options.orders,
+        audit: options.audit,
+        order: {
+          id: association.orderId,
+          cartId: association.cartId,
+          proposalId: association.proposalId,
+          guestSessionId: association.guestSessionId,
+        },
+        occurredAt: facts.occurredAt,
+      });
       await options.audit.record({
         entityType: "Order",
         entityId: association.orderId,

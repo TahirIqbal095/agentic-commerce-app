@@ -40,6 +40,7 @@ const TIMELINE_TITLES: Partial<Record<CheckoutEventType, string>> = {
   PAYMENT_CALLBACK_REFUSED: "Payment result refused",
   PAYMENT_CAPTURED: "Razorpay captured the test payment",
   ORDER_PAID: "Order paid",
+  CART_CONVERTED: "Your Cart became order history",
   ORDER_PAYMENT_FAILED: "Order could not be paid",
   PROVIDER_NOTIFICATION_RECEIVED: "Razorpay sent an update",
 };

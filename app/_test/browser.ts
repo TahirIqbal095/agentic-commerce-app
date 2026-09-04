@@ -23,9 +23,17 @@ class InertObserver {
  * also carries the pointer, animation, layout, and media APIs the drawer and
  * carousel primitives use.
  *
+ * JSDOM lays nothing out, so scrolling leaves no position a test could read.
+ * The window's scroll is therefore a recording stub rather than a silent
+ * no-op: what the Storefront asked for, and whether it asked at all, is what a
+ * test asserting that the Transcript follows the Conversation can honestly
+ * check.
+ *
  * @param dom - Window to install for the duration of one test.
+ * @returns Every scroll the Storefront requested, in order.
  */
 export function installBrowser(dom: JSDOM) {
+  const scrolls: ScrollToOptions[] = [];
   Object.assign(globalThis, {
     window: dom.window,
     document: dom.window.document,
@@ -66,7 +74,12 @@ export function installBrowser(dom: JSDOM) {
         },
       }),
     },
-    scrollTo: { configurable: true, value() {} },
+    scrollTo: {
+      configurable: true,
+      value(options: ScrollToOptions) {
+        scrolls.push(options);
+      },
+    },
     IntersectionObserver: { configurable: true, value: InertObserver },
     ResizeObserver: { configurable: true, value: InertObserver },
   });
@@ -77,4 +90,64 @@ export function installBrowser(dom: JSDOM) {
     setPointerCapture() {},
     releasePointerCapture() {},
   });
+  return scrolls;
+}
+
+/**
+ * Answers the window's media queries with a predicate.
+ *
+ * The Storefront resolves the Checkout Timeline's breakpoint in JavaScript, so
+ * a test about a wide viewport has to say which queries a wide viewport
+ * matches. Every other query keeps its own answer, so widening the viewport
+ * does not accidentally also claim the Customer asked for reduced motion.
+ *
+ * @param dom - Window the Storefront will be rendered into.
+ * @param matches - Whether one query matches.
+ */
+export function answerMediaQueries(
+  dom: JSDOM,
+  matches: (query: string) => boolean,
+) {
+  Object.defineProperty(dom.window, "matchMedia", {
+    configurable: true,
+    value: (query: string) => ({
+      matches: matches(query),
+      media: query,
+      onchange: null,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent() {
+        return false;
+      },
+    }),
+  });
+}
+
+/**
+ * Puts the Customer at one position in a Transcript of a given height, and
+ * tells the window about it the way a real scroll would.
+ *
+ * JSDOM reports a zero-height document, which reads as being at the bottom of
+ * an empty page. A test about a Customer who has scrolled up to re-read an
+ * earlier Recommendation has to describe both the Transcript's height and
+ * where in it they are looking.
+ *
+ * @param dom - Window the Storefront is rendered into.
+ * @param position - The Transcript's height and the Customer's place in it.
+ */
+export function scrollTranscriptTo(
+  dom: JSDOM,
+  position: { documentHeight: number; scrollY: number },
+) {
+  Object.defineProperty(dom.window.document.documentElement, "scrollHeight", {
+    configurable: true,
+    value: position.documentHeight,
+  });
+  Object.defineProperty(dom.window, "scrollY", {
+    configurable: true,
+    value: position.scrollY,
+  });
+  dom.window.dispatchEvent(new dom.window.Event("scroll"));
 }

@@ -14,6 +14,7 @@ import { and, asc, desc, eq, lt, sql } from "drizzle-orm";
 import type { DbExecutor } from "@/db";
 import { db as storefrontDatabase } from "@/db";
 import { auditEvents } from "@/db/schema/audit";
+import { carts } from "@/db/schema/cart";
 import {
   checkoutApprovals,
   checkoutProposals,
@@ -142,6 +143,33 @@ export interface CheckoutOrderStore {
     notes: Record<string, string>;
   }): Promise<void>;
   setOrderStatus(orderId: string, status: OrderStatus): Promise<void>;
+  /**
+   * Marks one Order paid and converts the Cart it was created from, together.
+   *
+   * A confirmed capture is the only thing that empties a Customer's Cart, and
+   * it does both halves in one transaction: no crash can leave a paid Order
+   * beside a live Cart holding the Products it was paid for. The two paths
+   * that can learn of a capture — the browser callback and an authenticated
+   * Provider Notification — both come through here, so a Cart's fate does not
+   * depend on which channel told the Storefront.
+   *
+   * The target is the Order's own Cart and only while it is still active, so
+   * a second confirmation of the same capture converts nothing twice and can
+   * never reach a Cart the Customer has since started.
+   *
+   * @param input.cartId - The Cart this Order was created from, converted
+   *   whatever version it has since reached: a Product added after Approval
+   *   goes into history with the rest of the Cart.
+   * @param input.recordConversion - Records the Customer's account of the
+   *   conversion inside the same transaction, so the explanation cannot
+   *   survive a rolled-back conversion or be lost by a committed one.
+   */
+  markOrderPaid(input: {
+    orderId: string;
+    cartId: string;
+    now: Date;
+    recordConversion: (executor: DbExecutor) => Promise<void>;
+  }): Promise<void>;
   countPaymentAttempts(orderId: string): Promise<number>;
   openPaymentAttempt(input: {
     orderId: string;
@@ -485,6 +513,27 @@ export function createCheckoutOrderStore(
         .update(orders)
         .set({ status, updatedAt: new Date() })
         .where(eq(orders.id, orderId));
+    },
+
+    async markOrderPaid({ orderId, cartId, now, recordConversion }) {
+      await database.transaction(async (transaction) => {
+        await transaction
+          .update(orders)
+          .set({ status: "PAID", updatedAt: now })
+          .where(eq(orders.id, orderId));
+        // The Cart's status row is written here rather than through the cart
+        // module, which is the module that owns Carts. The two writes must
+        // commit atomically and the cart module's operations manage their own
+        // transactions, so this is a deliberate crossing rather than an
+        // oversight. Nothing else about the Cart is touched: its Items stay
+        // exactly as the Customer left them, as read-only history.
+        const converted = await transaction
+          .update(carts)
+          .set({ status: "CONVERTED", updatedAt: now })
+          .where(and(eq(carts.id, cartId), eq(carts.status, "ACTIVE")))
+          .returning({ id: carts.id });
+        if (converted.length > 0) await recordConversion(transaction);
+      });
     },
 
     async countPaymentAttempts(orderId) {

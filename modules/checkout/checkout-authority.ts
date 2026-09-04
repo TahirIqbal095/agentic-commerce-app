@@ -22,6 +22,7 @@ import type { RazorpayTestConfiguration } from "@/modules/payments/razorpay-conf
 import type { RazorpayProviderGateway } from "@/modules/payments/razorpay-gateway";
 import type { ProviderOrderResult } from "@/modules/payments/razorpay-tools";
 import type { CheckoutAuditLog } from "./checkout-audit";
+import { confirmOrderPaid } from "./order-payment";
 import {
   CHECKOUT_MAX_PAYMENT_ATTEMPTS,
   CHECKOUT_MAX_RECONCILIATION_READS,
@@ -925,7 +926,18 @@ export function createCheckoutAuthority(
         return finishOrExhaust(order, operation);
       }
 
-      await orders.setOrderStatus(order.id, "PAID");
+      // The Order reaching its paid state and its Cart becoming order history
+      // commit together, so no crash can leave a Customer holding a live Cart
+      // full of Products they have already paid for. It stays ahead of the
+      // events that describe it: a crash between the two under-reports a paid
+      // Order, which reconciliation corrects, where the other order would have
+      // left a timeline claiming an Order was paid when it was not.
+      await confirmOrderPaid({
+        orders,
+        audit,
+        order,
+        occurredAt: now(),
+      });
       await audit.record({
         entityType: "ProviderPayment",
         entityId: payment.value.providerPaymentId,

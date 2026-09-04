@@ -52,6 +52,7 @@ export type CheckoutEventType =
   | "PAYMENT_CALLBACK_REFUSED"
   | "PAYMENT_CAPTURED"
   | "ORDER_PAID"
+  | "CART_CONVERTED"
   | "ORDER_PAYMENT_FAILED"
   | "PROVIDER_NOTIFICATION_RECEIVED"
   | "PROVIDER_NOTIFICATION_DUPLICATE"
@@ -87,6 +88,44 @@ export type CheckoutAuditEvent = {
   customerVisible?: boolean;
   occurredAt?: Date;
 };
+
+/**
+ * The Customer's account of their paid Cart becoming order history.
+ *
+ * A Cart emptying itself is the most startling thing that happens to a
+ * Customer's selection, so it is explained where the rest of the checkout is
+ * explained rather than left to be inferred from an empty drawer. Both paths
+ * that can learn of a capture record this same event, because the conversion
+ * is the same fact whichever channel confirmed the payment.
+ *
+ * @param converted - The Cart that became history and the checkout it belongs
+ *   to.
+ * @returns The event to record inside the transaction that converts the Cart.
+ */
+export function cartConvertedEvent(converted: {
+  cartId: string;
+  orderId: string;
+  proposalId: string;
+  guestSessionId: string;
+  occurredAt?: Date;
+}): CheckoutAuditEvent {
+  return {
+    entityType: "Cart",
+    entityId: converted.cartId,
+    correlationId: converted.proposalId,
+    actorType: "SYSTEM",
+    eventType: "CART_CONVERTED",
+    reasonCode: "CART_CONVERTED_ON_CAPTURED_PAYMENT",
+    message:
+      "Your Cart became part of your order history, and a fresh Cart has started. The Products you paid for are on this Order.",
+    detail: `Order ${converted.orderId}`,
+    priorState: "ACTIVE",
+    newState: "CONVERTED",
+    guestSessionId: converted.guestSessionId,
+    customerVisible: true,
+    ...(converted.occurredAt ? { occurredAt: converted.occurredAt } : {}),
+  };
+}
 
 /**
  * The only capability any checkout code holds over the audit history.

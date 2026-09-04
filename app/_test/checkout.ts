@@ -1,7 +1,7 @@
-import type { JSDOM } from "jsdom";
+import { JSDOM } from "jsdom";
 import React from "react";
 import type { TestContext } from "node:test";
-import { installBrowser } from "./browser";
+import { answerMediaQueries, installBrowser } from "./browser";
 import type { CartView } from "@/modules/cart/cart-view";
 import type { CheckoutLaunchResult } from "@/modules/checkout/checkout-launcher";
 import type { CheckoutActionEntry } from "@/modules/agent/customer-action-entry";
@@ -38,6 +38,59 @@ export const readyCart: CartView = {
 
 export const PROPOSAL_ID = "61000000-0000-4000-8000-000000000001";
 export const ORDER_ID = "71000000-0000-4000-8000-000000000001";
+
+/** The exact amount the ready Cart's Approval control names. */
+export const APPROVE_CONTROL =
+  "Approve and pay \u20b915,997 with Razorpay Test Checkout";
+
+/** A fresh window for one Storefront behavior test. */
+export function storefrontWindow() {
+  return new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+}
+
+/**
+ * The ticket the Payment Attempt route hands back for the ready Cart.
+ *
+ * It names the verified Provider Order managed Checkout may be opened
+ * against, which is the same for every case that gets that far.
+ */
+export function paymentAttemptTicket() {
+  return Response.json({
+    data: {
+      status: "OPENED",
+      attemptId: "91000000-0000-4000-8000-000000000001",
+      attemptNumber: 1,
+      keyId: "rzp_test_examplekey",
+      providerOrderId: "order_TEST0000000001",
+      amountMinor: readyCart.subtotalMinor,
+      currency: "INR",
+      checkout: statusView({
+        status: "PAYMENT_PENDING",
+        launchesUsed: 1,
+        launchesRemaining: 2,
+      }),
+    },
+  });
+}
+
+/**
+ * Drives a Customer from their Cart to an approved checkout: open the Cart,
+ * press Check out, read the proposal, approve the exact amount.
+ */
+export async function approveFromCart(
+  opened: Awaited<ReturnType<typeof openStorefront>>,
+) {
+  const drawer = await opened.openCart();
+  await opened.user.click(
+    opened.within(drawer).getByRole("button", { name: "Check out" }),
+  );
+  await opened.view.findByRole("region", { name: "Checkout proposal" });
+  await opened.user.click(
+    opened.view.getByRole("button", { name: APPROVE_CONTROL }),
+  );
+}
 
 /**
  * Builds the checkout entry the proposal route records, prepared "now" so its
@@ -89,6 +142,12 @@ export function preparedEntry(
 }
 
 export type CheckoutRoutes = {
+  /**
+   * The authoritative Cart read, when it changes during the test. A captured
+   * payment converts the Cart it paid for, so the next read is a fresh, empty
+   * one.
+   */
+  cartRead?: () => Response;
   cartCommand?: (command: { type: string; productId: string }) => Response;
   /** One Conversation Turn, so a test can prove what typed words cannot do. */
   message?: (body: unknown) => Promise<Response> | Response;
@@ -115,9 +174,12 @@ export async function openStorefront(
     cart?: CartView;
     routes?: CheckoutRoutes;
     launch?: () => Promise<CheckoutLaunchResult> | CheckoutLaunchResult;
+    /** Which media queries this Customer's viewport matches. */
+    matchesMedia?: (query: string) => boolean;
   } = {},
 ) {
-  installBrowser(dom);
+  const scrolls = installBrowser(dom);
+  if (options.matchesMedia) answerMediaQueries(dom, options.matchesMedia);
   const cart = options.cart ?? readyCart;
   const routes = options.routes ?? {};
   const requests: string[] = [];
@@ -131,7 +193,7 @@ export async function openStorefront(
 
     if (url === "/api/agent/conversation") return Response.json({ data: null });
     if (url === "/api/cart" && method === "GET") {
-      return Response.json({ data: cart });
+      return routes.cartRead?.() ?? Response.json({ data: cart });
     }
     if (url === "/api/cart" && routes.cartCommand) {
       return routes.cartCommand(body as { type: string; productId: string });
@@ -188,6 +250,7 @@ export async function openStorefront(
     user,
     requests,
     launches,
+    scrolls,
     within: testingLibrary.within,
     /** Types one Customer message and sends it, as the Composer would. */
     async say(message: string) {
@@ -202,6 +265,23 @@ export async function openStorefront(
         await view.findByRole("button", { name: `Cart · ${cart.totalQuantity}` }),
       );
       return view.getByRole("dialog", { name: "Your Cart" });
+    },
+    /**
+     * Closes the Cart a settled checkout opened, if it opened one.
+     *
+     * The Cart is a modal drawer, so while it is open the Conversation behind
+     * it is hidden from assistive technology and from a test reading the page.
+     * A case about the checkout card itself dismisses the landing first, as the
+     * Customer would.
+     */
+    async dismissCart() {
+      if (!view.queryByRole("dialog", { name: "Your Cart" })) return;
+      await user.keyboard("{Escape}");
+      await testingLibrary.waitFor(() => {
+        if (view.queryByRole("dialog", { name: "Your Cart" })) {
+          throw new Error("The Cart is still open.");
+        }
+      });
     },
   };
 }

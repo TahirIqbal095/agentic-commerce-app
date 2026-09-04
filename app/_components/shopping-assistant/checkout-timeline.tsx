@@ -12,6 +12,10 @@ import type { CheckoutTimelineEntry } from "@/modules/checkout/checkout-status";
  * provider payload, or implementation name can appear here, because none of
  * them reached the Audit Event it was projected from.
  *
+ * The account reads the same wherever it is shown — inside the checkout status
+ * card on a narrow viewport, in the rail beside the Conversation on a wide
+ * one — so it carries no edge of its own and takes the one its host gives it.
+ *
  * The account ends by saying how long the Customer keeps it. This release has
  * no Customer accounts and no contact-based recovery, so the Guest Session
  * cookie in this browser is the only thing that can reach this checkout —
@@ -27,10 +31,7 @@ export function CheckoutTimeline({
   if (entries.length === 0) return null;
 
   return (
-    <section
-      aria-label="Checkout timeline"
-      className="border-t border-border px-5 py-5 sm:px-6"
-    >
+    <section aria-label="Checkout timeline" className="px-5 py-5 sm:px-6">
       <p className="mb-4 flex items-center gap-2 text-sm font-semibold tracking-tight">
         <Clock aria-hidden="true" className="size-4 text-muted-foreground" />
         Checkout timeline

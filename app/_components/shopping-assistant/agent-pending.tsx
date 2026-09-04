@@ -1,8 +1,6 @@
 import { Search } from "lucide-react";
 
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
-import { RECOMMENDATION_SLOT_WIDTH } from "./recommendation-slot";
 
 /**
  * The accessible name announced while a Conversation Turn is in flight.
@@ -14,17 +12,19 @@ import { RECOMMENDATION_SLOT_WIDTH } from "./recommendation-slot";
 export const PENDING_TURN_STATUS = "Searching the Catalog";
 
 /**
- * Placeholders in the shape of the Commerce Agent's answer.
+ * The placeholder shown while a Conversation Turn is in flight.
  *
- * They occupy the same message shell the resolved Turn will occupy — headline,
- * Context Summary constraints, Recommendation cards — so the Recommendation Set
- * replaces them in place rather than arriving somewhere new. Every placeholder
- * is decorative and hidden from assistive technology; the status beside them
- * carries the meaning.
+ * It is deliberately minimal. A Turn may answer with no Recommendations at
+ * all, so card-shaped placeholders would promise Products the answer never
+ * delivers and make an honest reply read as a failure. What is left is the
+ * spoken status and two bars in the shape of the words the Turn is certain to
+ * produce, in the same message position the answer will occupy, so the answer
+ * replaces the placeholder in place. The bars are decorative and hidden from
+ * assistive technology; the status beside them carries the meaning.
  */
 export function AgentPending() {
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-5">
       <p
         role="status"
         className="flex items-center gap-2 eyebrow text-xs text-muted-foreground"
@@ -33,41 +33,10 @@ export function AgentPending() {
         {PENDING_TURN_STATUS}
       </p>
 
-      <div className="flex flex-col gap-5">
-        <div aria-hidden="true" className="flex max-w-3xl flex-col gap-3">
-          <Skeleton className="h-8 w-[80%] sm:h-9" />
-          <Skeleton className="h-8 w-[55%] sm:h-9" />
-        </div>
-        <div aria-hidden="true" className="flex max-w-2xl flex-wrap gap-2">
-          <Skeleton className="h-7 w-28 rounded-full" />
-          <Skeleton className="h-7 w-36 rounded-full" />
-          <Skeleton className="h-7 w-24 rounded-full" />
-        </div>
+      <div aria-hidden="true" className="flex max-w-3xl flex-col gap-3">
+        <Skeleton className="h-8 w-[80%] sm:h-9" />
+        <Skeleton className="h-8 w-[55%] sm:h-9" />
       </div>
-
-      <div
-        aria-hidden="true"
-        className="flex gap-4 overflow-hidden"
-      >
-        {[0, 1, 2].map((slot) => (
-          <div key={slot} className={cn("shrink-0", RECOMMENDATION_SLOT_WIDTH)}>
-            <div className="overflow-hidden rounded-lg border-2 border-sidebar-border bg-card shadow-hard">
-              <Skeleton className="h-28 rounded-none border-b-2 border-sidebar-border" />
-              <div className="flex flex-col gap-3 p-5">
-                <Skeleton className="h-4 w-24" />
-                <Skeleton className="h-5 w-[70%]" />
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="h-4 w-[60%]" />
-                <div className="flex items-center gap-3 pt-2">
-                  <Skeleton className="h-5 w-20" />
-                  <Skeleton className="ml-auto h-8 w-24 rounded-md" />
-                </div>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
     </div>
   );
 }

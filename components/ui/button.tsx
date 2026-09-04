@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
  * The Brand's button language, carried centrally.
  *
  * Raised variants take a structural border and a hard offset shadow keyed to
- * the same token, so they invert correctly between appearances, and they
+ * the same token, so a control's edge and its shadow are one ink, and they
  * translate into their own shadow on hover and press. Flat variants — ghost and
  * link-like controls — take neither, because a border and a shadow on every
  * small control turns a row of them into noise.

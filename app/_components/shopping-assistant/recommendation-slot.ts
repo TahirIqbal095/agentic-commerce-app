@@ -1,10 +1,9 @@
 /**
  * The width of one Recommendation slot.
  *
- * The pending placeholders occupy the same slots the arriving Recommendation
- * cards will, so the two share this width rather than restating it. A
- * disagreement between them is what makes a Recommendation Set appear to jump
- * when it replaces the placeholders.
+ * Every card in a Recommendation Set is laid out on this one measure, so the
+ * carousel advances by a predictable step and a Customer sees the next card
+ * peeking rather than a row whose stride changes with its contents.
  */
 export const RECOMMENDATION_SLOT_WIDTH =
   "w-[min(82vw,20rem)] sm:w-[min(20rem,calc((100%-1rem)/2.2))] lg:w-[min(20rem,calc((100%-2rem)/2.7))]";

@@ -186,6 +186,7 @@ export function fakeOrderStore(): CheckoutOrderStore & {
     string,
     { captured: boolean; providerStatus: string }
   >();
+  const convertedCarts = new Set<string>();
   const timeline: CheckoutAuditRecord[] = [];
   let sequence = 0;
   const nextId = (prefix: string) =>
@@ -278,6 +279,22 @@ export function fakeOrderStore(): CheckoutOrderStore & {
       const order = orders.get(orderId);
       if (order) orders.set(orderId, { ...order, status });
     },
+    /**
+     * Paid Order and converted Cart, in one step as the database does it.
+     *
+     * A Cart the fake has already converted converts no second time, which is
+     * what makes a duplicated confirmation harmless here as it is in Postgres.
+     */
+    async markOrderPaid({ orderId, cartId, recordConversion }) {
+      const order = orders.get(orderId);
+      if (order) orders.set(orderId, { ...order, status: "PAID" });
+      if (convertedCarts.has(cartId)) return;
+      convertedCarts.add(cartId);
+      await recordConversion(
+        null as never as Parameters<typeof recordConversion>[0],
+      );
+    },
+
     async countPaymentAttempts(orderId) {
       return attempts.filter((attempt) => attempt.orderId === orderId).length;
     },

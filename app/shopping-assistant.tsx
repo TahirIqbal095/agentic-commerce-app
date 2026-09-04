@@ -3,13 +3,22 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { Composer } from "./_components/shopping-assistant/composer";
-import type { CartLoadState } from "./_components/shopping-assistant/cart-drawer";
+import type {
+  CartLoadState,
+  CartOutcome,
+} from "./_components/shopping-assistant/cart-drawer";
 import type { CartItemCommand } from "./_components/shopping-assistant/cart-panel";
 import { ContextSummary } from "./_components/shopping-assistant/context-summary";
+import {
+  CheckoutTimelineRail,
+  TIMELINE_RAIL_MEDIA_QUERY,
+} from "./_components/shopping-assistant/checkout-timeline-rail";
 import { Header } from "./_components/shopping-assistant/header";
 import { Hero } from "./_components/shopping-assistant/hero";
 import { ProductDetails } from "./_components/shopping-assistant/product-details";
+import { useMediaQuery } from "./_components/shopping-assistant/media-query";
 import { ResultArea } from "./_components/shopping-assistant/result-area";
+import { useTranscriptScroll } from "./_components/shopping-assistant/transcript-scroll";
 import type {
   AgentResult,
   CartFeedback,
@@ -98,6 +107,59 @@ function isTurn(
 }
 
 /**
+ * What one checkout's state means for the Customer's Cart.
+ *
+ * Only a terminal outcome means anything: a dismissal, a decline with attempts
+ * remaining, and an Unknown Provider Outcome all leave the Cart alone, because
+ * the Storefront does not yet know what happened and must not act as if it
+ * did.
+ *
+ * @returns The outcome to land the Customer in, or `null` while there is none.
+ */
+function terminalCartOutcome(checkout: CheckoutStatusView): CartOutcome | null {
+  if (checkout.status === "PAID") return "PAID";
+  if (checkout.status === "PAYMENT_FAILED") return "UNPAYABLE";
+  return null;
+}
+
+/**
+ * The checkout the rail describes: the most recently approved one.
+ *
+ * A Conversation may hold several checkouts, and the one the Customer is
+ * working on is the last that reached an Order. It keeps the rail for the rest
+ * of the Conversation, including after it is paid, because a record of a
+ * purchase is most useful just after the purchase.
+ *
+ * @returns That checkout's authoritative state, or `null` when the Customer
+ *   has approved nothing and the Conversation should have the full width.
+ */
+function mostRecentApprovedCheckout(
+  entries: TranscriptEntry[],
+  sessions: Record<string, CheckoutSession>,
+): { entryId: string; checkout: CheckoutStatusView } | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entryId = String(entries[index].id);
+    const checkout = sessions[entryId]?.checkout;
+    if (checkout) return { entryId, checkout };
+  }
+  return null;
+}
+
+/**
+ * Whether this Transcript entry has the answer it was waiting for.
+ *
+ * A Customer Action Entry is answered the moment it exists, because the
+ * deterministic result it carries arrived with it. A Conversation Turn is
+ * answered when the Commerce Agent's result — or the reason there is none —
+ * replaces its pending placeholder.
+ */
+function isAnswered(entry: TranscriptEntry) {
+  return (
+    isCustomerActionEntry(entry) || entry.result !== null || entry.error !== null
+  );
+}
+
+/**
  * Reads the authority's answer, or raises the reason it refused.
  *
  * A refusal is a decision the Customer is entitled to read, so its own message
@@ -176,6 +238,7 @@ export function ShoppingAssistant({
     Record<string, string>
   >({});
   const [isCartOpen, setIsCartOpen] = useState(false);
+  const [cartOutcome, setCartOutcome] = useState<CartOutcome | null>(null);
   const [isReviewing, setIsReviewing] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [isPreparingCheckout, setIsPreparingCheckout] = useState(false);
@@ -185,6 +248,17 @@ export function ShoppingAssistant({
   >({});
   const mutationKeys = useRef(new Map<string, string>());
   const approvalKeys = useRef(new Map<string, string>());
+  const settledCheckouts = useRef(new Set<string>());
+  const transcriptScroll = useTranscriptScroll({
+    entryCount: entries.length,
+    answeredCount: entries.filter(isAnswered).length,
+  });
+  // Which arrangement the Checkout Timeline gets is resolved here rather than
+  // by rendering both and hiding one, so the account appears exactly once in
+  // the document however wide the viewport is.
+  const railCheckout = useMediaQuery(TIMELINE_RAIL_MEDIA_QUERY)
+    ? mostRecentApprovedCheckout(entries, checkoutSessions)
+    : null;
 
   /**
    * Returns the idempotency key for one Checkout Proposal's Approval.
@@ -239,13 +313,16 @@ export function ShoppingAssistant({
   }
 
   /**
-   * Adopts the Cart carried by a rejected command.
+   * Adopts an authoritative Cart whatever version it carries.
    *
-   * The authority read this Cart while refusing the command, so it replaces the
-   * drawer and badge unconditionally — including when another tab emptied the
-   * Cart and lowered its version.
+   * Two things produce a Cart older than the one on screen, and the version
+   * guard would discard both. A rejected command's refusal carries the Cart the
+   * authority read while refusing it, which another tab may have emptied. And
+   * the read that follows a confirmed payment returns the fresh Cart that
+   * replaced the one the Customer just paid for. Neither is a stale response;
+   * both are the latest truth.
    */
-  function recoverCartFromConflict(latestCart: CartView) {
+  function adoptLatestCart(latestCart: CartView) {
     setCart(latestCart);
     setCartState("ready");
   }
@@ -276,6 +353,7 @@ export function ShoppingAssistant({
       .then((conversation) => {
         if (!active || !conversation) return;
         setConversationId(conversation.conversationId);
+        if (conversation.transcript.length > 0) transcriptScroll.markResumed();
         setEntries(conversation.transcript);
         setContextSummary(conversation.contextSummary);
         void resumeCheckouts(conversation.transcript, () => active);
@@ -394,6 +472,9 @@ export function ShoppingAssistant({
     setEntries([]);
     setContextSummary(null);
     setSelectedProduct(null);
+    // The rail follows the Conversation it belongs to, so a fresh Conversation
+    // does not open beside the previous one's checkout.
+    setCheckoutSessions({});
   }
 
   /**
@@ -430,7 +511,7 @@ export function ShoppingAssistant({
       const latestCart = refusal?.details?.cart;
       if (latestCart) {
         if (refusal?.code === "CART_CONFLICT") {
-          recoverCartFromConflict(latestCart);
+          adoptLatestCart(latestCart);
         } else {
           replaceCartFromAuthority(latestCart);
         }
@@ -568,7 +649,7 @@ export function ShoppingAssistant({
       }
       setEntries((currentEntries) => [...currentEntries, payload.data]);
       replaceCartFromAuthority(payload.data.readiness.cart);
-      setIsCartOpen(false);
+      showCart(false);
     } catch {
       setReviewError(
         "The Cart could not be reviewed for checkout. Try again shortly.",
@@ -602,13 +683,76 @@ export function ShoppingAssistant({
       try {
         const response = await fetch(`/api/checkout/${proposalId}`);
         if (!response.ok || !isActive()) continue;
-        updateCheckoutSession(entryId, {
-          checkout: await readCheckout(response, ""),
-        });
+        // A checkout recovered from a reload is history, not news: the
+        // Customer was already shown whatever it settled as, and the status
+        // card in the Transcript is the durable record of it.
+        updateCheckoutSession(
+          entryId,
+          { checkout: await readCheckout(response, "") },
+          false,
+        );
       } catch {
         // A checkout that cannot be read stays as the proposal the Customer
         // saw. The authority still refuses a second Approval for it.
       }
+    }
+  }
+
+  /**
+   * Opens or closes the Cart, ending any outcome message when it closes.
+   *
+   * The message is an event, not a state. Closing the Cart is how a Customer
+   * dismisses it, and it does not come back when they open the Cart again.
+   */
+  function showCart(open: boolean) {
+    setIsCartOpen(open);
+    if (!open) setCartOutcome(null);
+  }
+
+  /**
+   * Lands the Customer in their Cart the first time one checkout is observed
+   * to have reached a terminal outcome.
+   *
+   * A Cart that empties itself is startling, so a paid checkout opens the Cart
+   * and says why it is empty; an Order that can no longer be paid opens it and
+   * says nothing was charged. It happens once per checkout rather than once
+   * per observation, so asking Razorpay for the status of a settled Order does
+   * not restage the announcement.
+   *
+   * @param announce - False while a reloaded Transcript is catching up on
+   *   checkouts the Customer has already been told about.
+   */
+  function landInCart(
+    entryId: string,
+    checkout: CheckoutStatusView,
+    announce: boolean,
+  ) {
+    if (settledCheckouts.current.has(entryId)) return;
+    const outcome = terminalCartOutcome(checkout);
+    if (!outcome) return;
+    settledCheckouts.current.add(entryId);
+    if (!announce) return;
+    void readCartAfterCheckout();
+    setCartOutcome(outcome);
+    setIsCartOpen(true);
+  }
+
+  /**
+   * Re-reads the Cart a settled checkout left behind.
+   *
+   * A read that fails leaves the Cart as it was; the message still says what
+   * happened to it, and the checkout status card in the Transcript remains the
+   * durable record either way.
+   */
+  async function readCartAfterCheckout() {
+    try {
+      const response = await fetch("/api/cart");
+      if (!response.ok) return;
+      const payload = (await response.json()) as { data: CartView };
+      adoptLatestCart(payload.data);
+    } catch {
+      // Nothing to correct: the Cart on screen is the last one the authority
+      // gave us, and the outcome message does not depend on this read.
     }
   }
 
@@ -618,11 +762,13 @@ export function ShoppingAssistant({
   function updateCheckoutSession(
     entryId: string,
     change: Partial<CheckoutSession>,
+    announceOutcome = true,
   ) {
     setCheckoutSessions((current) => ({
       ...current,
       [entryId]: { ...emptyCheckoutSession, ...current[entryId], ...change },
     }));
+    if (change.checkout) landInCart(entryId, change.checkout, announceOutcome);
   }
 
   /**
@@ -653,7 +799,7 @@ export function ShoppingAssistant({
         );
       }
       setEntries((currentEntries) => [...currentEntries, payload.data]);
-      setIsCartOpen(false);
+      showCart(false);
     } catch {
       setCheckoutError(
         "Checkout could not be prepared right now. Try again shortly.",
@@ -868,7 +1014,7 @@ export function ShoppingAssistant({
   /** Leaves an unsuccessful checkout behind and re-reads the current Cart. */
   async function returnToShopping() {
     await reloadCartFromAuthority();
-    setIsCartOpen(false);
+    showCart(false);
   }
 
   /**
@@ -884,63 +1030,81 @@ export function ShoppingAssistant({
   };
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 pb-44 pt-5 sm:px-8 sm:pb-48 sm:pt-7">
-        <Header
-          brandName={brandName}
-          cart={cart}
-          cartState={cartState}
-          hasConversation={entries.length > 0}
-          onNewConversation={startNewConversation}
-          cartControls={cartControls}
-          checkoutReadiness={{
-            onReview: reviewCheckoutReadiness,
-            isReviewing,
-            error: reviewError,
-          }}
-          checkout={{
-            onCheckout: startCheckout,
-            isPreparing: isPreparingCheckout,
-            error: checkoutError,
-          }}
-          isCartOpen={isCartOpen}
-          onCartOpenChange={setIsCartOpen}
-        />
+    <main
+      className={cn(
+        "min-h-screen bg-background text-foreground",
+        // The Storefront widens to make room for the rail rather than taking
+        // the room out of the Conversation's reading measure. The header bar
+        // reads the same measure, so the Brand mark and the Cart control stay
+        // aligned with the Conversation they belong to at either width.
+        railCheckout ? "[--storefront-column:86rem]" : "[--storefront-column:72rem]",
+      )}
+    >
+      <Header
+        brandName={brandName}
+        cart={cart}
+        cartState={cartState}
+        hasConversation={entries.length > 0}
+        onNewConversation={startNewConversation}
+        cartControls={cartControls}
+        checkoutReadiness={{
+          onReview: reviewCheckoutReadiness,
+          isReviewing,
+          error: reviewError,
+        }}
+        checkout={{
+          onCheckout: startCheckout,
+          isPreparing: isPreparingCheckout,
+          error: checkoutError,
+        }}
+        isCartOpen={isCartOpen}
+        cartOutcome={cartOutcome}
+        onCartOpenChange={showCart}
+      />
 
-        <div
-          className={cn(
-            "mx-auto flex w-full max-w-4xl flex-1 flex-col py-14 sm:py-20",
-            entries.length === 0 ? "justify-center" : "justify-start",
-          )}
-        >
-          {entries.length === 0 ? (
-            <Hero brandName={brandName} onSuggestion={setPrompt} />
-          ) : (
-            <>
-              {contextSummary ? (
-                <ContextSummary
-                  constraints={contextSummary}
-                  disabled={isLoading}
-                  onRemove={removeConstraint}
+      <div
+        className="mx-auto flex min-h-[calc(100vh-var(--storefront-header-height))] w-full max-w-[var(--storefront-column)] flex-col px-4 pb-44 sm:px-8 sm:pb-48"
+      >
+        <div className="flex w-full flex-1 gap-8">
+          {railCheckout ? (
+            <CheckoutTimelineRail entries={railCheckout.checkout.timeline} />
+          ) : null}
+          <div
+            className={cn(
+              "mx-auto flex w-full max-w-4xl flex-1 flex-col py-14 sm:py-20",
+              entries.length === 0 ? "justify-center" : "justify-start",
+            )}
+          >
+            {entries.length === 0 ? (
+              <Hero brandName={brandName} onSuggestion={setPrompt} />
+            ) : (
+              <>
+                {contextSummary ? (
+                  <ContextSummary
+                    constraints={contextSummary}
+                    disabled={isLoading}
+                    onRemove={removeConstraint}
+                  />
+                ) : null}
+                <ResultArea
+                  isLoading={isLoading}
+                  onViewProduct={setSelectedProduct}
+                  onAddProduct={addProduct}
+                  addingProductIds={addingProductIds}
+                  cartFeedback={cartFeedback}
+                  entries={entries}
+                  currentCart={cart}
+                  cartControls={cartControls}
+                  checkoutSessions={checkoutSessions}
+                  timelineRailEntryId={railCheckout?.entryId ?? null}
+                  onApproveCheckout={approveCheckout}
+                  onRetryCheckout={retryCheckout}
+                  onCheckCheckoutStatus={checkCheckoutStatus}
+                  onReturnToShopping={returnToShopping}
                 />
-              ) : null}
-              <ResultArea
-                isLoading={isLoading}
-                onViewProduct={setSelectedProduct}
-                onAddProduct={addProduct}
-                addingProductIds={addingProductIds}
-                cartFeedback={cartFeedback}
-                entries={entries}
-                currentCart={cart}
-                cartControls={cartControls}
-                checkoutSessions={checkoutSessions}
-                onApproveCheckout={approveCheckout}
-                onRetryCheckout={retryCheckout}
-                onCheckCheckoutStatus={checkCheckoutStatus}
-                onReturnToShopping={returnToShopping}
-              />
-            </>
-          )}
+              </>
+            )}
+          </div>
         </div>
       </div>
 
