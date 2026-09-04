@@ -48,13 +48,12 @@ test("an explicit Add Product command returns the complete authoritative Cart", 
     currency: "INR",
   };
   const store: GuestSessionStore = {
-    async findActive() {
+    async findActiveAndRefresh() {
       return null;
     },
     async create() {
       return { id: "guest-session-1" };
     },
-    async refresh() {},
   };
   const catalog: CatalogModule = {
     async search() {
@@ -122,13 +121,12 @@ test("replaying an Add returns its stored Cart before rereading Product availabi
   };
   const route = createAddToCartRoute({
     store: {
-      async findActive() {
+      async findActiveAndRefresh() {
         return { id: "guest-session-1" };
       },
       async create() {
         throw new Error("The existing Guest Session should be reused");
       },
-      async refresh() {},
     },
     catalog: {
       async search() {
@@ -193,13 +191,12 @@ test("incrementing a Cart Item returns the complete authoritative Cart", async (
   };
   const route = createUpdateCartItemRoute({
     store: {
-      async findActive() {
+      async findActiveAndRefresh() {
         return { id: "guest-session-1" };
       },
       async create() {
         throw new Error("The existing Guest Session should be reused");
       },
-      async refresh() {},
     },
     createCart(guestSession) {
       assert.equal(guestSession.id, "guest-session-1");
@@ -245,13 +242,12 @@ test("replaying the same Cart Item command returns its original authoritative re
   const resultsByMutationKey = new Map<string, CartView>();
   const route = createUpdateCartItemRoute({
     store: {
-      async findActive() {
+      async findActiveAndRefresh() {
         return { id: "guest-session-1" };
       },
       async create() {
         throw new Error("The existing Guest Session should be reused");
       },
-      async refresh() {},
     },
     createCart() {
       return {
@@ -348,13 +344,12 @@ test("decrementing at one keeps the Cart Item and returns the authoritative reas
   };
   const route = createUpdateCartItemRoute({
     store: {
-      async findActive() {
+      async findActiveAndRefresh() {
         return { id: "guest-session-1" };
       },
       async create() {
         throw new Error("The existing Guest Session should be reused");
       },
-      async refresh() {},
     },
     createCart() {
       return {
@@ -421,13 +416,12 @@ test("decrementing a Cart Item returns the lower authoritative quantity", async 
   };
   const route = createUpdateCartItemRoute({
     store: {
-      async findActive() {
+      async findActiveAndRefresh() {
         return { id: "guest-session-1" };
       },
       async create() {
         throw new Error("The existing Guest Session should be reused");
       },
-      async refresh() {},
     },
     createCart() {
       return {
@@ -486,13 +480,12 @@ test("removing a Cart Item returns the authoritative remaining Cart", async () =
   };
   const route = createRemoveCartItemRoute({
     store: {
-      async findActive() {
+      async findActiveAndRefresh() {
         return { id: "guest-session-1" };
       },
       async create() {
         throw new Error("The existing Guest Session should be reused");
       },
-      async refresh() {},
     },
     createCart() {
       return {
@@ -550,13 +543,12 @@ test("incrementing beyond the authoritative limit returns the unchanged Cart", a
   };
   const route = createUpdateCartItemRoute({
     store: {
-      async findActive() {
+      async findActiveAndRefresh() {
         return { id: "guest-session-1" };
       },
       async create() {
         throw new Error("The existing Guest Session should be reused");
       },
-      async refresh() {},
     },
     createCart() {
       return {
@@ -610,13 +602,12 @@ test("removing the final Cart Item returns the authoritative empty Cart", async 
   };
   const route = createRemoveCartItemRoute({
     store: {
-      async findActive() {
+      async findActiveAndRefresh() {
         return { id: "guest-session-1" };
       },
       async create() {
         throw new Error("The existing Guest Session should be reused");
       },
-      async refresh() {},
     },
     createCart() {
       return {
@@ -683,13 +674,12 @@ test("a rejected Add returns the reason and unchanged authoritative Cart", async
   };
   const route = createAddToCartRoute({
     store: {
-      async findActive() {
+      async findActiveAndRefresh() {
         return { id: "guest-session-1" };
       },
       async create() {
         throw new Error("The existing Guest Session should be reused");
       },
-      async refresh() {},
     },
     catalog: {
       async search() {
@@ -751,13 +741,12 @@ test("an unavailable Product is rejected without changing the Cart", async () =>
   let addAttempted = false;
   const route = createAddToCartRoute({
     store: {
-      async findActive() {
+      async findActiveAndRefresh() {
         return null;
       },
       async create() {
         return { id: "guest-session-1" };
       },
-      async refresh() {},
     },
     issueToken: () => "new-cart-browser-token",
     catalog: {
@@ -815,13 +804,12 @@ test("an unavailable Product is rejected without changing the Cart", async () =>
 test("an Add command requires a client-generated mutation key", async () => {
   const route = createAddToCartRoute({
     store: {
-      async findActive() {
+      async findActiveAndRefresh() {
         return null;
       },
       async create() {
         return { id: "guest-session-1" };
       },
-      async refresh() {},
     },
     issueToken: () => "new-cart-browser-token",
     catalog: {
@@ -862,7 +850,7 @@ test("returning with the same valid cookie resumes the current Cart", async () =
   const sessionsByTokenHash = new Map<string, GuestSession>();
   const cartBySessionId = new Map<string, CartView>();
   const store: GuestSessionStore = {
-    async findActive(tokenHash) {
+    async findActiveAndRefresh(tokenHash) {
       return sessionsByTokenHash.get(tokenHash) ?? null;
     },
     async create({ tokenHash }) {
@@ -870,7 +858,6 @@ test("returning with the same valid cookie resumes the current Cart", async () =
       sessionsByTokenHash.set(tokenHash, session);
       return session;
     },
-    async refresh() {},
   };
   const createSession = createGuestSessionRoute(
     async (_request, guestSession) => {
@@ -923,7 +910,7 @@ test("a Guest Session cannot read another Guest Session's Cart", async () => {
   const cartBySessionId = new Map<string, CartView>();
   let nextSession = 0;
   const store: GuestSessionStore = {
-    async findActive(tokenHash) {
+    async findActiveAndRefresh(tokenHash) {
       return sessionsByTokenHash.get(tokenHash) ?? null;
     },
     async create({ tokenHash }) {
@@ -932,7 +919,6 @@ test("a Guest Session cannot read another Guest Session's Cart", async () => {
       sessionsByTokenHash.set(tokenHash, session);
       return session;
     },
-    async refresh() {},
   };
   const createSession = createGuestSessionRoute(
     async () => new Response(null, { status: 204 }),
@@ -998,15 +984,12 @@ test("a Guest Session cannot read another Guest Session's Cart", async () => {
 test("an expired Guest Session cannot resume its former Cart", async () => {
   const expiredAt = new Date("2026-09-01T00:00:00.000Z");
   const store: GuestSessionStore = {
-    async findActive(_tokenHash, now) {
+    async findActiveAndRefresh(_tokenHash, now) {
       assert.equal(now.toISOString(), "2026-09-01T00:00:00.001Z");
       return now < expiredAt ? { id: "expired-guest-session" } : null;
     },
     async create() {
       throw new Error("Reading a Cart must not create a Guest Session");
-    },
-    async refresh() {
-      throw new Error("An expired Guest Session must not be refreshed");
     },
   };
   const route = createCartRoute({
@@ -1057,13 +1040,12 @@ test("a Cart command the authority cannot reconcile returns a typed conflict", a
   };
   const route = createUpdateCartItemRoute({
     store: {
-      async findActive() {
+      async findActiveAndRefresh() {
         return { id: "guest-session-1" };
       },
       async create() {
         throw new Error("The existing Guest Session should be reused");
       },
-      async refresh() {},
     },
     createCart() {
       return {
@@ -1119,13 +1101,12 @@ test("reusing one mutation key for a different Cart command returns a typed conf
   };
   const route = createAddToCartRoute({
     store: {
-      async findActive() {
+      async findActiveAndRefresh() {
         return { id: "guest-session-1" };
       },
       async create() {
         throw new Error("The existing Guest Session should be reused");
       },
-      async refresh() {},
     },
     catalog: {
       async search() {
@@ -1189,13 +1170,12 @@ test("removing a Cart Item another tab already removed returns a typed conflict"
   };
   const route = createRemoveCartItemRoute({
     store: {
-      async findActive() {
+      async findActiveAndRefresh() {
         return { id: "guest-session-1" };
       },
       async create() {
         throw new Error("The existing Guest Session should be reused");
       },
-      async refresh() {},
     },
     createCart() {
       return {
@@ -1252,13 +1232,12 @@ test("replaying one removal returns its original authoritative result once", asy
   const resultsByMutationKey = new Map<string, CartView>();
   const route = createRemoveCartItemRoute({
     store: {
-      async findActive() {
+      async findActiveAndRefresh() {
         return { id: "guest-session-1" };
       },
       async create() {
         throw new Error("The existing Guest Session should be reused");
       },
-      async refresh() {},
     },
     createCart() {
       return {

@@ -24,7 +24,7 @@ test("returning with the same valid cookie resumes the current Conversation", as
     ],
   ]);
   const store: GuestSessionStore = {
-    async findActive(tokenHash) {
+    async findActiveAndRefresh(tokenHash) {
       return sessionsByTokenHash.get(tokenHash) ?? null;
     },
     async create({ tokenHash }) {
@@ -32,7 +32,6 @@ test("returning with the same valid cookie resumes the current Conversation", as
       sessionsByTokenHash.set(tokenHash, session);
       return session;
     },
-    async refresh() {},
   };
   const routes = createConversationRoutes({
     store,
@@ -78,7 +77,7 @@ test("starting a new Conversation removes previous access without changing the C
   };
   const cartQuantity = 2;
   const store: GuestSessionStore = {
-    async findActive(tokenHash) {
+    async findActiveAndRefresh(tokenHash) {
       return sessionsByTokenHash.get(tokenHash) ?? null;
     },
     async create({ tokenHash }) {
@@ -86,7 +85,6 @@ test("starting a new Conversation removes previous access without changing the C
       sessionsByTokenHash.set(tokenHash, session);
       return session;
     },
-    async refresh() {},
   };
   const createSession = createGuestSessionRoute(
     async () => new Response(null, { status: 204 }),
@@ -130,15 +128,12 @@ test("starting a new Conversation removes previous access without changing the C
 test("an expired Guest Session cannot resume its former Conversation", async () => {
   const expiredAt = new Date("2026-09-01T00:00:00.000Z");
   const store: GuestSessionStore = {
-    async findActive(_tokenHash, now) {
+    async findActiveAndRefresh(_tokenHash, now) {
       assert.equal(now.toISOString(), "2026-09-01T00:00:00.001Z");
       return now < expiredAt ? { id: "expired-guest-session" } : null;
     },
     async create() {
       throw new Error("Reading a Conversation must not create a Guest Session");
-    },
-    async refresh() {
-      throw new Error("An expired Guest Session must not be refreshed");
     },
   };
   const routes = createConversationRoutes({

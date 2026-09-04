@@ -90,6 +90,20 @@ export interface IntentAnalyzer {
   }): Promise<IntentAnalysis>;
 }
 
+/**
+ * Raised when the Intent Brief analysis outlives the Turn's time budget.
+ *
+ * It says the Storefront ran out of time, which is a different fact from the
+ * Customer having left something out — the two must never reach a Customer as
+ * the same sentence.
+ */
+export class IntentAnalysisTimeoutError extends Error {
+  constructor() {
+    super("The Intent Brief analysis ran out of time.");
+    this.name = "IntentAnalysisTimeoutError";
+  }
+}
+
 const CLEAR_VALUES: { [Key in ProductConstraintKey]: ShoppingIntent[Key] } = {
   productTypes: [],
   useCases: [],

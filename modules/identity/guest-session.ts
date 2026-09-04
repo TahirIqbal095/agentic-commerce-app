@@ -14,9 +14,19 @@ export type GuestSession = {
 };
 
 export type GuestSessionStore = {
-  findActive(tokenHash: string, now: Date): Promise<GuestSession | null>;
+  /**
+   * Finds the unexpired Guest Session for a token and slides its expiry.
+   *
+   * The read and the refresh are one operation because they were two round
+   * trips to the same row on every request, and every Conversation Turn paid
+   * for both.
+   */
+  findActiveAndRefresh(
+    tokenHash: string,
+    now: Date,
+    expiresAt: Date,
+  ): Promise<GuestSession | null>;
   create(input: { tokenHash: string; expiresAt: Date }): Promise<GuestSession>;
-  refresh(id: string, expiresAt: Date): Promise<void>;
 };
 
 type GuestSessionRouteOptions = {
@@ -71,9 +81,14 @@ function createGuestSessionBoundary<Arguments extends unknown[]>(
 ): (request: Request, ...arguments_: Arguments) => Promise<Response> {
   return async (request, ...arguments_) => {
     const now = options.now?.() ?? new Date();
+    const expiresAt = guestSessionExpiry(now);
     const existingToken = readCookie(request, GUEST_SESSION_COOKIE);
     const existingSession = existingToken
-      ? await options.store.findActive(hashToken(existingToken), now)
+      ? await options.store.findActiveAndRefresh(
+          hashToken(existingToken),
+          now,
+          expiresAt,
+        )
       : null;
     if (!existingSession && !createIfMissing) {
       return handler(request, null, ...arguments_);
@@ -83,13 +98,9 @@ function createGuestSessionBoundary<Arguments extends unknown[]>(
       existingSession !== null
         ? existingToken!
         : (options.issueToken?.() ?? randomBytes(32).toString("base64url"));
-    const tokenHash = hashToken(token);
-    const expiresAt = guestSessionExpiry(now);
     const guestSession =
-      existingSession ?? (await options.store.create({ tokenHash, expiresAt }));
-    if (existingSession) {
-      await options.store.refresh(existingSession.id, expiresAt);
-    }
+      existingSession ??
+      (await options.store.create({ tokenHash: hashToken(token), expiresAt }));
     const response = await handler(request, guestSession, ...arguments_);
 
     response.headers.append("Set-Cookie", guestSessionCookie(token));
@@ -98,20 +109,20 @@ function createGuestSessionBoundary<Arguments extends unknown[]>(
 }
 
 export function createDatabaseGuestSessionStore(
-  database: Pick<typeof db, "select" | "insert" | "update">,
+  database: Pick<typeof db, "insert" | "update">,
 ): GuestSessionStore {
   return {
-    async findActive(tokenHash, now) {
+    async findActiveAndRefresh(tokenHash, now, expiresAt) {
       const [session] = await database
-        .select({ id: guestSessions.id })
-        .from(guestSessions)
+        .update(guestSessions)
+        .set({ expiresAt, updatedAt: now })
         .where(
           and(
             eq(guestSessions.tokenHash, tokenHash),
             gt(guestSessions.expiresAt, now),
           ),
         )
-        .limit(1);
+        .returning({ id: guestSessions.id });
       return session ?? null;
     },
     async create(input) {
@@ -120,12 +131,6 @@ export function createDatabaseGuestSessionStore(
         .values(input)
         .returning({ id: guestSessions.id });
       return session;
-    },
-    async refresh(id, expiresAt) {
-      await database
-        .update(guestSessions)
-        .set({ expiresAt, updatedAt: new Date() })
-        .where(eq(guestSessions.id, id));
     },
   };
 }

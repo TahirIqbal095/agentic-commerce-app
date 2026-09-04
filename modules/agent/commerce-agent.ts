@@ -16,6 +16,7 @@ import {
 import {
   applyProductConstraintDelta,
   createEmptyConversationContext,
+  IntentAnalysisTimeoutError,
   resolveIntentBrief,
   type ConversationContext,
   type IntentAnalyzer,
@@ -89,10 +90,60 @@ type CommerceAgentOptions = {
 
 const COMMERCE_AGENT_LIMITS: CommerceAgentLimits = {
   maxSteps: 5,
-  timeoutMs: 15_000,
+  // A healthy loop spends two model calls on a discovery Turn. Fifteen seconds
+  // cut those calls off mid-answer often enough to look like a search-quality
+  // problem; twenty is a budget a healthy pipeline can actually meet. See
+  // docs/adr/0016-reject-a-model-answer-on-facts-coerce-it-on-form.md.
+  timeoutMs: 20_000,
   maxOutputTokens: 2_000,
   maxToolProducts: MAX_COMMERCE_AGENT_TOOL_PRODUCTS,
 };
+
+/**
+ * What a Customer is told when the Storefront, not their request, fell short.
+ *
+ * A Turn that runs out of budget has learned nothing about the Customer's
+ * phrasing, so it must never imply their request was unclear. Following such
+ * advice would only hit the same wall.
+ *
+ * These two sentences are kept apart because they claim different facts. A
+ * Turn says it ran long only when its Turn Budget actually ran out; a Turn the
+ * Commerce Agent failed some other way — an unavailable provider, an answer
+ * that could not be trusted — was never slow, and saying so would be a second
+ * untruth told in place of the first.
+ */
+const STOREFRONT_RAN_LONG_MESSAGE =
+  "I took too long putting that answer together, so here's what the Catalog holds for you.";
+
+const STOREFRONT_FELL_SHORT_MESSAGE =
+  "I couldn't finish that answer, so here's what the Catalog holds for you.";
+
+/** What a Customer is told when the Catalog itself holds no match. */
+const NOTHING_MATCHED_MESSAGE =
+  "Nothing in the Catalog matches that right now.";
+
+/**
+ * What a Customer is told when a Turn ends with nothing to show at all.
+ *
+ * These are the empty-handed counterparts of the two sentences above, and they
+ * divide on the same fact: only a Turn whose Turn Budget actually ran out may
+ * say it ran out of time.
+ */
+const STOREFRONT_OUT_OF_TIME_MESSAGE =
+  "I couldn't finish that in time. Please try again.";
+
+const STOREFRONT_NO_ANSWER_MESSAGE =
+  "I couldn't put an answer together right now. Please try again.";
+
+/**
+ * What a Customer is told when the Catalog answers and the Agent did not.
+ *
+ * A Turn promises Products whenever the Catalog holds them, so an Agent that
+ * finished without naming any is not the last word. The sentence claims
+ * nothing about why — nothing went slow and nothing failed, the Agent simply
+ * had nothing to point at.
+ */
+const CATALOG_HOLDS_MESSAGE = "Here's what the Catalog holds for you.";
 
 /**
  * What the Commerce Agent says about a checkout it did not calculate.
@@ -152,12 +203,17 @@ export function createCommerceAgent(
           );
           intentBrief = resolveIntentBrief(analysis, nextContext);
           resolvedContext = nextContext;
-        } catch {
+        } catch (error) {
           const outcome: AgentOutcome = {
             status: "TEMPORARILY_UNAVAILABLE",
             conversationId: turn.conversationId,
+            // A Turn that ran out of time learned nothing about the Customer's
+            // phrasing, so it says the Storefront fell short rather than that
+            // the request was hard to read.
             message:
-              "I couldn't understand that request right now. Please try again.",
+              error instanceof IntentAnalysisTimeoutError
+                ? STOREFRONT_OUT_OF_TIME_MESSAGE
+                : "I couldn't understand that request right now. Please try again.",
             retryable: true,
             products: [],
           };
@@ -281,9 +337,6 @@ export function createCommerceAgent(
           try {
             const result = await catalog.search({
               ...activeProductConstraints(intentBrief.constraints),
-              ...(Object.keys(intentBrief.constraints.attributes).length > 0
-                ? { attributes: intentBrief.constraints.attributes }
-                : {}),
               limit: 2,
             });
             directlyMatchedProducts = result.products;
@@ -381,6 +434,30 @@ export function createCommerceAgent(
         signal: controller.signal,
         observedProducts,
       });
+      const speculativeSearch = searchCatalogSpeculatively(
+        catalog,
+        intentBrief,
+        limits,
+      );
+      /**
+       * Answers from the Catalog when the Commerce Agent produced nothing.
+       *
+       * @param budgetExhausted - Whether the Turn Budget ran out, which is the
+       * only ground on which the Turn may tell the Customer it ran long.
+       */
+      const degrade = async (budgetExhausted: boolean) =>
+        completeTurnShowing(
+          turn,
+          fallbackOutcome({
+            conversationId: turn.conversationId,
+            intentBrief,
+            observedProducts,
+            speculativeSearch: await speculativeSearch,
+            maxProducts: limits.maxToolProducts,
+            budgetExhausted,
+          }),
+          resolvedContext,
+        );
 
       try {
         loopResult = await runBoundedAgentLoop(
@@ -395,47 +472,25 @@ export function createCommerceAgent(
           controller,
         );
       } catch {
-        if (controller.signal.aborted) {
-          return completeTurn(
-            turn,
-            limitOutcome(
-              turn.conversationId,
-              intentBrief,
-              observedProducts,
-              limits.maxToolProducts,
-            ),
-          );
-        }
-        return completeTurn(turn, {
-          status: "TEMPORARILY_UNAVAILABLE",
-          conversationId: turn.conversationId,
-          message:
-            "Product discovery is temporarily unavailable. Please try again.",
-          retryable: true,
-          intentBrief,
-          products: [],
-        });
+        return degrade(controller.signal.aborted);
       }
 
-      if (loopResult.status === "LIMIT_REACHED") {
-        return completeTurn(
-          turn,
-          limitOutcome(
-            turn.conversationId,
-            intentBrief,
-            observedProducts,
-            limits.maxToolProducts,
-          ),
-        );
-      }
+      if (loopResult.status === "LIMIT_REACHED") return degrade(true);
 
       if (loopResult.status === "NEEDS_INPUT") {
-        return completeTurn(turn, {
-          ...loopResult,
-          conversationId: turn.conversationId,
-          intentBrief,
-          products: [],
-        });
+        return completeTurnShowing(
+          turn,
+          {
+            ...loopResult,
+            conversationId: turn.conversationId,
+            intentBrief,
+            // A Turn that genuinely needs more information still shows what it
+            // already read, so the Customer can answer by looking at real
+            // Products rather than from memory.
+            products: boundedProducts(observedProducts, limits.maxToolProducts),
+          },
+          resolvedContext,
+        );
       }
 
       if (
@@ -443,41 +498,40 @@ export function createCommerceAgent(
           (productId) => !observedProducts.has(productId),
         )
       ) {
-        return completeTurn(
-          turn,
-          limitOutcome(
-            turn.conversationId,
-            intentBrief,
-            observedProducts,
-            limits.maxToolProducts,
-          ),
-        );
+        return degrade(false);
       }
 
-      const products = loopResult.productIds.flatMap((productId) => {
+      const namedProducts = loopResult.productIds.flatMap((productId) => {
         const product = observedProducts.get(productId);
         return product ? [product] : [];
       });
-      try {
-        await turn.recordRecommendationSet?.(products, resolvedContext);
-      } catch {
-        return completeTurn(turn, {
-          status: "TEMPORARILY_UNAVAILABLE",
-          conversationId: turn.conversationId,
-          message:
-            "I couldn't save those Recommendations right now. Please try again.",
-          retryable: true,
-          intentBrief,
-          products: [],
-        });
+      if (namedProducts.length === 0) {
+        const catalogHolds = await speculativeSearch;
+        if (catalogHolds.ok && catalogHolds.products.length > 0) {
+          return completeTurnShowing(
+            turn,
+            {
+              status: "COMPLETED",
+              conversationId: turn.conversationId,
+              message: CATALOG_HOLDS_MESSAGE,
+              intentBrief,
+              products: catalogHolds.products.slice(0, limits.maxToolProducts),
+            },
+            resolvedContext,
+          );
+        }
       }
-      return completeTurn(turn, {
-        status: "COMPLETED",
-        conversationId: turn.conversationId,
-        message: loopResult.message,
-        intentBrief,
-        products,
-      });
+      return completeTurnShowing(
+        turn,
+        {
+          status: "COMPLETED",
+          conversationId: turn.conversationId,
+          message: loopResult.message,
+          intentBrief,
+          products: namedProducts,
+        },
+        resolvedContext,
+      );
     },
   };
 }
@@ -523,29 +577,24 @@ function resolveCapabilities({
             assertLoopActive();
             const result = await catalog.search({
               ...search,
-              ...activeProductConstraints(intentBrief.constraints),
-              ...(Object.keys(intentBrief.constraints.attributes).length > 0
-                ? {
-                    attributes: {
-                      ...search.attributes,
-                      ...intentBrief.constraints.attributes,
-                    },
-                  }
-                : {}),
+              ...activeProductConstraints(
+                intentBrief.constraints,
+                search.attributes,
+              ),
               limit: Math.max(
                 1,
                 Math.min(search.limit, limits.maxToolProducts),
               ),
             });
             assertLoopActive();
-            const boundedProducts = result.products.slice(
+            const foundProducts = result.products.slice(
               0,
               limits.maxToolProducts,
             );
-            for (const product of boundedProducts) {
+            for (const product of foundProducts) {
               observedProducts.set(product.id, product);
             }
-            return { ...result, products: boundedProducts };
+            return { ...result, products: foundProducts };
           },
         }
       : {}),
@@ -562,10 +611,23 @@ function resolveCapabilities({
   };
 }
 
+/**
+ * The Catalog search the Customer's active Product constraints describe.
+ *
+ * Every Catalog search a Turn issues is built here, including the one the
+ * Commerce Agent asks for: the Agent may add to a search but never escape the
+ * constraints, so its own attributes are merged underneath rather than over.
+ *
+ * @param constraints - The active Product constraints from the Intent Brief.
+ * @param requestedAttributes - Attributes the Commerce Agent asked for, if any.
+ */
 function activeProductConstraints(
   constraints: IntentBrief["constraints"],
+  requestedAttributes?: CatalogSearch["attributes"],
 ): Omit<CatalogSearch, "limit"> {
+  const attributes = { ...requestedAttributes, ...constraints.attributes };
   return {
+    ...(Object.keys(attributes).length > 0 ? { attributes } : {}),
     ...(constraints.productTypes.length > 0
       ? { productTypes: constraints.productTypes }
       : {}),
@@ -598,11 +660,12 @@ async function runBoundedAgentLoop(
   const timedOut = new Promise<never>((_resolve, reject) => {
     rejectTimeout = reject;
   });
+  // The deadline is not unref'd: it is the only thing that ends a Turn whose
+  // model never answers, and it is always cleared below.
   const timeout = setTimeout(() => {
     controller.abort();
     rejectTimeout(new Error("The Commerce Agent timed out."));
   }, input.limits.timeoutMs);
-  timeout.unref?.();
 
   try {
     return await Promise.race([agentLoop.run(input), timedOut]);
@@ -641,36 +704,152 @@ function positiveCeiling(requested: number, ceiling: number): number {
   return Math.max(1, Math.min(Math.floor(requested), ceiling));
 }
 
-function limitOutcome(
-  conversationId: string,
+type SpeculativeCatalogSearch =
+  { ok: true; products: CatalogProduct[] } | { ok: false };
+
+/**
+ * Runs the Storefront's own deterministic Catalog search beside the Agent.
+ *
+ * It is dispatched with the Commerce Agent rather than lazily on timeout, so
+ * at the moment the Agent runs out of budget the Products are already in hand
+ * and the Customer waits roughly one Catalog query instead of an apology.
+ *
+ * Its Products are held apart from the Agent's observed-Product set on
+ * purpose. Merging them would let the Agent name a Product it never read,
+ * which is exactly the grounding guarantee this fallback exists to protect.
+ *
+ * @returns The Products the Catalog holds, or a failed search that answers
+ * nothing — never a rejected promise.
+ */
+function searchCatalogSpeculatively(
+  catalog: CatalogModule,
   intentBrief: IntentBrief,
-  observedProducts: Map<string, CatalogProduct>,
-  maxProducts: number,
-): AgentOutcome {
-  const products = [...observedProducts.values()].slice(0, maxProducts);
+  limits: CommerceAgentLimits,
+): Promise<SpeculativeCatalogSearch> {
+  if (!intentBrief.requestedEffects.includes("DISCOVER_PRODUCTS")) {
+    return Promise.resolve({ ok: false });
+  }
+  return catalog
+    .search({
+      ...activeProductConstraints(intentBrief.constraints),
+      limit: limits.maxToolProducts,
+    })
+    .then(
+      (result) => ({ ok: true as const, products: result.products }),
+      () => ({ ok: false as const }),
+    );
+}
+
+/**
+ * The answer a Turn gives when the Commerce Agent produced nothing usable.
+ *
+ * Whatever the Catalog holds is still shown — the Products the Agent managed
+ * to read, or failing that the Storefront's own deterministic search — and the
+ * shortfall is attributed to the Storefront. A Catalog that genuinely matched
+ * nothing says so plainly, which is a different sentence from a Storefront
+ * that ran out of time, and neither is a sentence about the Customer.
+ *
+ * @param budgetExhausted - Whether the Turn Budget ran out. Only then may the
+ * Turn say it ran long; a Commerce Agent that failed for any other reason was
+ * not slow, and claiming otherwise trades one untrue sentence for another.
+ */
+function fallbackOutcome({
+  conversationId,
+  intentBrief,
+  observedProducts,
+  speculativeSearch,
+  maxProducts,
+  budgetExhausted,
+}: {
+  conversationId: string;
+  intentBrief: IntentBrief;
+  observedProducts: Map<string, CatalogProduct>;
+  speculativeSearch: SpeculativeCatalogSearch;
+  maxProducts: number;
+  budgetExhausted: boolean;
+}): AgentOutcome {
+  const observed = boundedProducts(observedProducts, maxProducts);
+  const products =
+    observed.length > 0
+      ? observed
+      : speculativeSearch.ok
+        ? speculativeSearch.products.slice(0, maxProducts)
+        : [];
+
   if (products.length > 0) {
     return {
       status: "COMPLETED",
       conversationId,
-      message: `I found ${products.length} ${products.length === 1 ? "Product" : "Products"} before the search reached its limit.`,
+      message: budgetExhausted
+        ? STOREFRONT_RAN_LONG_MESSAGE
+        : STOREFRONT_FELL_SHORT_MESSAGE,
       intentBrief,
       products,
     };
   }
-
-  const question = "Could you narrow the Product type or try the search again?";
+  if (speculativeSearch.ok) {
+    return {
+      status: "COMPLETED",
+      conversationId,
+      message: NOTHING_MATCHED_MESSAGE,
+      intentBrief,
+      products: [],
+    };
+  }
   return {
-    status: "NEEDS_INPUT",
+    status: "TEMPORARILY_UNAVAILABLE",
     conversationId,
-    message: question,
-    question,
-    missingInformation:
-      intentBrief.missingInformation.length > 0
-        ? intentBrief.missingInformation
-        : ["Product preferences"],
+    message: budgetExhausted
+      ? STOREFRONT_OUT_OF_TIME_MESSAGE
+      : STOREFRONT_NO_ANSWER_MESSAGE,
+    retryable: true,
     intentBrief,
     products: [],
   };
+}
+
+function boundedProducts(
+  observedProducts: Map<string, CatalogProduct>,
+  maxProducts: number,
+): CatalogProduct[] {
+  return [...observedProducts.values()].slice(0, maxProducts);
+}
+
+/**
+ * Completes a Turn, recording whatever Products the Customer is shown.
+ *
+ * Anything a Customer can see is something they can refer to on their next
+ * message, so a degraded or clarifying Turn records its Recommendation Set
+ * exactly as a successful one does. A Turn showing no Products records
+ * nothing: it learned nothing authoritative, and erasing what the Customer was
+ * last shown would break the reference they are about to make.
+ */
+async function completeTurnShowing(
+  turn: AgentTurn,
+  outcome: AgentOutcome,
+  context: ConversationContext,
+): Promise<AgentOutcome> {
+  if (outcome.products.length === 0) return completeTurn(turn, outcome);
+  try {
+    const saved = await turn.recordRecommendationSet?.(outcome.products, context);
+    // A refused save means a concurrent Turn moved the Conversation on, so
+    // these Products were never recorded. Showing them anyway would offer the
+    // Customer a "the second one" that resolves against something else.
+    if (saved === false) {
+      return completeTurn(turn, contextConflictOutcome(turn.conversationId));
+    }
+  } catch {
+    return completeTurn(turn, {
+      status: "TEMPORARILY_UNAVAILABLE",
+      conversationId: turn.conversationId,
+      message:
+        "I couldn't save those Recommendations right now. Please try again.",
+      retryable: true,
+      ...(outcome.intentBrief ? { intentBrief: outcome.intentBrief } : {}),
+      products: [],
+    });
+  }
+  return completeTurn(turn, outcome);
 }
 
 async function completeTurn(

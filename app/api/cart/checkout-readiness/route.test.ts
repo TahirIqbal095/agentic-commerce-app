@@ -63,7 +63,7 @@ function memoryGuestSessionStore(): GuestSessionStore {
   const sessionsByTokenHash = new Map<string, GuestSession>();
   let created = 0;
   return {
-    async findActive(tokenHash) {
+    async findActiveAndRefresh(tokenHash) {
       return sessionsByTokenHash.get(tokenHash) ?? null;
     },
     async create({ tokenHash }) {
@@ -72,7 +72,6 @@ function memoryGuestSessionStore(): GuestSessionStore {
       sessionsByTokenHash.set(tokenHash, session);
       return session;
     },
-    async refresh() {},
   };
 }
 

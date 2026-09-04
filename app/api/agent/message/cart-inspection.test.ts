@@ -120,13 +120,12 @@ function guestSessionStore(sessions: Record<string, string>): GuestSessionStore 
     ]),
   );
   return {
-    async findActive(tokenHash) {
+    async findActiveAndRefresh(tokenHash) {
       return byHash.get(tokenHash) ?? null;
     },
     async create() {
       return { id: "guest-session-3" };
     },
-    async refresh() {},
   };
 }
 

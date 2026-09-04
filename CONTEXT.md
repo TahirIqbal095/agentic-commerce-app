@@ -130,6 +130,27 @@ The accumulated Customer shopping intent and prior Recommendations retained
 across Conversation Turns so follow-up references can be understood.
 _Avoid_: Memory, chat history
 
+**Intent Brief**:
+The Storefront's own resolved statement of what a Customer is asking for in one
+Conversation Turn: their goal, the active Product constraints, the Products
+they referred to, what they have not said, and which effects the Turn should
+present. It is context handed to the Commerce Agent, never an execution plan,
+and it authorizes nothing.
+_Avoid_: Prompt, plan, query
+
+**Turn Budget**:
+The bounded time, steps, and tokens one Conversation Turn may spend. Exhausting
+it is a shortfall of the Storefront, described to the Customer as the
+Storefront having been slow, and it says nothing about how the Customer
+phrased their request.
+_Avoid_: Missing Information, unclear request, timeout
+
+**Missing Information**:
+What a Customer has not yet said that materially prevents a useful answer. It
+is the only ground on which the Storefront may ask a Customer for more, and it
+is never inferred from an exhausted Turn Budget.
+_Avoid_: Turn Budget, vague request
+
 **Context Summary**:
 The Customer-visible view of the active Product constraints in Conversation
 Context, from which individual constraints can be removed to produce a new
