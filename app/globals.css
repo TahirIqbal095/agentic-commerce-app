@@ -67,6 +67,12 @@
    */
   --tracking-normal: 0em;
   --spacing: 0.25rem;
+  /*
+   * The pinned header bar's height. The bar is the one element the Conversation
+   * passes beneath, so its height is a token rather than a number repeated at
+   * each surface that has to start below it.
+   */
+  --storefront-header-height: 3.5rem;
 }
 
 @theme inline {

@@ -885,28 +885,28 @@ export function ShoppingAssistant({
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 pb-44 pt-5 sm:px-8 sm:pb-48 sm:pt-7">
-        <Header
-          brandName={brandName}
-          cart={cart}
-          cartState={cartState}
-          hasConversation={entries.length > 0}
-          onNewConversation={startNewConversation}
-          cartControls={cartControls}
-          checkoutReadiness={{
-            onReview: reviewCheckoutReadiness,
-            isReviewing,
-            error: reviewError,
-          }}
-          checkout={{
-            onCheckout: startCheckout,
-            isPreparing: isPreparingCheckout,
-            error: checkoutError,
-          }}
-          isCartOpen={isCartOpen}
-          onCartOpenChange={setIsCartOpen}
-        />
+      <Header
+        brandName={brandName}
+        cart={cart}
+        cartState={cartState}
+        hasConversation={entries.length > 0}
+        onNewConversation={startNewConversation}
+        cartControls={cartControls}
+        checkoutReadiness={{
+          onReview: reviewCheckoutReadiness,
+          isReviewing,
+          error: reviewError,
+        }}
+        checkout={{
+          onCheckout: startCheckout,
+          isPreparing: isPreparingCheckout,
+          error: checkoutError,
+        }}
+        isCartOpen={isCartOpen}
+        onCartOpenChange={setIsCartOpen}
+      />
 
+      <div className="mx-auto flex min-h-[calc(100vh-var(--storefront-header-height))] w-full max-w-6xl flex-col px-4 pb-44 sm:px-8 sm:pb-48">
         <div
           className={cn(
             "mx-auto flex w-full max-w-4xl flex-1 flex-col py-14 sm:py-20",
