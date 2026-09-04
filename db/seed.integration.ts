@@ -35,20 +35,29 @@ import {
 
 const execFileAsync = promisify(execFile);
 const TEST_GUEST_SESSION_ID = "13000000-0000-4000-8000-000000000001";
-const EXPECTED_ACTIVE_PRODUCTS = [
-  { slug: "strideflow-daily-running-shoes", inStock: true },
-  { slug: "trailcrest-grip-running-shoes", inStock: true },
-  { slug: "cloudstep-walking-shoes", inStock: false },
-  { slug: "flexforge-training-shoes", inStock: true },
-  { slug: "courtline-casual-sneakers", inStock: true },
-  { slug: "heritage-oxford-formal-shoes", inStock: true },
-  { slug: "everyday-comfort-sandals", inStock: true },
-  { slug: "performance-ankle-socks", inStock: true },
-  { slug: "cushioned-crew-socks", inStock: true },
-  { slug: "support-gel-insoles", inStock: true },
-  { slug: "reflective-running-laces", inStock: true },
-  { slug: "complete-shoe-care-kit", inStock: true },
-];
+const SHOE_CATALOG_CATEGORIES = new Set([
+  "Footwear",
+  "Socks",
+  "Laces",
+  "Insoles",
+  "Shoe Care",
+  "Shoe Accessories",
+]);
+
+type ProductSearchBody = {
+  data: {
+    products: Array<{
+      id: string;
+      slug: string;
+      name: string;
+      description: string;
+      category: string;
+      inStock: boolean;
+      attributes: Record<string, unknown>;
+    }>;
+    nextCursor?: string;
+  };
+};
 
 function cartAddRequest(
   productId: string,
@@ -116,6 +125,27 @@ after(async () => {
   await db.$client.end();
 });
 
+/**
+ * Runs one schema-introspection query against the raw driver.
+ *
+ * These tests assert properties of the schema itself — enum members, column
+ * names, foreign-key delete rules — which Drizzle's typed query builder has no
+ * vocabulary for. postgres.js hands back a plain array of rows, so this wraps
+ * it in the result-set shape each assertion below reads against.
+ *
+ * @param query - The SQL to run. It is written here, never by a Customer.
+ * @param params - Values for the query's positional placeholders.
+ * @returns The matching rows.
+ */
+async function introspect<TRow>(
+  query: string,
+  params: unknown[] = [],
+): Promise<{ rows: TRow[] }> {
+  const rows = await db.$client.unsafe(query, params as never[]);
+  return { rows: rows as unknown as TRow[] };
+}
+
+
 async function runSeedCommand(): Promise<void> {
   await execFileAsync("pnpm", ["db:seed"], {
     cwd: process.cwd(),
@@ -135,35 +165,61 @@ async function runSeedCommand(): Promise<void> {
     });
 }
 
-async function getProducts(): Promise<Response> {
-  return GET(new Request("http://localhost/api/products?limit=50"));
+async function getProducts(cursor?: string): Promise<Response> {
+  const params = new URLSearchParams({ limit: "50" });
+  if (cursor !== undefined) params.set("cursor", cursor);
+  return GET(new Request(`http://localhost/api/products?${params}`));
 }
 
-test("demo catalog seed is repeatable and exposes only active products", async () => {
+async function getAllProducts() {
+  const catalog = [];
+  let cursor: string | undefined;
+
+  do {
+    const response = await getProducts(cursor);
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as ProductSearchBody;
+    catalog.push(...body.data.products);
+    cursor = body.data.nextCursor;
+  } while (cursor !== undefined);
+
+  return catalog;
+}
+
+test("demo Catalog is repeatable and offers a broad shoe-only range", async () => {
   await runSeedCommand();
-  const firstResponse = await getProducts();
-  const firstBody = await firstResponse.json();
+  const firstCatalog = await getAllProducts();
 
   await runSeedCommand();
-  const secondResponse = await getProducts();
-  const secondBody = await secondResponse.json();
+  const secondCatalog = await getAllProducts();
 
-  assert.equal(firstResponse.status, 200);
-  assert.equal(secondResponse.status, 200);
-  assert.deepEqual(secondBody, firstBody);
-  assert.deepEqual(
-    secondBody.data.products.map(
-      (product: { slug: string; inStock: boolean }) => ({
-        slug: product.slug,
-        inStock: product.inStock,
-      }),
+  assert.deepEqual(secondCatalog, firstCatalog);
+  assert.ok(secondCatalog.length >= 100);
+  assert.ok(
+    secondCatalog.every((product) =>
+      SHOE_CATALOG_CATEGORIES.has(product.category),
     ),
-    EXPECTED_ACTIVE_PRODUCTS,
   );
 
-  const roadRunningShoe = secondBody.data.products.find(
-    (product: { slug: string }) =>
-      product.slug === "strideflow-daily-running-shoes",
+  const searchableCatalog = secondCatalog
+    .map((product) =>
+      `${product.name} ${product.description} ${product.category}`.toLowerCase(),
+    )
+    .join("\n");
+  for (const productType of [
+    "running shoes",
+    "boots",
+    "sandals",
+    "socks",
+    "laces",
+    "insoles",
+    "shoe care",
+  ]) {
+    assert.match(searchableCatalog, new RegExp(productType));
+  }
+
+  const roadRunningShoe = secondCatalog.find(
+    (product) => product.slug === "strideflow-daily-running-shoes",
   );
   assert.deepEqual(roadRunningShoe?.attributes, {
     audience: "Unisex",
@@ -543,14 +599,14 @@ test("checkout storage holds only Test Mode evidence, never payment data", async
   // no longer "checkout does not exist". It is that the Payment Account can only
   // be a test one, and that no column anywhere can hold a payment instrument, an
   // OTP, a credential, a signature, or a raw provider payload.
-  const environments = await db.$client.query<{ enumlabel: string }>(
+  const environments = await introspect<{ enumlabel: string }>(
     `select enumlabel
        from pg_enum
        join pg_type on pg_type.oid = pg_enum.enumtypid
       where pg_type.typname = 'payment_environment'
       order by enumsortorder`,
   );
-  const forbiddenColumns = await db.$client.query<{
+  const forbiddenColumns = await introspect<{
     table_name: string;
     column_name: string;
   }>(
@@ -564,7 +620,7 @@ test("checkout storage holds only Test Mode evidence, never payment data", async
         and not (table_name = 'guest_sessions' and column_name = 'token_hash')
       order by table_name, column_name`,
   );
-  const outOfScopeTables = await db.$client.query<{ table_name: string }>(
+  const outOfScopeTables = await introspect<{ table_name: string }>(
     `select table_name
        from information_schema.tables
       where table_schema = 'public'
@@ -595,7 +651,7 @@ test("protected commerce records do not cascade with a Guest Session", async () 
   // ADR-0011: a lost browser credential ends Customer access, never the Brand's
   // reconciliation evidence. That is a property of the foreign keys, so it is
   // asserted against the schema rather than against one deletion.
-  const cascading = await db.$client.query<{
+  const cascading = await introspect<{
     table_name: string;
     delete_rule: string;
   }>(
@@ -625,7 +681,7 @@ test("protected commerce records do not cascade with a Guest Session", async () 
 });
 
 test("recommendation analytics are pseudonymous and expose no personal-information fields", async () => {
-  const result = await db.$client.query<{ column_name: string }>(
+  const result = await introspect<{ column_name: string }>(
     `select column_name
        from information_schema.columns
       where table_schema = 'public'
@@ -642,7 +698,7 @@ test("recommendation analytics are pseudonymous and expose no personal-informati
 });
 
 test("database exposes no authenticated Customer or Brand Admin identity contract", async () => {
-  const tables = await db.$client.query<{ table_name: string }>(
+  const tables = await introspect<{ table_name: string }>(
     `select table_name
        from information_schema.tables
       where table_schema = 'public'
@@ -650,7 +706,7 @@ test("database exposes no authenticated Customer or Brand Admin identity contrac
       order by table_name`,
     [["brand_admins", "users"]],
   );
-  const identityColumns = await db.$client.query<{
+  const identityColumns = await introspect<{
     column_name: string;
     table_name: string;
   }>(
@@ -661,14 +717,14 @@ test("database exposes no authenticated Customer or Brand Admin identity contrac
       order by table_name, column_name`,
     [["admin_id", "customer_id", "user_id"]],
   );
-  const actorTypes = await db.$client.query<{ enumlabel: string }>(
+  const actorTypes = await introspect<{ enumlabel: string }>(
     `select enumlabel
        from pg_enum
        join pg_type on pg_type.oid = pg_enum.enumtypid
       where pg_type.typname = 'actor_type'
       order by enumsortorder`,
   );
-  const messageRoles = await db.$client.query<{ enumlabel: string }>(
+  const messageRoles = await introspect<{ enumlabel: string }>(
     `select enumlabel
        from pg_enum
        join pg_type on pg_type.oid = pg_enum.enumtypid

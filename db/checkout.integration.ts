@@ -132,6 +132,14 @@ async function clearCheckoutData() {
     await db.delete(orders).where(inArray(orders.id, orderIds));
   }
   await db.delete(providerNotifications);
+  // A Provider Notification that never found its Provider Order carries no
+  // Guest Session, so the scoped delete below cannot reach its audit evidence.
+  // It is cleared alongside the notifications it describes; left behind, it
+  // accumulates in a durable database and the next run reads this run's
+  // history as its own.
+  await db
+    .delete(auditEvents)
+    .where(eq(auditEvents.entityType, "ProviderNotification"));
   await db
     .delete(auditEvents)
     .where(eq(auditEvents.guestSessionId, GUEST_SESSION_ID));

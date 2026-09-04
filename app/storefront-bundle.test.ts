@@ -17,7 +17,13 @@ const CLIENT_ENTRY = "app/shopping-assistant.tsx";
  * these from the client entry fails the Storefront's build rather than any
  * test — which is why this guard is static.
  */
-const SERVER_ONLY_PACKAGES = ["pg", "drizzle-orm", "drizzle-orm/node-postgres"];
+const SERVER_ONLY_PACKAGES = [
+  "pg",
+  "postgres",
+  "drizzle-orm",
+  "drizzle-orm/node-postgres",
+  "drizzle-orm/postgres-js",
+];
 
 /**
  * Reads one module's runtime imports.

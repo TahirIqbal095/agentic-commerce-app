@@ -692,7 +692,10 @@ export function ShoppingAssistant({
         "This approval could not be completed.",
       );
       updateCheckoutSession(entry.id, { isApproving: false, checkout });
-      await openManagedCheckout(entry.id, await settleUnknownOutcome(entry.id, checkout));
+      await openManagedCheckout(
+        entry.id,
+        await settleUnknownOutcome(entry.id, checkout),
+      );
     } catch (requestError) {
       updateCheckoutSession(entry.id, {
         isApproving: false,

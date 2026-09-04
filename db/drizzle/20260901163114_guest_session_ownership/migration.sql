@@ -1,4 +1,4 @@
-TRUNCATE TABLE "audit_events", "agent_actions", "recommendation_events", "messages", "conversations", "cart_items", "carts", "guest_sessions";--> statement-breakpoint
+TRUNCATE TABLE "audit_events", "agent_actions", "recommendation_events", "messages", "conversations", "cart_items", "carts", "guest_sessions" CASCADE;--> statement-breakpoint
 ALTER TABLE "agent_actions" DROP CONSTRAINT "agent_actions_user_id_users_id_fkey";--> statement-breakpoint
 ALTER TABLE "conversations" DROP CONSTRAINT "conversations_user_id_users_id_fkey";--> statement-breakpoint
 ALTER TABLE "recommendation_events" DROP CONSTRAINT "recommendation_events_user_id_users_id_fkey";--> statement-breakpoint

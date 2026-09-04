@@ -76,7 +76,12 @@ export function CartDrawer({
       onOpenChange={onOpenChange}
     >
       <DrawerTrigger asChild>
-        <Button type="button" variant="outline" size="sm" aria-label={accessibleName}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          aria-label={accessibleName}
+        >
           <ShoppingBag />
           {quantity === undefined ? "Cart" : `Cart · ${quantity}`}
         </Button>
@@ -89,7 +94,10 @@ export function CartDrawer({
             Subtotal.
           </DrawerDescription>
         </DrawerHeader>
-        <ScrollArea className="flex-1" viewportClassName="px-5 py-6 sm:px-7">
+        <ScrollArea
+          className="flex-1 overflow-y-auto"
+          viewportClassName="px-5 py-6 sm:px-7"
+        >
           {state === "loading" ? (
             <p
               role="status"

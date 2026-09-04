@@ -33,7 +33,7 @@ export function CartPanel({
   return (
     <section
       aria-label="Your Cart"
-      className="overflow-hidden rounded-lg border-2 border-sidebar-border bg-card text-card-foreground"
+      className="overflow-y-auto rounded-lg border-2 border-sidebar-border bg-card text-card-foreground"
     >
       <div className="flex items-center justify-between border-b border-border px-5 py-4 sm:px-6">
         <h3 className="text-sm font-semibold tracking-tight">Your Cart</h3>
