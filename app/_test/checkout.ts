@@ -89,6 +89,12 @@ export function preparedEntry(
 }
 
 export type CheckoutRoutes = {
+  /**
+   * The authoritative Cart read, when it changes during the test. A captured
+   * payment converts the Cart it paid for, so the next read is a fresh, empty
+   * one.
+   */
+  cartRead?: () => Response;
   cartCommand?: (command: { type: string; productId: string }) => Response;
   /** One Conversation Turn, so a test can prove what typed words cannot do. */
   message?: (body: unknown) => Promise<Response> | Response;
@@ -134,7 +140,7 @@ export async function openStorefront(
 
     if (url === "/api/agent/conversation") return Response.json({ data: null });
     if (url === "/api/cart" && method === "GET") {
-      return Response.json({ data: cart });
+      return routes.cartRead?.() ?? Response.json({ data: cart });
     }
     if (url === "/api/cart" && routes.cartCommand) {
       return routes.cartCommand(body as { type: string; productId: string });
@@ -206,6 +212,23 @@ export async function openStorefront(
         await view.findByRole("button", { name: `Cart · ${cart.totalQuantity}` }),
       );
       return view.getByRole("dialog", { name: "Your Cart" });
+    },
+    /**
+     * Closes the Cart a settled checkout opened, if it opened one.
+     *
+     * The Cart is a modal drawer, so while it is open the Conversation behind
+     * it is hidden from assistive technology and from a test reading the page.
+     * A case about the checkout card itself dismisses the landing first, as the
+     * Customer would.
+     */
+    async dismissCart() {
+      if (!view.queryByRole("dialog", { name: "Your Cart" })) return;
+      await user.keyboard("{Escape}");
+      await testingLibrary.waitFor(() => {
+        if (view.queryByRole("dialog", { name: "Your Cart" })) {
+          throw new Error("The Cart is still open.");
+        }
+      });
     },
   };
 }

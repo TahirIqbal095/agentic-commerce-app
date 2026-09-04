@@ -6,6 +6,7 @@ import type { CartControls } from "./cart-panel";
 import {
   CartDrawer,
   type CartLoadState,
+  type CartOutcome,
   type CheckoutControl,
   type CheckoutReadinessControl,
 } from "./cart-drawer";
@@ -33,6 +34,7 @@ export function Header({
   cartControls,
   checkoutReadiness,
   checkout,
+  cartOutcome,
   isCartOpen,
   onCartOpenChange,
 }: {
@@ -44,6 +46,7 @@ export function Header({
   cartControls: CartControls;
   checkoutReadiness: CheckoutReadinessControl;
   checkout: CheckoutControl;
+  cartOutcome: CartOutcome | null;
   isCartOpen: boolean;
   onCartOpenChange: (open: boolean) => void;
 }) {
@@ -84,6 +87,7 @@ export function Header({
             controls={cartControls}
             readiness={checkoutReadiness}
             checkout={checkout}
+            outcome={cartOutcome}
             open={isCartOpen}
             onOpenChange={onCartOpenChange}
           />

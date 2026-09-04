@@ -88,6 +88,10 @@ async function approveAndPay(
   );
   await opened.view.findByRole("region", { name: "Checkout proposal" });
   await opened.user.click(opened.view.getByRole("button", { name: APPROVED }));
+  // A settled checkout lands the Customer in their Cart. These cases are about
+  // the checkout card behind it, so the landing is dismissed as a Customer
+  // would dismiss it before reading on.
+  await opened.dismissCart();
   return opened;
 }
 
@@ -113,6 +117,9 @@ test("approving opens managed Razorpay Test Checkout against the verified paymen
     "POST /api/checkout/approval",
     `POST /api/checkout/${ORDER_ID}/payment-attempt`,
     `POST /api/checkout/${ORDER_ID}/callback`,
+    // The payment converted the Cart it paid for, so the Cart the Customer
+    // lands in is read again rather than assumed.
+    "GET /api/cart",
   ]);
 });
 

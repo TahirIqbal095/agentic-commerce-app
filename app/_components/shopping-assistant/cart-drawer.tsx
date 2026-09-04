@@ -17,6 +17,24 @@ import { CartPanel, type CartControls } from "./cart-panel";
 
 export type CartLoadState = "loading" | "ready" | "error";
 
+/** What a terminal checkout outcome did to the Customer's Cart. */
+export type CartOutcome = "PAID" | "UNPAYABLE";
+
+/**
+ * What the Customer is told when a checkout lands them back in their Cart.
+ *
+ * Each message says outright what happened to the Cart, so the Customer never
+ * has to infer it from what they see: an empty Cart after a payment reads as
+ * success rather than as loss, and a full one after a failure reads as nothing
+ * having been taken. Both keep saying this is Test Mode, because every
+ * checkout surface does.
+ */
+const CART_OUTCOME_MESSAGES: Record<CartOutcome, string> = {
+  PAID: "Your payment completed in Razorpay Test Mode. This Cart is now part of your order history, and a fresh Cart has started for you.",
+  UNPAYABLE:
+    "Nothing was charged in Razorpay Test Mode. Your Cart Items are still here, exactly as you left them.",
+};
+
 /**
  * The Cart drawer's Review for checkout control.
  *
@@ -50,6 +68,7 @@ export function CartDrawer({
   controls,
   readiness,
   checkout,
+  outcome,
   open,
   onOpenChange,
 }: {
@@ -58,6 +77,12 @@ export function CartDrawer({
   controls: CartControls;
   readiness: CheckoutReadinessControl;
   checkout: CheckoutControl;
+  /**
+   * The checkout outcome that opened this Cart, if one did. It is an event
+   * rather than a state: closing the Cart ends it, and it is not restored on a
+   * reload — the checkout status card in the Transcript is the durable record.
+   */
+  outcome: CartOutcome | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -98,6 +123,11 @@ export function CartDrawer({
           className="flex-1 overflow-y-auto"
           viewportClassName="px-5 py-6 sm:px-7"
         >
+          {outcome ? (
+            <Alert role="status" className="mb-5">
+              <span>{CART_OUTCOME_MESSAGES[outcome]}</span>
+            </Alert>
+          ) : null}
           {state === "loading" ? (
             <p
               role="status"

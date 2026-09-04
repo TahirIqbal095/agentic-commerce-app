@@ -3,7 +3,10 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { Composer } from "./_components/shopping-assistant/composer";
-import type { CartLoadState } from "./_components/shopping-assistant/cart-drawer";
+import type {
+  CartLoadState,
+  CartOutcome,
+} from "./_components/shopping-assistant/cart-drawer";
 import type { CartItemCommand } from "./_components/shopping-assistant/cart-panel";
 import { ContextSummary } from "./_components/shopping-assistant/context-summary";
 import {
@@ -101,6 +104,22 @@ function isTurn(
   turnId: string,
 ): entry is Extract<TranscriptEntry, { customerMessage: string }> {
   return entry.id === turnId && !isCustomerActionEntry(entry);
+}
+
+/**
+ * What one checkout's state means for the Customer's Cart.
+ *
+ * Only a terminal outcome means anything: a dismissal, a decline with attempts
+ * remaining, and an Unknown Provider Outcome all leave the Cart alone, because
+ * the Storefront does not yet know what happened and must not act as if it
+ * did.
+ *
+ * @returns The outcome to land the Customer in, or `null` while there is none.
+ */
+function terminalCartOutcome(checkout: CheckoutStatusView): CartOutcome | null {
+  if (checkout.status === "PAID") return "PAID";
+  if (checkout.status === "PAYMENT_FAILED") return "UNPAYABLE";
+  return null;
 }
 
 /**
@@ -218,6 +237,7 @@ export function ShoppingAssistant({
     Record<string, string>
   >({});
   const [isCartOpen, setIsCartOpen] = useState(false);
+  const [cartOutcome, setCartOutcome] = useState<CartOutcome | null>(null);
   const [isReviewing, setIsReviewing] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [isPreparingCheckout, setIsPreparingCheckout] = useState(false);
@@ -227,6 +247,7 @@ export function ShoppingAssistant({
   >({});
   const mutationKeys = useRef(new Map<string, string>());
   const approvalKeys = useRef(new Map<string, string>());
+  const settledCheckouts = useRef(new Set<string>());
   const transcriptScroll = useTranscriptScroll({
     entryCount: entries.length,
     answeredCount: entries.filter(isAnswered).length,
@@ -291,13 +312,16 @@ export function ShoppingAssistant({
   }
 
   /**
-   * Adopts the Cart carried by a rejected command.
+   * Adopts an authoritative Cart whatever version it carries.
    *
-   * The authority read this Cart while refusing the command, so it replaces the
-   * drawer and badge unconditionally — including when another tab emptied the
-   * Cart and lowered its version.
+   * Two things produce a Cart older than the one on screen, and the version
+   * guard would discard both. A rejected command's refusal carries the Cart the
+   * authority read while refusing it, which another tab may have emptied. And
+   * the read that follows a confirmed payment returns the fresh Cart that
+   * replaced the one the Customer just paid for. Neither is a stale response;
+   * both are the latest truth.
    */
-  function recoverCartFromConflict(latestCart: CartView) {
+  function adoptLatestCart(latestCart: CartView) {
     setCart(latestCart);
     setCartState("ready");
   }
@@ -486,7 +510,7 @@ export function ShoppingAssistant({
       const latestCart = refusal?.details?.cart;
       if (latestCart) {
         if (refusal?.code === "CART_CONFLICT") {
-          recoverCartFromConflict(latestCart);
+          adoptLatestCart(latestCart);
         } else {
           replaceCartFromAuthority(latestCart);
         }
@@ -624,7 +648,7 @@ export function ShoppingAssistant({
       }
       setEntries((currentEntries) => [...currentEntries, payload.data]);
       replaceCartFromAuthority(payload.data.readiness.cart);
-      setIsCartOpen(false);
+      showCart(false);
     } catch {
       setReviewError(
         "The Cart could not be reviewed for checkout. Try again shortly.",
@@ -658,13 +682,76 @@ export function ShoppingAssistant({
       try {
         const response = await fetch(`/api/checkout/${proposalId}`);
         if (!response.ok || !isActive()) continue;
-        updateCheckoutSession(entryId, {
-          checkout: await readCheckout(response, ""),
-        });
+        // A checkout recovered from a reload is history, not news: the
+        // Customer was already shown whatever it settled as, and the status
+        // card in the Transcript is the durable record of it.
+        updateCheckoutSession(
+          entryId,
+          { checkout: await readCheckout(response, "") },
+          false,
+        );
       } catch {
         // A checkout that cannot be read stays as the proposal the Customer
         // saw. The authority still refuses a second Approval for it.
       }
+    }
+  }
+
+  /**
+   * Opens or closes the Cart, ending any outcome message when it closes.
+   *
+   * The message is an event, not a state. Closing the Cart is how a Customer
+   * dismisses it, and it does not come back when they open the Cart again.
+   */
+  function showCart(open: boolean) {
+    setIsCartOpen(open);
+    if (!open) setCartOutcome(null);
+  }
+
+  /**
+   * Lands the Customer in their Cart the first time one checkout is observed
+   * to have reached a terminal outcome.
+   *
+   * A Cart that empties itself is startling, so a paid checkout opens the Cart
+   * and says why it is empty; an Order that can no longer be paid opens it and
+   * says nothing was charged. It happens once per checkout rather than once
+   * per observation, so asking Razorpay for the status of a settled Order does
+   * not restage the announcement.
+   *
+   * @param announce - False while a reloaded Transcript is catching up on
+   *   checkouts the Customer has already been told about.
+   */
+  function landInCart(
+    entryId: string,
+    checkout: CheckoutStatusView,
+    announce: boolean,
+  ) {
+    if (settledCheckouts.current.has(entryId)) return;
+    const outcome = terminalCartOutcome(checkout);
+    if (!outcome) return;
+    settledCheckouts.current.add(entryId);
+    if (!announce) return;
+    void readCartAfterCheckout();
+    setCartOutcome(outcome);
+    setIsCartOpen(true);
+  }
+
+  /**
+   * Re-reads the Cart a settled checkout left behind.
+   *
+   * A read that fails leaves the Cart as it was; the message still says what
+   * happened to it, and the checkout status card in the Transcript remains the
+   * durable record either way.
+   */
+  async function readCartAfterCheckout() {
+    try {
+      const response = await fetch("/api/cart");
+      if (!response.ok) return;
+      const payload = (await response.json()) as { data: CartView };
+      adoptLatestCart(payload.data);
+    } catch {
+      // Nothing to correct: the Cart on screen is the last one the authority
+      // gave us, and the outcome message does not depend on this read.
     }
   }
 
@@ -674,11 +761,13 @@ export function ShoppingAssistant({
   function updateCheckoutSession(
     entryId: string,
     change: Partial<CheckoutSession>,
+    announceOutcome = true,
   ) {
     setCheckoutSessions((current) => ({
       ...current,
       [entryId]: { ...emptyCheckoutSession, ...current[entryId], ...change },
     }));
+    if (change.checkout) landInCart(entryId, change.checkout, announceOutcome);
   }
 
   /**
@@ -709,7 +798,7 @@ export function ShoppingAssistant({
         );
       }
       setEntries((currentEntries) => [...currentEntries, payload.data]);
-      setIsCartOpen(false);
+      showCart(false);
     } catch {
       setCheckoutError(
         "Checkout could not be prepared right now. Try again shortly.",
@@ -924,7 +1013,7 @@ export function ShoppingAssistant({
   /** Leaves an unsuccessful checkout behind and re-reads the current Cart. */
   async function returnToShopping() {
     await reloadCartFromAuthority();
-    setIsCartOpen(false);
+    showCart(false);
   }
 
   /**
@@ -959,7 +1048,8 @@ export function ShoppingAssistant({
           error: checkoutError,
         }}
         isCartOpen={isCartOpen}
-        onCartOpenChange={setIsCartOpen}
+        cartOutcome={cartOutcome}
+        onCartOpenChange={showCart}
       />
 
       <div
