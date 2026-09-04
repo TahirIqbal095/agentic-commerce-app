@@ -106,8 +106,8 @@ const COMMERCE_AGENT_LIMITS: CommerceAgentLimits = {
  * phrasing, so it must never imply their request was unclear. Following such
  * advice would only hit the same wall.
  *
- * The two sentences are kept apart because they claim different facts. A Turn
- * says it ran long only when its Turn Budget actually ran out; a Turn the
+ * These two sentences are kept apart because they claim different facts. A
+ * Turn says it ran long only when its Turn Budget actually ran out; a Turn the
  * Commerce Agent failed some other way — an unavailable provider, an answer
  * that could not be trusted — was never slow, and saying so would be a second
  * untruth told in place of the first.
@@ -118,11 +118,32 @@ const STOREFRONT_RAN_LONG_MESSAGE =
 const STOREFRONT_FELL_SHORT_MESSAGE =
   "I couldn't finish that answer, so here's what the Catalog holds for you.";
 
+/** What a Customer is told when the Catalog itself holds no match. */
 const NOTHING_MATCHED_MESSAGE =
   "Nothing in the Catalog matches that right now.";
 
+/**
+ * What a Customer is told when a Turn ends with nothing to show at all.
+ *
+ * These are the empty-handed counterparts of the two sentences above, and they
+ * divide on the same fact: only a Turn whose Turn Budget actually ran out may
+ * say it ran out of time.
+ */
 const STOREFRONT_OUT_OF_TIME_MESSAGE =
   "I couldn't finish that in time. Please try again.";
+
+const STOREFRONT_NO_ANSWER_MESSAGE =
+  "I couldn't put an answer together right now. Please try again.";
+
+/**
+ * What a Customer is told when the Catalog answers and the Agent did not.
+ *
+ * A Turn promises Products whenever the Catalog holds them, so an Agent that
+ * finished without naming any is not the last word. The sentence claims
+ * nothing about why — nothing went slow and nothing failed, the Agent simply
+ * had nothing to point at.
+ */
+const CATALOG_HOLDS_MESSAGE = "Here's what the Catalog holds for you.";
 
 /**
  * What the Commerce Agent says about a checkout it did not calculate.
@@ -316,9 +337,6 @@ export function createCommerceAgent(
           try {
             const result = await catalog.search({
               ...activeProductConstraints(intentBrief.constraints),
-              ...(Object.keys(intentBrief.constraints.attributes).length > 0
-                ? { attributes: intentBrief.constraints.attributes }
-                : {}),
               limit: 2,
             });
             directlyMatchedProducts = result.products;
@@ -483,30 +501,37 @@ export function createCommerceAgent(
         return degrade(false);
       }
 
-      const products = loopResult.productIds.flatMap((productId) => {
+      const namedProducts = loopResult.productIds.flatMap((productId) => {
         const product = observedProducts.get(productId);
         return product ? [product] : [];
       });
-      try {
-        await turn.recordRecommendationSet?.(products, resolvedContext);
-      } catch {
-        return completeTurn(turn, {
-          status: "TEMPORARILY_UNAVAILABLE",
-          conversationId: turn.conversationId,
-          message:
-            "I couldn't save those Recommendations right now. Please try again.",
-          retryable: true,
-          intentBrief,
-          products: [],
-        });
+      if (namedProducts.length === 0) {
+        const catalogHolds = await speculativeSearch;
+        if (catalogHolds.ok && catalogHolds.products.length > 0) {
+          return completeTurnShowing(
+            turn,
+            {
+              status: "COMPLETED",
+              conversationId: turn.conversationId,
+              message: CATALOG_HOLDS_MESSAGE,
+              intentBrief,
+              products: catalogHolds.products.slice(0, limits.maxToolProducts),
+            },
+            resolvedContext,
+          );
+        }
       }
-      return completeTurn(turn, {
-        status: "COMPLETED",
-        conversationId: turn.conversationId,
-        message: loopResult.message,
-        intentBrief,
-        products,
-      });
+      return completeTurnShowing(
+        turn,
+        {
+          status: "COMPLETED",
+          conversationId: turn.conversationId,
+          message: loopResult.message,
+          intentBrief,
+          products: namedProducts,
+        },
+        resolvedContext,
+      );
     },
   };
 }
@@ -552,29 +577,24 @@ function resolveCapabilities({
             assertLoopActive();
             const result = await catalog.search({
               ...search,
-              ...activeProductConstraints(intentBrief.constraints),
-              ...(Object.keys(intentBrief.constraints.attributes).length > 0
-                ? {
-                    attributes: {
-                      ...search.attributes,
-                      ...intentBrief.constraints.attributes,
-                    },
-                  }
-                : {}),
+              ...activeProductConstraints(
+                intentBrief.constraints,
+                search.attributes,
+              ),
               limit: Math.max(
                 1,
                 Math.min(search.limit, limits.maxToolProducts),
               ),
             });
             assertLoopActive();
-            const boundedProducts = result.products.slice(
+            const foundProducts = result.products.slice(
               0,
               limits.maxToolProducts,
             );
-            for (const product of boundedProducts) {
+            for (const product of foundProducts) {
               observedProducts.set(product.id, product);
             }
-            return { ...result, products: boundedProducts };
+            return { ...result, products: foundProducts };
           },
         }
       : {}),
@@ -591,10 +611,23 @@ function resolveCapabilities({
   };
 }
 
+/**
+ * The Catalog search the Customer's active Product constraints describe.
+ *
+ * Every Catalog search a Turn issues is built here, including the one the
+ * Commerce Agent asks for: the Agent may add to a search but never escape the
+ * constraints, so its own attributes are merged underneath rather than over.
+ *
+ * @param constraints - The active Product constraints from the Intent Brief.
+ * @param requestedAttributes - Attributes the Commerce Agent asked for, if any.
+ */
 function activeProductConstraints(
   constraints: IntentBrief["constraints"],
+  requestedAttributes?: CatalogSearch["attributes"],
 ): Omit<CatalogSearch, "limit"> {
+  const attributes = { ...requestedAttributes, ...constraints.attributes };
   return {
+    ...(Object.keys(attributes).length > 0 ? { attributes } : {}),
     ...(constraints.productTypes.length > 0
       ? { productTypes: constraints.productTypes }
       : {}),
@@ -699,9 +732,6 @@ function searchCatalogSpeculatively(
   return catalog
     .search({
       ...activeProductConstraints(intentBrief.constraints),
-      ...(Object.keys(intentBrief.constraints.attributes).length > 0
-        ? { attributes: intentBrief.constraints.attributes }
-        : {}),
       limit: limits.maxToolProducts,
     })
     .then(
@@ -769,7 +799,9 @@ function fallbackOutcome({
   return {
     status: "TEMPORARILY_UNAVAILABLE",
     conversationId,
-    message: STOREFRONT_OUT_OF_TIME_MESSAGE,
+    message: budgetExhausted
+      ? STOREFRONT_OUT_OF_TIME_MESSAGE
+      : STOREFRONT_NO_ANSWER_MESSAGE,
     retryable: true,
     intentBrief,
     products: [],
@@ -799,7 +831,13 @@ async function completeTurnShowing(
 ): Promise<AgentOutcome> {
   if (outcome.products.length === 0) return completeTurn(turn, outcome);
   try {
-    await turn.recordRecommendationSet?.(outcome.products, context);
+    const saved = await turn.recordRecommendationSet?.(outcome.products, context);
+    // A refused save means a concurrent Turn moved the Conversation on, so
+    // these Products were never recorded. Showing them anyway would offer the
+    // Customer a "the second one" that resolves against something else.
+    if (saved === false) {
+      return completeTurn(turn, contextConflictOutcome(turn.conversationId));
+    }
   } catch {
     return completeTurn(turn, {
       status: "TEMPORARILY_UNAVAILABLE",

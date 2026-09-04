@@ -60,7 +60,9 @@ Developer API during the investigation that produced this decision:
   **15s** budget covering its one retry, against 8.5–9.6s for the same call on
   `gemini-3.1-flash-lite`.
 - Both budgets are the Storefront's own: the provider is asked to stop, and the
-  Turn stops waiting whether or not it does.
+  Turn stops waiting whether or not it does. Neither deadline is `unref`'d: a
+  budget is the only thing that ends a Turn whose provider never answers, and
+  an unreferenced timer is one the runtime is free to skip.
 
 The default model moves off `gemini-3.5-flash-lite`, which returned repeated
 `503 UNAVAILABLE` and 69–71s successes throughout the investigation, to

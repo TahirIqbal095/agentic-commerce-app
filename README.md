@@ -46,7 +46,7 @@ Add these values to `.env` for local development:
 
 ```dotenv
 GOOGLE_GENERATIVE_AI_API_KEY=your_google_ai_studio_key
-GOOGLE_GENERATIVE_AI_MODEL=gemini-3.1-flash-lite
+GOOGLE_GENERATIVE_AI_MODEL=
 ```
 
 `GOOGLE_GENERATIVE_AI_MODEL` selects the model both agent stages use. Leave it

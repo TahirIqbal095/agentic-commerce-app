@@ -78,6 +78,7 @@ function analyzerReturning(result: IntentAnalysis): IntentAnalyzer {
 function recordingConversation(
   completed: AgentOutcome[],
   recommendationSets: CatalogProduct[][] = [],
+  recommendationsAccepted = true,
 ): ConversationModule {
   return {
     async startTurn(): Promise<AgentTurn> {
@@ -87,6 +88,7 @@ function recordingConversation(
         async recordIntentBrief() {},
         async recordRecommendationSet(products) {
           recommendationSets.push(products);
+          return recommendationsAccepted;
         },
         async complete(_message, outcome) {
           completed.push(outcome);
@@ -652,6 +654,28 @@ test("a Turn the Storefront cannot answer at all stays retryable", async () => {
 
   assert.equal(outcome.status, "TEMPORARILY_UNAVAILABLE");
   assert.equal(outcome.retryable, true);
+  assert.doesNotMatch(outcome.message, /in time|too long/);
+  assertBlamesNobody(outcome.message);
+});
+
+test("a Turn that truly ran out of budget says so even with nothing to show", async () => {
+  const completed: AgentOutcome[] = [];
+  const agent = discoveryAgent(
+    unavailableCatalog,
+    new MockLanguageModelV4({
+      doGenerate: () => new Promise<never>(() => {}),
+    }),
+    recordingConversation(completed),
+    CUT_SHORT_LIMITS,
+  );
+
+  const outcome = await agent.respond({
+    idempotencyKey: "41000000-0000-4000-8000-000000000112",
+    message: "show me some running shoes",
+  });
+
+  assert.equal(outcome.status, "TEMPORARILY_UNAVAILABLE");
+  assert.match(outcome.message, /in time/);
   assertBlamesNobody(outcome.message);
 });
 
@@ -710,4 +734,81 @@ test("a Turn whose Intent Brief runs out of time blames the Storefront", async (
   assert.equal(outcome.status, "TEMPORARILY_UNAVAILABLE");
   assert.match(outcome.message, /in time/);
   assertBlamesNobody(outcome.message);
+});
+
+test("a completed answer naming no Products still shows what the Catalog holds", async () => {
+  const completed: AgentOutcome[] = [];
+  const recommendationSets: CatalogProduct[][] = [];
+  const agent = discoveryAgent(
+    catalogReturning(RUNNING_SHOES),
+    modelReplaying(
+      answerStep({
+        status: "COMPLETED",
+        message: "I had a look but I'm not naming anything.",
+        productIds: [],
+        question: null,
+        missingInformation: [],
+      }),
+    ),
+    recordingConversation(completed, recommendationSets),
+  );
+
+  const outcome = await agent.respond({
+    idempotencyKey: "41000000-0000-4000-8000-000000000113",
+    message: "show me some running shoes",
+  });
+
+  assert.equal(outcome.status, "COMPLETED");
+  assert.deepEqual(outcome.products, RUNNING_SHOES);
+  assert.deepEqual(recommendationSets.at(-1), RUNNING_SHOES);
+  assertBlamesNobody(outcome.message);
+});
+
+test("a needs-input answer that asks nothing is read as the answer it is", async () => {
+  const completed: AgentOutcome[] = [];
+  const agent = discoveryAgent(
+    catalogReturning(RUNNING_SHOES),
+    modelReplaying(
+      catalogSearchStep({ limit: 8 }),
+      answerStep({
+        status: "NEEDS_INPUT",
+        message: "Here are two running shoes.",
+        productIds: RUNNING_SHOES.map(({ id }) => id),
+        question: null,
+        missingInformation: [],
+      }),
+    ),
+    recordingConversation(completed),
+  );
+
+  const outcome = await agent.respond({
+    idempotencyKey: "41000000-0000-4000-8000-000000000114",
+    message: "show me some running shoes",
+  });
+
+  assert.equal(outcome.status, "COMPLETED");
+  assert.equal(outcome.message, "Here are two running shoes.");
+  assert.deepEqual(outcome.products, RUNNING_SHOES);
+});
+
+test("Products a concurrent Turn refused to record are never offered for reference", async () => {
+  const completed: AgentOutcome[] = [];
+  const agent = discoveryAgent(
+    catalogReturning(RUNNING_SHOES),
+    new MockLanguageModelV4({
+      doGenerate: async () => {
+        throw new Error("503 UNAVAILABLE");
+      },
+    }),
+    recordingConversation(completed, [], false),
+  );
+
+  const outcome = await agent.respond({
+    idempotencyKey: "41000000-0000-4000-8000-000000000115",
+    message: "show me some running shoes",
+  });
+
+  assert.equal(outcome.status, "TEMPORARILY_UNAVAILABLE");
+  assert.equal(outcome.retryable, true);
+  assert.deepEqual(outcome.products, []);
 });
