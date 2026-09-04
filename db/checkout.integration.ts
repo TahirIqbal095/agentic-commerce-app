@@ -44,6 +44,29 @@ const GUEST_SESSION_ID = "14000000-0000-4000-8000-000000000001";
 const CART_ID = "34000000-0000-4000-8000-000000000001";
 let productId: string;
 
+/**
+ * Every Razorpay Payment and event identifier this suite invents.
+ *
+ * Provider Payments and Provider Notifications carry no Guest Session, so
+ * nothing about a row says which run created it. Naming the identifiers here
+ * is what keeps cleanup to this suite's own rows: the project now points at a
+ * shared hosted database, where an unscoped delete would take evidence
+ * belonging to other work with it.
+ */
+const OWN_PROVIDER_PAYMENT_IDS = [
+  "pay_TEST_MONOTONIC",
+  "pay_TEST_DEDUPE",
+  "pay_TEST_EARLY",
+  "pay_TEST_RACED",
+];
+const OWN_NOTIFICATION_EVENT_IDS = [
+  "evt_TEST_DEDUPE",
+  "evt_TEST_EARLY",
+  "evt_TEST_EARLY_FOLLOWUP",
+  "evt_TEST_RACED",
+  "evt_TEST_LATE_ARRIVAL",
+];
+
 const orderStore = createCheckoutOrderStore(db);
 const proposalStore = createCheckoutProposalStore(GUEST_SESSION_ID, db);
 const audit = createCheckoutAuditLog(db);
@@ -123,7 +146,6 @@ async function clearCheckoutData() {
   const orderIds = ownOrders.map((order) => order.id);
   if (orderIds.length > 0) {
     await db.delete(providerOrders).where(inArray(providerOrders.orderId, orderIds));
-    await db.delete(providerPayments);
     await db.delete(paymentAttempts).where(inArray(paymentAttempts.orderId, orderIds));
     await db
       .delete(providerOperations)
@@ -131,7 +153,15 @@ async function clearCheckoutData() {
     await db.delete(orderItems).where(inArray(orderItems.orderId, orderIds));
     await db.delete(orders).where(inArray(orders.id, orderIds));
   }
-  await db.delete(providerNotifications);
+  // Provider Payments outlive the Order they belong to and one case records a
+  // payment with no Order at all, so they are cleared by their own identifiers
+  // rather than through the Orders this run happens to have left behind.
+  await db
+    .delete(providerPayments)
+    .where(inArray(providerPayments.providerPaymentId, OWN_PROVIDER_PAYMENT_IDS));
+  await db
+    .delete(providerNotifications)
+    .where(inArray(providerNotifications.eventId, OWN_NOTIFICATION_EVENT_IDS));
   // A Provider Notification that never found its Provider Order carries no
   // Guest Session, so the scoped delete below cannot reach its audit evidence.
   // It is cleared alongside the notifications it describes; left behind, it
@@ -139,7 +169,12 @@ async function clearCheckoutData() {
   // history as its own.
   await db
     .delete(auditEvents)
-    .where(eq(auditEvents.entityType, "ProviderNotification"));
+    .where(
+      and(
+        eq(auditEvents.entityType, "ProviderNotification"),
+        inArray(auditEvents.entityId, OWN_NOTIFICATION_EVENT_IDS),
+      ),
+    );
   await db
     .delete(auditEvents)
     .where(eq(auditEvents.guestSessionId, GUEST_SESSION_ID));
