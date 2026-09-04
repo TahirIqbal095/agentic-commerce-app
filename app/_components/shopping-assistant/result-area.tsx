@@ -43,7 +43,7 @@ export function ResultArea({
   currentCart,
   cartControls,
   checkoutSessions,
-  showCheckoutTimeline,
+  timelineRailEntryId,
   onApproveCheckout,
   onRetryCheckout,
   onCheckCheckoutStatus,
@@ -58,8 +58,13 @@ export function ResultArea({
   currentCart: CartView | null;
   cartControls: CartControls;
   checkoutSessions: Record<string, CheckoutSession>;
-  /** False while the rail beside the Conversation is the Timeline's home. */
-  showCheckoutTimeline: boolean;
+  /**
+   * The Transcript entry whose Checkout Timeline the rail beside the
+   * Conversation is showing, if any. Only that entry's status card yields its
+   * Timeline; every other checkout keeps its own, so each account appears
+   * exactly once rather than the rail's checkout silencing all of them.
+   */
+  timelineRailEntryId: string | null;
   onApproveCheckout: (entry: CheckoutActionEntry) => void;
   onRetryCheckout: (entry: CheckoutActionEntry) => void;
   onCheckCheckoutStatus: (entry: CheckoutActionEntry) => void;
@@ -92,7 +97,7 @@ export function ResultArea({
                   currentCart={currentCart}
                   cartControls={cartControls}
                   session={checkoutSessions[entry.id]}
-                  showTimeline={showCheckoutTimeline}
+                  showTimeline={entry.id !== timelineRailEntryId}
                   onApprove={onApproveCheckout}
                   onRetry={onRetryCheckout}
                   onCheckStatus={onCheckCheckoutStatus}
@@ -202,7 +207,7 @@ export function ResultArea({
                         currentCart={currentCart}
                         cartControls={cartControls}
                         session={checkoutSessions[String(turn.id)]}
-                        showTimeline={showCheckoutTimeline}
+                        showTimeline={String(turn.id) !== timelineRailEntryId}
                         onApprove={onApproveCheckout}
                         onRetry={onRetryCheckout}
                         onCheckStatus={onCheckCheckoutStatus}

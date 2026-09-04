@@ -1,4 +1,4 @@
-import type { JSDOM } from "jsdom";
+import { JSDOM } from "jsdom";
 import React from "react";
 import type { TestContext } from "node:test";
 import { answerMediaQueries, installBrowser } from "./browser";
@@ -38,6 +38,59 @@ export const readyCart: CartView = {
 
 export const PROPOSAL_ID = "61000000-0000-4000-8000-000000000001";
 export const ORDER_ID = "71000000-0000-4000-8000-000000000001";
+
+/** The exact amount the ready Cart's Approval control names. */
+export const APPROVE_CONTROL =
+  "Approve and pay \u20b915,997 with Razorpay Test Checkout";
+
+/** A fresh window for one Storefront behavior test. */
+export function storefrontWindow() {
+  return new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+}
+
+/**
+ * The ticket the Payment Attempt route hands back for the ready Cart.
+ *
+ * It names the verified Provider Order managed Checkout may be opened
+ * against, which is the same for every case that gets that far.
+ */
+export function paymentAttemptTicket() {
+  return Response.json({
+    data: {
+      status: "OPENED",
+      attemptId: "91000000-0000-4000-8000-000000000001",
+      attemptNumber: 1,
+      keyId: "rzp_test_examplekey",
+      providerOrderId: "order_TEST0000000001",
+      amountMinor: readyCart.subtotalMinor,
+      currency: "INR",
+      checkout: statusView({
+        status: "PAYMENT_PENDING",
+        launchesUsed: 1,
+        launchesRemaining: 2,
+      }),
+    },
+  });
+}
+
+/**
+ * Drives a Customer from their Cart to an approved checkout: open the Cart,
+ * press Check out, read the proposal, approve the exact amount.
+ */
+export async function approveFromCart(
+  opened: Awaited<ReturnType<typeof openStorefront>>,
+) {
+  const drawer = await opened.openCart();
+  await opened.user.click(
+    opened.within(drawer).getByRole("button", { name: "Check out" }),
+  );
+  await opened.view.findByRole("region", { name: "Checkout proposal" });
+  await opened.user.click(
+    opened.view.getByRole("button", { name: APPROVE_CONTROL }),
+  );
+}
 
 /**
  * Builds the checkout entry the proposal route records, prepared "now" so its

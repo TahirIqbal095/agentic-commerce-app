@@ -1,23 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { JSDOM } from "jsdom";
 import {
   ORDER_ID,
+  approveFromCart,
   openStorefront,
+  paymentAttemptTicket,
   preparedEntry,
-  readyCart,
   statusView,
+  storefrontWindow,
 } from "./_test/checkout";
 import type { CheckoutStatusView } from "@/modules/checkout/checkout-status";
 import { TIMELINE_RAIL_MEDIA_QUERY } from "./_components/shopping-assistant/checkout-timeline-rail";
-
-function browser() {
-  return new JSDOM("<!doctype html><html><body></body></html>", {
-    url: "http://localhost/",
-  });
-}
-
-const APPROVED = "Approve and pay ₹15,997 with Razorpay Test Checkout";
 
 const capturedPayment = {
   outcome: "COMPLETED" as const,
@@ -58,36 +51,18 @@ async function approveAndPay(
     matchesMedia?: (query: string) => boolean;
   },
 ) {
-  const dom = browser();
-  const opened = await openStorefront(t, dom, {
+  const opened = await openStorefront(t, storefrontWindow(), {
     launch: options.launch,
     matchesMedia: options.matchesMedia,
     routes: {
       proposal: () => Response.json({ data: preparedEntry() }),
       approval: () => Response.json({ data: statusView() }),
-      paymentAttempt: () =>
-        Response.json({
-          data: {
-            status: "OPENED",
-            attemptId: "91000000-0000-4000-8000-000000000001",
-            attemptNumber: 1,
-            keyId: "rzp_test_examplekey",
-            providerOrderId: "order_TEST0000000001",
-            amountMinor: readyCart.subtotalMinor,
-            currency: "INR",
-            checkout: statusView({ status: "PAYMENT_PENDING", launchesUsed: 1, launchesRemaining: 2 }),
-          },
-        }),
+      paymentAttempt: paymentAttemptTicket,
       callback: () => Response.json({ data: options.afterCallback }),
     },
   });
 
-  const drawer = await opened.openCart();
-  await opened.user.click(
-    opened.within(drawer).getByRole("button", { name: "Check out" }),
-  );
-  await opened.view.findByRole("region", { name: "Checkout proposal" });
-  await opened.user.click(opened.view.getByRole("button", { name: APPROVED }));
+  await approveFromCart(opened);
   // A settled checkout lands the Customer in their Cart. These cases are about
   // the checkout card behind it, so the landing is dismissed as a Customer
   // would dismiss it before reading on.
@@ -301,5 +276,52 @@ test("on a wide viewport the Checkout Timeline reads beside the Conversation, no
       .getAllByRole("listitem")
       .map((step) => within(step).getByRole("heading").textContent),
     paidTimeline.map((entry) => entry.title),
+  );
+});
+
+test("with several checkouts approved, each Timeline still has exactly one home", async (t) => {
+  const first = preparedEntry();
+  const second = { ...preparedEntry(), id: "51000000-0000-4000-8000-000000000010" };
+  const pending = statusView({
+    status: "PAYMENT_PENDING",
+    launchesUsed: 1,
+    launchesRemaining: 2,
+    timeline: timeline([
+      ["Order created", "An Order was created from the approved proposal."],
+    ]),
+  });
+  let prepared = 0;
+  const opened = await openStorefront(t, storefrontWindow(), {
+    matchesMedia: (query) => query === TIMELINE_RAIL_MEDIA_QUERY,
+    launch: () => ({ outcome: "DISMISSED" as const }),
+    routes: {
+      proposal: () =>
+        Response.json({ data: (prepared += 1) === 1 ? first : second }),
+      approval: () => Response.json({ data: statusView() }),
+      paymentAttempt: paymentAttemptTicket,
+      callback: () => Response.json({ data: pending }),
+    },
+  });
+
+  for (let checkout = 0; checkout < 2; checkout += 1) {
+    await approveFromCart(opened);
+    await opened.view.findAllByRole("region", { name: "Checkout status" });
+  }
+
+  // The rail shows the checkout the Customer is working on; the earlier one
+  // keeps its account in its own card. Neither checkout loses its Timeline,
+  // and neither has two.
+  const cards = opened.view.getAllByRole("region", { name: "Checkout status" });
+  assert.equal(cards.length, 2);
+  assert.equal(
+    opened.view.getAllByRole("region", { name: "Checkout timeline" }).length,
+    2,
+  );
+  assert.ok(
+    opened.within(cards[0]).getByRole("region", { name: "Checkout timeline" }),
+  );
+  assert.equal(
+    opened.within(cards[1]).queryByRole("region", { name: "Checkout timeline" }),
+    null,
   );
 });

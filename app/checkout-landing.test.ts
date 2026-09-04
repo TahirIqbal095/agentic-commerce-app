@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { JSDOM } from "jsdom";
 import {
+  approveFromCart,
   openStorefront,
+  paymentAttemptTicket,
   preparedEntry,
   readyCart,
   statusView,
+  storefrontWindow,
 } from "./_test/checkout";
 import type { CartView } from "@/modules/cart/cart-view";
 import type { CheckoutStatusView } from "@/modules/checkout/checkout-status";
@@ -19,14 +21,6 @@ import type { CheckoutStatusView } from "@/modules/checkout/checkout-status";
  * unknown, and says it once rather than every time the same outcome is read
  * again.
  */
-
-function browser() {
-  return new JSDOM("<!doctype html><html><body></body></html>", {
-    url: "http://localhost/",
-  });
-}
-
-const APPROVED = "Approve and pay ₹15,997 with Razorpay Test Checkout";
 
 const capturedPayment = {
   outcome: "COMPLETED" as const,
@@ -52,7 +46,6 @@ const UNPAID_MESSAGE =
 
 async function approveAndPay(
   t: Parameters<typeof openStorefront>[0],
-  dom: JSDOM,
   options: {
     launch: () => Awaited<
       ReturnType<NonNullable<Parameters<typeof openStorefront>[2]>["launch"] & object>
@@ -62,52 +55,36 @@ async function approveAndPay(
     reconcile?: () => Response;
   },
 ) {
-  let checkoutStarted = false;
-  const opened = await openStorefront(t, dom, {
+  let hasSettled = false;
+  const opened = await openStorefront(t, storefrontWindow(), {
     launch: options.launch,
     routes: {
       cartRead: () =>
         Response.json({
           data:
-            checkoutStarted && options.cartAfterCheckout
+            hasSettled && options.cartAfterCheckout
               ? options.cartAfterCheckout
               : readyCart,
         }),
       proposal: () => Response.json({ data: preparedEntry() }),
       approval: () => Response.json({ data: statusView() }),
-      paymentAttempt: () =>
-        Response.json({
-          data: {
-            status: "OPENED",
-            attemptId: "91000000-0000-4000-8000-000000000001",
-            attemptNumber: 1,
-            keyId: "rzp_test_examplekey",
-            providerOrderId: "order_TEST0000000001",
-            amountMinor: readyCart.subtotalMinor,
-            currency: "INR",
-            checkout: statusView({ status: "PAYMENT_PENDING" }),
-          },
-        }),
+      paymentAttempt: paymentAttemptTicket,
       callback: () => {
-        checkoutStarted = true;
+        // A captured payment converts the Cart it paid for, so every Cart read
+        // from here on is of the fresh Cart that replaced it.
+        hasSettled = true;
         return Response.json({ data: options.afterCallback });
       },
       reconcile: options.reconcile,
     },
   });
 
-  const drawer = await opened.openCart();
-  await opened.user.click(
-    opened.within(drawer).getByRole("button", { name: "Check out" }),
-  );
-  await opened.view.findByRole("region", { name: "Checkout proposal" });
-  await opened.user.click(opened.view.getByRole("button", { name: APPROVED }));
+  await approveFromCart(opened);
   return opened;
 }
 
 test("a captured payment lands the Customer in an empty Cart that says the payment completed", async (t) => {
-  const dom = browser();
-  const { view, user, within } = await approveAndPay(t, dom, {
+  const { view, user, within } = await approveAndPay(t, {
     launch: () => capturedPayment,
     afterCallback: statusView({ status: "PAID", launchesUsed: 1 }),
     cartAfterCheckout: freshCart,
@@ -123,8 +100,7 @@ test("a captured payment lands the Customer in an empty Cart that says the payme
 });
 
 test("an Order that can no longer be paid lands the Customer in their Cart with its Items intact", async (t) => {
-  const dom = browser();
-  const { view, within } = await approveAndPay(t, dom, {
+  const { view, within } = await approveAndPay(t, {
     launch: () => ({
       outcome: "FAILED" as const,
       description: "Your test card was declined.",
@@ -147,8 +123,7 @@ test("an Order that can no longer be paid lands the Customer in their Cart with 
 });
 
 test("a checkout whose outcome is unknown opens no Cart and claims neither result", async (t) => {
-  const dom = browser();
-  const { view } = await approveAndPay(t, dom, {
+  const { view } = await approveAndPay(t, {
     launch: () => ({ outcome: "DISMISSED" as const }),
     afterCallback: statusView({
       status: "PAYMENT_PENDING",
@@ -169,7 +144,6 @@ test("a checkout whose outcome is unknown opens no Cart and claims neither resul
 });
 
 test("asking Razorpay for the status of a settled checkout restages no Cart", async (t) => {
-  const dom = browser();
   const settled = statusView({
     status: "PAID",
     launchesUsed: 1,
@@ -179,7 +153,7 @@ test("asking Razorpay for the status of a settled checkout restages no Cart", as
       canCheckStatus: true,
     },
   });
-  const { view, user, within } = await approveAndPay(t, dom, {
+  const { view, user, within } = await approveAndPay(t, {
     launch: () => capturedPayment,
     afterCallback: settled,
     cartAfterCheckout: freshCart,
@@ -199,8 +173,7 @@ test("asking Razorpay for the status of a settled checkout restages no Cart", as
 });
 
 test("a Customer who dismissed the message and reopened the Cart sees the Cart without it", async (t) => {
-  const dom = browser();
-  const { view, user, within } = await approveAndPay(t, dom, {
+  const { view, user, within } = await approveAndPay(t, {
     launch: () => capturedPayment,
     afterCallback: statusView({ status: "PAID", launchesUsed: 1 }),
     cartAfterCheckout: freshCart,

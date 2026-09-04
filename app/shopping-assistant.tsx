@@ -136,10 +136,11 @@ function terminalCartOutcome(checkout: CheckoutStatusView): CartOutcome | null {
 function mostRecentApprovedCheckout(
   entries: TranscriptEntry[],
   sessions: Record<string, CheckoutSession>,
-): CheckoutStatusView | null {
+): { entryId: string; checkout: CheckoutStatusView } | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const checkout = sessions[String(entries[index].id)]?.checkout;
-    if (checkout) return checkout;
+    const entryId = String(entries[index].id);
+    const checkout = sessions[entryId]?.checkout;
+    if (checkout) return { entryId, checkout };
   }
   return null;
 }
@@ -1029,7 +1030,16 @@ export function ShoppingAssistant({
   };
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
+    <main
+      className={cn(
+        "min-h-screen bg-background text-foreground",
+        // The Storefront widens to make room for the rail rather than taking
+        // the room out of the Conversation's reading measure. The header bar
+        // reads the same measure, so the Brand mark and the Cart control stay
+        // aligned with the Conversation they belong to at either width.
+        railCheckout ? "[--storefront-column:86rem]" : "[--storefront-column:72rem]",
+      )}
+    >
       <Header
         brandName={brandName}
         cart={cart}
@@ -1053,16 +1063,11 @@ export function ShoppingAssistant({
       />
 
       <div
-        className={cn(
-          "mx-auto flex min-h-[calc(100vh-var(--storefront-header-height))] w-full flex-col px-4 pb-44 sm:px-8 sm:pb-48",
-          // The Storefront widens to make room for the rail rather than taking
-          // the room out of the Conversation's reading measure.
-          railCheckout ? "max-w-[86rem]" : "max-w-6xl",
-        )}
+        className="mx-auto flex min-h-[calc(100vh-var(--storefront-header-height))] w-full max-w-[var(--storefront-column)] flex-col px-4 pb-44 sm:px-8 sm:pb-48"
       >
         <div className="flex w-full flex-1 gap-8">
           {railCheckout ? (
-            <CheckoutTimelineRail entries={railCheckout.timeline} />
+            <CheckoutTimelineRail entries={railCheckout.checkout.timeline} />
           ) : null}
           <div
             className={cn(
@@ -1091,7 +1096,7 @@ export function ShoppingAssistant({
                   currentCart={cart}
                   cartControls={cartControls}
                   checkoutSessions={checkoutSessions}
-                  showCheckoutTimeline={railCheckout === null}
+                  timelineRailEntryId={railCheckout?.entryId ?? null}
                   onApproveCheckout={approveCheckout}
                   onRetryCheckout={retryCheckout}
                   onCheckCheckoutStatus={checkCheckoutStatus}

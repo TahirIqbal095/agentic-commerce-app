@@ -4,9 +4,12 @@ import { JSDOM } from "jsdom";
 import React from "react";
 import { installBrowser, scrollTranscriptTo } from "./_test/browser";
 import {
+  APPROVE_CONTROL,
   openStorefront,
+  paymentAttemptTicket,
   preparedEntry,
   statusView,
+  storefrontWindow,
 } from "./_test/checkout";
 import type { CurrentConversation } from "@/modules/agent/conversation-state";
 
@@ -19,12 +22,6 @@ import type { CurrentConversation } from "@/modules/agent/conversation-state";
  * re-reading an earlier Recommendation being pulled back down is the defect
  * these cases exist to keep out.
  */
-
-function browser() {
-  return new JSDOM("<!doctype html><html><body></body></html>", {
-    url: "http://localhost/",
-  });
-}
 
 /** A Transcript taller than the viewport, with the Customer at its bottom. */
 const AT_THE_BOTTOM = { documentHeight: 6000, scrollY: 6000 - 768 };
@@ -128,7 +125,7 @@ async function openTranscript(
 }
 
 test("sending a message scrolls the Transcript to what the Customer just sent", async (t) => {
-  const dom = browser();
+  const dom = storefrontWindow();
   const transcript = await openTranscript(t, dom);
   scrollTranscriptTo(dom, RE_READING_EARLIER);
   const before = transcript.scrolls.length;
@@ -143,7 +140,7 @@ test("sending a message scrolls the Transcript to what the Customer just sent", 
 });
 
 test("an answer arriving while the Customer re-reads an earlier Turn leaves them there", async (t) => {
-  const dom = browser();
+  const dom = storefrontWindow();
   const transcript = await openTranscript(t, dom);
   await transcript.say("Show me running shoes");
   scrollTranscriptTo(dom, RE_READING_EARLIER);
@@ -156,7 +153,7 @@ test("an answer arriving while the Customer re-reads an earlier Turn leaves them
 });
 
 test("an answer arriving while the Customer waits at the bottom is scrolled into view", async (t) => {
-  const dom = browser();
+  const dom = storefrontWindow();
   const transcript = await openTranscript(t, dom);
   await transcript.say("Show me running shoes");
   scrollTranscriptTo(dom, AT_THE_BOTTOM);
@@ -169,7 +166,7 @@ test("an answer arriving while the Customer waits at the bottom is scrolled into
 });
 
 test("a resumed Conversation lands at the most recent Turn without gliding through it", async (t) => {
-  const dom = browser();
+  const dom = storefrontWindow();
   const transcript = await openTranscript(t, dom, {
     resumed: conversationWith(3),
   });
@@ -185,25 +182,13 @@ test("a resumed Conversation lands at the most recent Turn without gliding throu
 });
 
 test("the Check out control scrolls to its entry, and a status change on that card does not", async (t) => {
-  const dom = browser();
+  const dom = storefrontWindow();
   const opened = await openStorefront(t, dom, {
     launch: () => ({ outcome: "DISMISSED" as const }),
     routes: {
       proposal: () => Response.json({ data: preparedEntry() }),
       approval: () => Response.json({ data: statusView() }),
-      paymentAttempt: () =>
-        Response.json({
-          data: {
-            status: "OPENED",
-            attemptId: "91000000-0000-4000-8000-000000000001",
-            attemptNumber: 1,
-            keyId: "rzp_test_examplekey",
-            providerOrderId: "order_TEST0000000001",
-            amountMinor: 1599700,
-            currency: "INR",
-            checkout: statusView({ status: "PAYMENT_PENDING" }),
-          },
-        }),
+      paymentAttempt: paymentAttemptTicket,
       callback: () =>
         Response.json({
           data: statusView({
@@ -230,9 +215,7 @@ test("the Check out control scrolls to its entry, and a status change on that ca
   scrollTranscriptTo(dom, RE_READING_EARLIER);
   const beforeApproval = opened.scrolls.length;
   await opened.user.click(
-    opened.view.getByRole("button", {
-      name: "Approve and pay ₹15,997 with Razorpay Test Checkout",
-    }),
+    opened.view.getByRole("button", { name: APPROVE_CONTROL }),
   );
   await opened.view.findByRole("region", { name: "Checkout status" });
 

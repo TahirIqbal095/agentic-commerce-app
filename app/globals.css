@@ -73,6 +73,13 @@
    * each surface that has to start below it.
    */
   --storefront-header-height: 3.5rem;
+  /*
+   * The Storefront's outer measure. The pinned header bar and the content
+   * beneath it are held to the same one, so the Brand mark and the Cart
+   * control stay aligned with the Conversation they belong to — including
+   * when the Storefront widens to make room for the Checkout Timeline rail.
+   */
+  --storefront-column: 72rem;
 }
 
 @theme inline {

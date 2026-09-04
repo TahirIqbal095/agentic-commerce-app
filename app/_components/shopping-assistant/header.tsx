@@ -52,7 +52,7 @@ export function Header({
 }) {
   return (
     <header className="sticky top-0 z-40 h-[var(--storefront-header-height)] border-b-2 border-sidebar-border bg-background">
-      <div className="mx-auto flex h-full w-full max-w-6xl items-center justify-between gap-3 px-4 sm:px-8">
+      <div className="mx-auto flex h-full w-full max-w-[var(--storefront-column)] items-center justify-between gap-3 px-4 sm:px-8">
         <div
           className="flex items-center gap-2.5"
           aria-label={`${brandName} Storefront`}
