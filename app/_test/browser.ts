@@ -94,6 +94,38 @@ export function installBrowser(dom: JSDOM) {
 }
 
 /**
+ * Answers the window's media queries with a predicate.
+ *
+ * The Storefront resolves the Checkout Timeline's breakpoint in JavaScript, so
+ * a test about a wide viewport has to say which queries a wide viewport
+ * matches. Every other query keeps its own answer, so widening the viewport
+ * does not accidentally also claim the Customer asked for reduced motion.
+ *
+ * @param dom - Window the Storefront will be rendered into.
+ * @param matches - Whether one query matches.
+ */
+export function answerMediaQueries(
+  dom: JSDOM,
+  matches: (query: string) => boolean,
+) {
+  Object.defineProperty(dom.window, "matchMedia", {
+    configurable: true,
+    value: (query: string) => ({
+      matches: matches(query),
+      media: query,
+      onchange: null,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent() {
+        return false;
+      },
+    }),
+  });
+}
+
+/**
  * Puts the Customer at one position in a Transcript of a given height, and
  * tells the window about it the way a real scroll would.
  *

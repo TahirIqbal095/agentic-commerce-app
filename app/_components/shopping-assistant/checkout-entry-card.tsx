@@ -37,6 +37,7 @@ export function CheckoutEntryCard({
   currentCart,
   cartControls,
   session,
+  showTimeline = true,
   onApprove,
   onRetry,
   onCheckStatus,
@@ -46,6 +47,8 @@ export function CheckoutEntryCard({
   currentCart: CartView | null;
   cartControls: CartControls;
   session?: CheckoutSession;
+  /** False while the rail beside the Conversation is the Timeline's home. */
+  showTimeline?: boolean;
   onApprove?: (entry: CheckoutActionEntry) => void;
   onRetry?: (entry: CheckoutActionEntry) => void;
   onCheckStatus?: (entry: CheckoutActionEntry) => void;
@@ -62,6 +65,7 @@ export function CheckoutEntryCard({
         checkout={session.checkout}
         isBusy={session.isPaying}
         error={session.error}
+        showTimeline={showTimeline}
         onRetry={onRetry ? () => onRetry(entry) : undefined}
         onCheckStatus={
           onCheckStatus ? () => onCheckStatus(entry) : undefined

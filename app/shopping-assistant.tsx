@@ -6,9 +6,14 @@ import { Composer } from "./_components/shopping-assistant/composer";
 import type { CartLoadState } from "./_components/shopping-assistant/cart-drawer";
 import type { CartItemCommand } from "./_components/shopping-assistant/cart-panel";
 import { ContextSummary } from "./_components/shopping-assistant/context-summary";
+import {
+  CheckoutTimelineRail,
+  TIMELINE_RAIL_MEDIA_QUERY,
+} from "./_components/shopping-assistant/checkout-timeline-rail";
 import { Header } from "./_components/shopping-assistant/header";
 import { Hero } from "./_components/shopping-assistant/hero";
 import { ProductDetails } from "./_components/shopping-assistant/product-details";
+import { useMediaQuery } from "./_components/shopping-assistant/media-query";
 import { ResultArea } from "./_components/shopping-assistant/result-area";
 import { useTranscriptScroll } from "./_components/shopping-assistant/transcript-scroll";
 import type {
@@ -96,6 +101,28 @@ function isTurn(
   turnId: string,
 ): entry is Extract<TranscriptEntry, { customerMessage: string }> {
   return entry.id === turnId && !isCustomerActionEntry(entry);
+}
+
+/**
+ * The checkout the rail describes: the most recently approved one.
+ *
+ * A Conversation may hold several checkouts, and the one the Customer is
+ * working on is the last that reached an Order. It keeps the rail for the rest
+ * of the Conversation, including after it is paid, because a record of a
+ * purchase is most useful just after the purchase.
+ *
+ * @returns That checkout's authoritative state, or `null` when the Customer
+ *   has approved nothing and the Conversation should have the full width.
+ */
+function mostRecentApprovedCheckout(
+  entries: TranscriptEntry[],
+  sessions: Record<string, CheckoutSession>,
+): CheckoutStatusView | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const checkout = sessions[String(entries[index].id)]?.checkout;
+    if (checkout) return checkout;
+  }
+  return null;
 }
 
 /**
@@ -204,6 +231,12 @@ export function ShoppingAssistant({
     entryCount: entries.length,
     answeredCount: entries.filter(isAnswered).length,
   });
+  // Which arrangement the Checkout Timeline gets is resolved here rather than
+  // by rendering both and hiding one, so the account appears exactly once in
+  // the document however wide the viewport is.
+  const railCheckout = useMediaQuery(TIMELINE_RAIL_MEDIA_QUERY)
+    ? mostRecentApprovedCheckout(entries, checkoutSessions)
+    : null;
 
   /**
    * Returns the idempotency key for one Checkout Proposal's Approval.
@@ -414,6 +447,9 @@ export function ShoppingAssistant({
     setEntries([]);
     setContextSummary(null);
     setSelectedProduct(null);
+    // The rail follows the Conversation it belongs to, so a fresh Conversation
+    // does not open beside the previous one's checkout.
+    setCheckoutSessions({});
   }
 
   /**
@@ -926,41 +962,54 @@ export function ShoppingAssistant({
         onCartOpenChange={setIsCartOpen}
       />
 
-      <div className="mx-auto flex min-h-[calc(100vh-var(--storefront-header-height))] w-full max-w-6xl flex-col px-4 pb-44 sm:px-8 sm:pb-48">
-        <div
-          className={cn(
-            "mx-auto flex w-full max-w-4xl flex-1 flex-col py-14 sm:py-20",
-            entries.length === 0 ? "justify-center" : "justify-start",
-          )}
-        >
-          {entries.length === 0 ? (
-            <Hero brandName={brandName} onSuggestion={setPrompt} />
-          ) : (
-            <>
-              {contextSummary ? (
-                <ContextSummary
-                  constraints={contextSummary}
-                  disabled={isLoading}
-                  onRemove={removeConstraint}
+      <div
+        className={cn(
+          "mx-auto flex min-h-[calc(100vh-var(--storefront-header-height))] w-full flex-col px-4 pb-44 sm:px-8 sm:pb-48",
+          // The Storefront widens to make room for the rail rather than taking
+          // the room out of the Conversation's reading measure.
+          railCheckout ? "max-w-[86rem]" : "max-w-6xl",
+        )}
+      >
+        <div className="flex w-full flex-1 gap-8">
+          {railCheckout ? (
+            <CheckoutTimelineRail entries={railCheckout.timeline} />
+          ) : null}
+          <div
+            className={cn(
+              "mx-auto flex w-full max-w-4xl flex-1 flex-col py-14 sm:py-20",
+              entries.length === 0 ? "justify-center" : "justify-start",
+            )}
+          >
+            {entries.length === 0 ? (
+              <Hero brandName={brandName} onSuggestion={setPrompt} />
+            ) : (
+              <>
+                {contextSummary ? (
+                  <ContextSummary
+                    constraints={contextSummary}
+                    disabled={isLoading}
+                    onRemove={removeConstraint}
+                  />
+                ) : null}
+                <ResultArea
+                  isLoading={isLoading}
+                  onViewProduct={setSelectedProduct}
+                  onAddProduct={addProduct}
+                  addingProductIds={addingProductIds}
+                  cartFeedback={cartFeedback}
+                  entries={entries}
+                  currentCart={cart}
+                  cartControls={cartControls}
+                  checkoutSessions={checkoutSessions}
+                  showCheckoutTimeline={railCheckout === null}
+                  onApproveCheckout={approveCheckout}
+                  onRetryCheckout={retryCheckout}
+                  onCheckCheckoutStatus={checkCheckoutStatus}
+                  onReturnToShopping={returnToShopping}
                 />
-              ) : null}
-              <ResultArea
-                isLoading={isLoading}
-                onViewProduct={setSelectedProduct}
-                onAddProduct={addProduct}
-                addingProductIds={addingProductIds}
-                cartFeedback={cartFeedback}
-                entries={entries}
-                currentCart={cart}
-                cartControls={cartControls}
-                checkoutSessions={checkoutSessions}
-                onApproveCheckout={approveCheckout}
-                onRetryCheckout={retryCheckout}
-                onCheckCheckoutStatus={checkCheckoutStatus}
-                onReturnToShopping={returnToShopping}
-              />
-            </>
-          )}
+              </>
+            )}
+          </div>
         </div>
       </div>
 

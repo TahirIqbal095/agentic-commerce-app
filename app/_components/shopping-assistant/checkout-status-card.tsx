@@ -43,12 +43,14 @@ const OUTCOME_UNKNOWN_REASSURANCE =
 
 /**
  * Renders one checkout after Approval: what state it is in, what the Customer
- * may still do, and the Checkout Timeline that explains how it got here.
+ * may still do, and — unless the rail beside the Conversation is showing it —
+ * the Checkout Timeline that explains how it got here.
  */
 export function CheckoutStatusCard({
   checkout,
   isBusy = false,
   error,
+  showTimeline = true,
   onRetry,
   onCheckStatus,
   onReturnToShopping,
@@ -56,6 +58,11 @@ export function CheckoutStatusCard({
   checkout: CheckoutStatusView;
   isBusy?: boolean;
   error?: string | null;
+  /**
+   * Whether this card is the Timeline's home. It is false only when the rail
+   * has it, so a Customer is never reading two copies of one account.
+   */
+  showTimeline?: boolean;
   onRetry?: () => void;
   onCheckStatus?: () => void;
   onReturnToShopping?: () => void;
@@ -171,7 +178,11 @@ export function CheckoutStatusCard({
         </p>
       </div>
 
-      <CheckoutTimeline entries={checkout.timeline} />
+      {showTimeline && checkout.timeline.length > 0 ? (
+        <div className="border-t border-border">
+          <CheckoutTimeline entries={checkout.timeline} />
+        </div>
+      ) : null}
 
       <p className="border-t border-border bg-muted px-5 py-3 text-xs text-muted-foreground sm:px-6">
         This checkout reserves no inventory and does not arrange fulfilment.

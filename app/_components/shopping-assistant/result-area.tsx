@@ -43,6 +43,7 @@ export function ResultArea({
   currentCart,
   cartControls,
   checkoutSessions,
+  showCheckoutTimeline,
   onApproveCheckout,
   onRetryCheckout,
   onCheckCheckoutStatus,
@@ -57,6 +58,8 @@ export function ResultArea({
   currentCart: CartView | null;
   cartControls: CartControls;
   checkoutSessions: Record<string, CheckoutSession>;
+  /** False while the rail beside the Conversation is the Timeline's home. */
+  showCheckoutTimeline: boolean;
   onApproveCheckout: (entry: CheckoutActionEntry) => void;
   onRetryCheckout: (entry: CheckoutActionEntry) => void;
   onCheckCheckoutStatus: (entry: CheckoutActionEntry) => void;
@@ -89,6 +92,7 @@ export function ResultArea({
                   currentCart={currentCart}
                   cartControls={cartControls}
                   session={checkoutSessions[entry.id]}
+                  showTimeline={showCheckoutTimeline}
                   onApprove={onApproveCheckout}
                   onRetry={onRetryCheckout}
                   onCheckStatus={onCheckCheckoutStatus}
@@ -198,6 +202,7 @@ export function ResultArea({
                         currentCart={currentCart}
                         cartControls={cartControls}
                         session={checkoutSessions[String(turn.id)]}
+                        showTimeline={showCheckoutTimeline}
                         onApprove={onApproveCheckout}
                         onRetry={onRetryCheckout}
                         onCheckStatus={onCheckCheckoutStatus}

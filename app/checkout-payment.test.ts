@@ -9,6 +9,7 @@ import {
   statusView,
 } from "./_test/checkout";
 import type { CheckoutStatusView } from "@/modules/checkout/checkout-status";
+import { TIMELINE_RAIL_MEDIA_QUERY } from "./_components/shopping-assistant/checkout-timeline-rail";
 
 function browser() {
   return new JSDOM("<!doctype html><html><body></body></html>", {
@@ -54,11 +55,13 @@ async function approveAndPay(
   options: {
     launch: () => Awaited<ReturnType<NonNullable<Parameters<typeof openStorefront>[2]>["launch"] & object>>;
     afterCallback: CheckoutStatusView;
+    matchesMedia?: (query: string) => boolean;
   },
 ) {
   const dom = browser();
   const opened = await openStorefront(t, dom, {
     launch: options.launch,
+    matchesMedia: options.matchesMedia,
     routes: {
       proposal: () => Response.json({ data: preparedEntry() }),
       approval: () => Response.json({ data: statusView() }),
@@ -254,5 +257,42 @@ test("every checkout surface repeats that this is Test Mode", async (t) => {
     within(card).getByText(
       "This checkout reserves no inventory and does not arrange fulfilment.",
     ),
+  );
+});
+
+test("on a narrow viewport the Checkout Timeline reads inside the checkout status card", async (t) => {
+  const { view, within } = await approveAndPay(t, {
+    launch: () => capturedPayment,
+    afterCallback: statusView({ status: "PAID", timeline: paidTimeline }),
+  });
+
+  const card = await view.findByRole("region", { name: "Checkout status" });
+  assert.equal(
+    view.getAllByRole("region", { name: "Checkout timeline" }).length,
+    1,
+  );
+  assert.ok(within(card).getByRole("region", { name: "Checkout timeline" }));
+});
+
+test("on a wide viewport the Checkout Timeline reads beside the Conversation, not inside the card", async (t) => {
+  const { view, within } = await approveAndPay(t, {
+    launch: () => capturedPayment,
+    afterCallback: statusView({ status: "PAID", timeline: paidTimeline }),
+    matchesMedia: (query) => query === TIMELINE_RAIL_MEDIA_QUERY,
+  });
+
+  const card = await view.findByRole("region", { name: "Checkout status" });
+  // Exactly one home: the account a Customer reads is never two accounts.
+  const timelines = view.getAllByRole("region", { name: "Checkout timeline" });
+  assert.equal(timelines.length, 1);
+  assert.equal(
+    within(card).queryByRole("region", { name: "Checkout timeline" }),
+    null,
+  );
+  assert.deepEqual(
+    within(timelines[0])
+      .getAllByRole("listitem")
+      .map((step) => within(step).getByRole("heading").textContent),
+    paidTimeline.map((entry) => entry.title),
   );
 });

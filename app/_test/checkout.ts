@@ -1,7 +1,7 @@
 import type { JSDOM } from "jsdom";
 import React from "react";
 import type { TestContext } from "node:test";
-import { installBrowser } from "./browser";
+import { answerMediaQueries, installBrowser } from "./browser";
 import type { CartView } from "@/modules/cart/cart-view";
 import type { CheckoutLaunchResult } from "@/modules/checkout/checkout-launcher";
 import type { CheckoutActionEntry } from "@/modules/agent/customer-action-entry";
@@ -115,9 +115,12 @@ export async function openStorefront(
     cart?: CartView;
     routes?: CheckoutRoutes;
     launch?: () => Promise<CheckoutLaunchResult> | CheckoutLaunchResult;
+    /** Which media queries this Customer's viewport matches. */
+    matchesMedia?: (query: string) => boolean;
   } = {},
 ) {
   const scrolls = installBrowser(dom);
+  if (options.matchesMedia) answerMediaQueries(dom, options.matchesMedia);
   const cart = options.cart ?? readyCart;
   const routes = options.routes ?? {};
   const requests: string[] = [];
