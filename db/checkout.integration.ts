@@ -15,8 +15,12 @@ import {
   providerOrders,
   providerPayments,
 } from "@/db/schema/checkout";
+import { cartItems, carts } from "@/db/schema/cart";
 import { products } from "@/db/schema/catalog";
 import { guestSessions } from "@/db/schema/identity";
+import { createCartModule } from "@/modules/cart/cart";
+import type { CatalogProduct } from "@/modules/catalog/catalog";
+import { cartConvertedEvent } from "@/modules/checkout/checkout-audit";
 import { createCheckoutAuditLog } from "@/modules/checkout/checkout-audit";
 import {
   createCheckoutOrderStore,
@@ -43,6 +47,7 @@ import { cleanupExpiredGuestSessions } from "@/modules/identity/guest-session";
 const GUEST_SESSION_ID = "14000000-0000-4000-8000-000000000001";
 const CART_ID = "34000000-0000-4000-8000-000000000001";
 let productId: string;
+let product: CatalogProduct;
 
 /**
  * Every Razorpay Payment and event identifier this suite invents.
@@ -103,10 +108,62 @@ function proposalFor(overrides: Partial<CheckoutProposal> = {}): CheckoutProposa
   };
 }
 
-async function saveProposal(): Promise<CheckoutProposal> {
-  const proposal = proposalFor();
+async function saveProposal(
+  overrides: Partial<CheckoutProposal> = {},
+): Promise<CheckoutProposal> {
+  const proposal = proposalFor(overrides);
   await proposalStore.save(proposal, randomUUID());
   return proposal;
+}
+
+/** Gives this Guest Session an active Cart holding one Product. */
+async function saveActiveCart() {
+  const [cart] = await db
+    .insert(carts)
+    .values({ guestSessionId: GUEST_SESSION_ID, currency: "INR" })
+    .returning({ id: carts.id, version: carts.version });
+  await db.insert(cartItems).values({
+    cartId: cart.id,
+    productId,
+    quantity: 2,
+    unitPriceSnapshotMinor: 349900,
+  });
+  return cart;
+}
+
+async function readCartStatus(cartId: string) {
+  const [row] = await db
+    .select({ status: carts.status })
+    .from(carts)
+    .where(eq(carts.id, cartId));
+  return row?.status;
+}
+
+async function readOrderStatus(orderId: string) {
+  const [row] = await db
+    .select({ status: orders.status })
+    .from(orders)
+    .where(eq(orders.id, orderId));
+  return row?.status;
+}
+
+/** Confirms a capture the way both production paths do. */
+function confirmCapture(order: { id: string; cartId: string }) {
+  return orderStore.markOrderPaid({
+    orderId: order.id,
+    cartId: order.cartId,
+    now: new Date(),
+    recordConversion: (executor) =>
+      audit.record(
+        cartConvertedEvent({
+          cartId: order.cartId,
+          orderId: order.id,
+          proposalId: CART_ID,
+          guestSessionId: GUEST_SESSION_ID,
+        }),
+        executor,
+      ),
+  });
 }
 
 function consume(proposal: CheckoutProposal, approvalKey = randomUUID()) {
@@ -184,6 +241,8 @@ async function clearCheckoutData() {
   await db
     .delete(checkoutProposals)
     .where(eq(checkoutProposals.guestSessionId, GUEST_SESSION_ID));
+  // Cart Items cascade with the Cart that holds them.
+  await db.delete(carts).where(eq(carts.guestSessionId, GUEST_SESSION_ID));
 }
 
 before(async () => {
@@ -198,26 +257,44 @@ before(async () => {
   });
 
   const [existing] = await db
-    .select({ id: products.id })
+    .select({
+      id: products.id,
+      slug: products.slug,
+      name: products.name,
+      description: products.description,
+      category: products.category,
+      priceMinor: products.priceMinor,
+      currency: products.currency,
+    })
     .from(products)
     .limit(1);
-  if (existing) {
-    productId = existing.id;
-    return;
-  }
-  const [created] = await db
-    .insert(products)
-    .values({
-      name: "Integration Product",
-      slug: `integration-product-${randomUUID()}`,
-      description: "A Product that exists so Order Items have something to cite.",
-      category: "integration",
-      priceMinor: 349900,
-      currency: "INR",
-      stock: 10,
-    })
-    .returning({ id: products.id });
-  productId = created.id;
+  const row =
+    existing ??
+    (
+      await db
+        .insert(products)
+        .values({
+          name: "Integration Product",
+          slug: `integration-product-${randomUUID()}`,
+          description:
+            "A Product that exists so Order Items have something to cite.",
+          category: "integration",
+          priceMinor: 349900,
+          currency: "INR",
+          stock: 10,
+        })
+        .returning({
+          id: products.id,
+          slug: products.slug,
+          name: products.name,
+          description: products.description,
+          category: products.category,
+          priceMinor: products.priceMinor,
+          currency: products.currency,
+        })
+    )[0];
+  productId = row.id;
+  product = { ...row, inStock: true, attributes: {} };
 });
 
 after(async () => {
@@ -644,4 +721,120 @@ test("Audit Events are readable in the order they were recorded, and only when v
       ),
     );
   assert.equal(everything.length, 3);
+});
+
+test("a confirmed capture leaves the Order paid and its Cart converted in one commit", async (t) => {
+  const cart = await saveActiveCart();
+  const proposal = await saveProposal({ cartId: cart.id });
+  t.after(clearCheckoutData);
+  const outcome = await consume(proposal);
+  if (outcome.status === "REFUSED") assert.fail(outcome.reason);
+
+  await confirmCapture(outcome.order);
+
+  assert.equal(await readOrderStatus(outcome.order.id), "PAID");
+  assert.equal(await readCartStatus(cart.id), "CONVERTED");
+});
+
+test("the Customer's next Cart read after a confirmed capture is empty, and selecting again starts a fresh Cart", async (t) => {
+  const cart = await saveActiveCart();
+  const proposal = await saveProposal({ cartId: cart.id });
+  t.after(clearCheckoutData);
+  const outcome = await consume(proposal);
+  if (outcome.status === "REFUSED") assert.fail(outcome.reason);
+  const cartModule = createCartModule(GUEST_SESSION_ID);
+
+  await confirmCapture(outcome.order);
+
+  const afterPaying = await cartModule.inspect();
+  assert.deepEqual(afterPaying.items, []);
+  assert.equal(afterPaying.totalQuantity, 0);
+
+  const restarted = await cartModule.addItem(product, 1, async () => {});
+  assert.equal(restarted.totalQuantity, 1);
+  assert.notEqual(restarted.id, cart.id);
+  // The paid Cart is kept as history rather than deleted.
+  assert.equal(await readCartStatus(cart.id), "CONVERTED");
+});
+
+test("an Order that exhausted its Payment Attempts leaves its Cart active with its Items", async (t) => {
+  const cart = await saveActiveCart();
+  const proposal = await saveProposal({ cartId: cart.id });
+  t.after(clearCheckoutData);
+  const outcome = await consume(proposal);
+  if (outcome.status === "REFUSED") assert.fail(outcome.reason);
+
+  await orderStore.setOrderStatus(outcome.order.id, "PAYMENT_FAILED");
+
+  assert.equal(await readCartStatus(cart.id), "ACTIVE");
+  const stillSelected = await createCartModule(GUEST_SESSION_ID).inspect();
+  assert.equal(stillSelected.id, cart.id);
+  assert.equal(stillSelected.totalQuantity, 2);
+});
+
+test("a capture confirmed by a Provider Notification converts the Cart just as a browser callback would", async (t) => {
+  const cart = await saveActiveCart();
+  const proposal = await saveProposal({ cartId: cart.id });
+  t.after(clearCheckoutData);
+  const outcome = await consume(proposal);
+  if (outcome.status === "REFUSED") assert.fail(outcome.reason);
+  const inbox = createProviderNotificationInbox({
+    database: db,
+    orders: orderStore,
+    audit,
+  });
+  await orderStore.attachProviderOrder({
+    orderId: outcome.order.id,
+    operationId: outcome.operation.id,
+    providerOrder: {
+      providerOrderId: "order_TEST_RACED",
+      receipt: outcome.operation.id,
+      amountMinor: 699800,
+      currency: "INR",
+      providerStatus: "created",
+    },
+    notes: {},
+  });
+
+  await inbox.receive({
+    eventId: "evt_TEST_RACED",
+    eventType: "payment.captured",
+    providerOrderId: "order_TEST_RACED",
+    providerPaymentId: "pay_TEST_RACED",
+    providerStatus: "captured",
+    amountMinor: 699800,
+    currency: "INR",
+    occurredAt: new Date(),
+  });
+
+  assert.equal(await readOrderStatus(outcome.order.id), "PAID");
+  assert.equal(await readCartStatus(cart.id), "CONVERTED");
+  // The conversion is explained where the rest of the checkout is explained.
+  const timeline = await orderStore.readTimeline(proposal.id);
+  assert.ok(timeline.some((entry) => entry.eventType === "CART_CONVERTED"));
+});
+
+test("a second confirmation of the same capture converts nothing twice and never reaches the next Cart", async (t) => {
+  const cart = await saveActiveCart();
+  const proposal = await saveProposal({ cartId: cart.id });
+  t.after(clearCheckoutData);
+  const outcome = await consume(proposal);
+  if (outcome.status === "REFUSED") assert.fail(outcome.reason);
+  const cartModule = createCartModule(GUEST_SESSION_ID);
+
+  await confirmCapture(outcome.order);
+  const nextCart = await cartModule.addItem(product, 1, async () => {});
+  await confirmCapture(outcome.order);
+
+  const conversions = await db
+    .select({ id: auditEvents.id })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.entityId, cart.id),
+        eq(auditEvents.eventType, "CART_CONVERTED"),
+      ),
+    );
+  assert.equal(conversions.length, 1);
+  assert.equal(await readCartStatus(nextCart.id!), "ACTIVE");
 });

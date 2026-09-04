@@ -21,7 +21,7 @@ import { createCheckoutReadinessReview } from "@/modules/cart/checkout-readiness
 import type { RazorpayTestConfiguration } from "@/modules/payments/razorpay-config";
 import type { RazorpayProviderGateway } from "@/modules/payments/razorpay-gateway";
 import type { ProviderOrderResult } from "@/modules/payments/razorpay-tools";
-import type { CheckoutAuditLog } from "./checkout-audit";
+import { cartConvertedEvent, type CheckoutAuditLog } from "./checkout-audit";
 import {
   CHECKOUT_MAX_PAYMENT_ATTEMPTS,
   CHECKOUT_MAX_RECONCILIATION_READS,
@@ -925,7 +925,6 @@ export function createCheckoutAuthority(
         return finishOrExhaust(order, operation);
       }
 
-      await orders.setOrderStatus(order.id, "PAID");
       await audit.record({
         entityType: "ProviderPayment",
         entityId: payment.value.providerPaymentId,
@@ -964,6 +963,26 @@ export function createCheckoutAuthority(
           occurredAt: now(),
         });
       }
+
+      // The Order reaching its paid state and its Cart becoming order history
+      // commit together, so no crash can leave a Customer holding a live Cart
+      // full of Products they have already paid for.
+      await orders.markOrderPaid({
+        orderId: order.id,
+        cartId: order.cartId,
+        now: now(),
+        recordConversion: (executor) =>
+          audit.record(
+            cartConvertedEvent({
+              cartId: order.cartId,
+              orderId: order.id,
+              proposalId: order.proposalId,
+              guestSessionId: order.guestSessionId,
+              occurredAt: now(),
+            }),
+            executor,
+          ),
+      });
 
       const paid = (await orders.findOrder(order.id)) ?? { ...order, status: "PAID" as const };
       return statusFor(paid, operation);

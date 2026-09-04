@@ -22,7 +22,11 @@ import type {
   ProviderNotificationFacts,
 } from "@/modules/payments/provider-notification";
 import { notificationReportsCapture } from "@/modules/payments/provider-notification";
-import type { CheckoutAuditLog, CheckoutEventType } from "./checkout-audit";
+import {
+  cartConvertedEvent,
+  type CheckoutAuditLog,
+  type CheckoutEventType,
+} from "./checkout-audit";
 import type { CheckoutOrderStore } from "./checkout-store";
 
 export type NotificationReceipt =
@@ -88,6 +92,7 @@ export function createProviderNotificationInbox(
         orderId: providerOrders.orderId,
         proposalId: orders.proposalId,
         guestSessionId: orders.guestSessionId,
+        cartId: orders.cartId,
         status: orders.status,
       })
       .from(providerOrders)
@@ -149,7 +154,25 @@ export function createProviderNotificationInbox(
     // Customer whose payment was only ever confirmed asynchronously would read
     // a timeline that stops short of saying their Order is paid.
     if (captured && association.status !== "PAID") {
-      await options.orders.setOrderStatus(association.orderId, "PAID");
+      // The same operation the browser callback uses, so a Customer whose
+      // capture was only ever confirmed asynchronously has their Cart become
+      // order history exactly as one whose browser was still open does.
+      await options.orders.markOrderPaid({
+        orderId: association.orderId,
+        cartId: association.cartId,
+        now: now(),
+        recordConversion: (executor) =>
+          options.audit.record(
+            cartConvertedEvent({
+              cartId: association.cartId,
+              orderId: association.orderId,
+              proposalId: association.proposalId,
+              guestSessionId: association.guestSessionId,
+              occurredAt: facts.occurredAt,
+            }),
+            executor,
+          ),
+      });
       await options.audit.record({
         entityType: "Order",
         entityId: association.orderId,

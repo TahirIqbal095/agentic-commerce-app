@@ -49,8 +49,10 @@ _Avoid_: Recommendation
 **Cart**:
 A Customer's selection of the Brand's Products before an Order is created. An
 active Cart is mutable, persists independently of Conversations, and does not
-reserve Product inventory. Creating an Order converts that Cart into read-only
-history; a later selection starts a new active Cart.
+reserve Product inventory. A confirmed captured payment converts that Cart into
+read-only history, and a later selection starts a new active Cart. An Order that
+is never paid — dismissed, declined, or exhausted — leaves its Cart active and
+unchanged, so nothing is lost by a payment that did not happen.
 _Avoid_: Basket, draft order
 
 **Cart Item**:
