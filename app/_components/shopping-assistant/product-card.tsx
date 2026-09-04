@@ -46,9 +46,9 @@ export function ProductCard({
       <Card className={cn("h-full overflow-hidden", !product.inStock && "opacity-90")}>
         <div
           className={cn(
-            // Chart tokens are saturated fills in both appearances, so the block
-            // takes the theme's foreground-on-a-bright-fill token rather than the
-            // card foreground, which would invert to white and vanish.
+            // Chart tokens are saturated fills, so the block takes the theme's
+            // foreground-on-a-bright-fill token rather than the card
+            // foreground, which is tuned for the card's white surface.
             "relative grid h-28 shrink-0 place-items-center border-b-2 border-sidebar-border text-accent-foreground [&_svg]:size-12 [&_svg]:stroke-[1.25]",
             categoryBlockColor(product.category),
             !product.inStock && "grayscale",

@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { DM_Sans, Space_Mono } from "next/font/google";
 import "./globals.css";
-import { AppearanceProvider } from "./_components/shopping-assistant/appearance";
 
 /**
  * The typefaces the Brand's theme names. The theme's font tokens point at
@@ -27,12 +26,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      suppressHydrationWarning
       className={`${dmSans.variable} ${spaceMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
-        <AppearanceProvider>{children}</AppearanceProvider>
-      </body>
+      <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );
 }

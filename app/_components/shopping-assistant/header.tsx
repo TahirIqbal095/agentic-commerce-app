@@ -2,7 +2,6 @@ import { MessageSquarePlus, Radio, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { CartView } from "@/modules/cart/cart";
-import { AppearanceMenu } from "./appearance-menu";
 import type { CartControls } from "./cart-panel";
 import {
   CartDrawer,
@@ -64,7 +63,6 @@ export function Header({
             <span className="max-sm:sr-only">New conversation</span>
           </Button>
         ) : null}
-        <AppearanceMenu />
         <CartDrawer
           cart={cart}
           state={cartState}

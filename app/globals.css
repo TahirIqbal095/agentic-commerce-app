@@ -1,9 +1,14 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-@custom-variant dark (&:is(.dark *));
-
 :root {
+  /*
+   * The Brand renders in one light appearance, and says so to the browser:
+   * without this a Customer whose operating system prefers dark gets
+   * browser-darkened scrollbars, form widgets, and spinners against a light
+   * Storefront.
+   */
+  color-scheme: light;
   --background: hsl(80.0000 33.3333% 96.4706%);
   --foreground: hsl(0 0% 0%);
   --card: hsl(0 0% 100%);
@@ -62,59 +67,6 @@
    */
   --tracking-normal: 0em;
   --spacing: 0.25rem;
-}
-
-.dark {
-  --background: hsl(0 0% 0%);
-  --foreground: hsl(0 0% 100%);
-  --card: hsl(215.2941 24.6377% 13.5294%);
-  --card-foreground: hsl(0 0% 100%);
-  --popover: hsl(215.2941 24.6377% 13.5294%);
-  --popover-foreground: hsl(0 0% 100%);
-  --primary: hsl(234.4538 89.4737% 73.9216%);
-  --primary-foreground: hsl(0 0% 0%);
-  --secondary: hsl(172.4551 66.0079% 50.3922%);
-  --secondary-foreground: hsl(0 0% 0%);
-  --muted: hsl(0 0% 20%);
-  --muted-foreground: hsl(0 0% 80%);
-  --accent: hsl(45.9429 96.6851% 64.5098%);
-  --accent-foreground: hsl(0 0% 0%);
-  --destructive: hsl(0 90.6040% 70.7843%);
-  --destructive-foreground: hsl(0 0% 0%);
-  --border: hsl(0 0% 32.9412%);
-  --input: hsl(0 0% 100%);
-  --ring: hsl(234.4538 89.4737% 73.9216%);
-  --chart-1: hsl(234.4538 89.4737% 73.9216%);
-  --chart-2: hsl(172.4551 66.0079% 50.3922%);
-  --chart-3: hsl(45.9429 96.6851% 64.5098%);
-  --chart-4: hsl(328.6154 85.5263% 70.1961%);
-  --chart-5: hsl(141.8919 69.1589% 58.0392%);
-  --sidebar: hsl(0 0% 0%);
-  --sidebar-foreground: hsl(0 0% 100%);
-  --sidebar-primary: hsl(234.4538 89.4737% 73.9216%);
-  --sidebar-primary-foreground: hsl(0 0% 0%);
-  --sidebar-accent: hsl(45.9429 96.6851% 64.5098%);
-  --sidebar-accent-foreground: hsl(0 0% 0%);
-  --sidebar-border: hsl(0 0% 100%);
-  --sidebar-ring: hsl(234.4538 89.4737% 73.9216%);
-  --font-sans: var(--font-dm-sans), DM Sans, sans-serif;
-  --font-serif: var(--font-dm-sans), DM Sans, sans-serif;
-  --font-mono: var(--font-space-mono), Space Mono, monospace;
-  --radius: 1rem;
-  --shadow-x: 0px;
-  --shadow-y: 0px;
-  --shadow-blur: 0px;
-  --shadow-spread: 0px;
-  --shadow-opacity: 0.05;
-  --shadow-color: #1a1a1a;
-  --shadow-2xs: 0px 0px 0px 0px hsl(0 0% 10.1961% / 0.03);
-  --shadow-xs: 0px 0px 0px 0px hsl(0 0% 10.1961% / 0.03);
-  --shadow-sm: 0px 0px 0px 0px hsl(0 0% 10.1961% / 0.05), 0px 1px 2px -1px hsl(0 0% 10.1961% / 0.05);
-  --shadow: 0px 0px 0px 0px hsl(0 0% 10.1961% / 0.05), 0px 1px 2px -1px hsl(0 0% 10.1961% / 0.05);
-  --shadow-md: 0px 0px 0px 0px hsl(0 0% 10.1961% / 0.05), 0px 2px 4px -1px hsl(0 0% 10.1961% / 0.05);
-  --shadow-lg: 0px 0px 0px 0px hsl(0 0% 10.1961% / 0.05), 0px 4px 6px -1px hsl(0 0% 10.1961% / 0.05);
-  --shadow-xl: 0px 0px 0px 0px hsl(0 0% 10.1961% / 0.05), 0px 8px 10px -1px hsl(0 0% 10.1961% / 0.05);
-  --shadow-2xl: 0px 0px 0px 0px hsl(0 0% 10.1961% / 0.13);
 }
 
 @theme inline {
@@ -185,8 +137,8 @@
    * Focus is indicated by an offset outline in the theme's ring token rather
    * than an inner ring. The ring is a light periwinkle that would nearly
    * vanish against the light background; the offset gap gives it an edge to
-   * contrast with in both appearances, which matters most on this
-   * border-heavy design where an inner ring lands on top of a hard border.
+   * contrast with, which matters most on this border-heavy design where an
+   * inner ring lands on top of a hard border.
    */
   :focus-visible {
     @apply outline-2 outline-offset-2 outline-ring;
