@@ -1285,3 +1285,85 @@ test("a pending Conversation Turn announces the Catalog search once and reports 
   );
   assert.equal(transcript.getAttribute("aria-busy"), "false");
 });
+
+test("a pending Conversation Turn promises no Recommendation cards it may not have", async (t) => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost/",
+  });
+  installBrowser(dom);
+  let resolveTurn!: (response: Response) => void;
+  const turnResponse = new Promise<Response>((resolve) => {
+    resolveTurn = resolve;
+  });
+  globalThis.fetch = async (input, init) => {
+    if (input === "/api/agent/conversation") {
+      return Response.json({ data: null });
+    }
+    if (input === "/api/cart" && !init?.method) {
+      return Response.json({
+        data: {
+          id: null,
+          version: 0,
+          items: [],
+          totalQuantity: 0,
+          subtotalMinor: 0,
+          currency: "INR",
+        },
+      });
+    }
+    if (input === "/api/agent/message") return turnResponse;
+    throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${input}`);
+  };
+
+  const [{ render, cleanup }, userEvent, { ShoppingAssistant }] =
+    await Promise.all([
+      import("@testing-library/react"),
+      import("@testing-library/user-event").then((module) => module.default),
+      import("./shopping-assistant"),
+    ]);
+  const view = render(
+    React.createElement(ShoppingAssistant, {
+      brandName: "Arc",
+      resumeConversation: true,
+    }),
+  );
+  t.after(() => {
+    cleanup();
+    dom.window.close();
+  });
+  const user = userEvent.setup({ document: dom.window.document });
+
+  await user.type(
+    view.getByRole("textbox", { name: /message/i }),
+    "Show me running shoes",
+  );
+  await user.click(view.getByRole("button", { name: /send/i }));
+
+  await view.findByRole("region", { name: "Conversation Transcript" });
+  assert.deepEqual(
+    view.getAllByRole("status").map((status) => status.textContent),
+    ["Searching the Catalog"],
+  );
+  // The placeholders are decorative and hidden from assistive technology, so
+  // counting them is the only way to observe what a sighted Customer is being
+  // shown. Two text bars is the whole promise: three Recommendation-card
+  // shapes and three Context Summary pills would imply Recommendations and
+  // constraints this Turn may never produce.
+  assert.equal(
+    dom.window.document.querySelectorAll('[data-slot="skeleton"]').length,
+    2,
+  );
+
+  resolveTurn(
+    Response.json({
+      data: {
+        status: "COMPLETED",
+        conversationId: "41000000-0000-4000-8000-000000000001",
+        message: "Nothing in the Catalog matches that.",
+        products: [],
+      },
+    }),
+  );
+
+  assert.ok(await view.findByText("Nothing in the Catalog matches that."));
+});
