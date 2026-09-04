@@ -51,18 +51,31 @@ export function isAllowedRazorpayTool(
 }
 
 /**
- * The arguments each allowlisted capability requires, as this application
- * understands them. A remote definition that no longer accepts them is drift,
- * not a reason to send something else.
+ * The shape of each allowlisted capability, as this application depends on it.
+ *
+ * Two different facts are pinned, because they fail in two different ways.
+ * `sends` is what the Storefront always supplies and needs Razorpay to keep
+ * accepting: if `receipt` quietly stopped being accepted, a Provider Order
+ * would still be created and a lost response could never be reconciled again,
+ * which is a silent failure rather than a loud one. `requires` is what Razorpay
+ * demands of us: if it starts demanding something we do not send, every call
+ * would be rejected.
+ *
+ * Razorpay treats `receipt` as optional, so `sends` is deliberately wider than
+ * `requires`. Pinning them as one set would block every Provider Write for the
+ * crime of sending more than the minimum.
  */
 export const RAZORPAY_TOOL_SCHEMAS: Record<
   RazorpayAllowedTool,
-  { required: readonly string[] }
+  { sends: readonly string[]; requires: readonly string[] }
 > = {
-  create_order: { required: ["amount", "currency", "receipt"] },
-  fetch_order: { required: ["order_id"] },
-  fetch_all_orders: { required: [] },
-  fetch_payment: { required: ["payment_id"] },
+  create_order: {
+    sends: ["amount", "currency", "notes", "receipt"],
+    requires: ["amount", "currency"],
+  },
+  fetch_order: { sends: ["order_id"], requires: ["order_id"] },
+  fetch_all_orders: { sends: ["count", "receipt"], requires: [] },
+  fetch_payment: { sends: ["payment_id"], requires: ["payment_id"] },
 };
 
 /** The arguments one Provider Order creation carries. */
@@ -220,7 +233,9 @@ export function fingerprintRazorpayTools(
   const surface = RAZORPAY_ALLOWED_TOOLS.map((allowed) => {
     const tool = tools.find((candidate) => candidate.name === allowed);
     if (!tool) return `${allowed}:absent`;
-    return `${allowed}:${requiredArguments(tool.inputSchema).join(",")}`;
+    const required = requiredArguments(tool.inputSchema).join(",");
+    const accepted = (acceptedArguments(tool.inputSchema) ?? []).join(",");
+    return `${allowed}:${required}:${accepted}`;
   }).join("|");
   return createHash("sha256").update(surface).digest("hex").slice(0, 32);
 }
@@ -240,16 +255,25 @@ export function razorpayToolDrift(
     if (!tool) {
       return `Razorpay no longer offers ${allowed}.`;
     }
-    const required = requiredArguments(tool.inputSchema);
-    const missing = RAZORPAY_TOOL_SCHEMAS[allowed].required.filter(
-      (argument) => !required.includes(argument),
+    const pinned = RAZORPAY_TOOL_SCHEMAS[allowed];
+
+    const newlyRequired = requiredArguments(tool.inputSchema).filter(
+      (argument) => !pinned.sends.includes(argument),
     );
-    const added = required.filter(
-      (argument) =>
-        !RAZORPAY_TOOL_SCHEMAS[allowed].required.includes(argument),
+    if (newlyRequired.length > 0) {
+      return `Razorpay now requires ${newlyRequired.join(", ")} for ${allowed}, which this Storefront does not send.`;
+    }
+
+    // A server that advertises no properties tells us nothing about what it
+    // accepts, so acceptance is left unjudged rather than guessed at. What it
+    // requires is still binding.
+    const accepted = acceptedArguments(tool.inputSchema);
+    if (accepted === null) continue;
+    const withdrawn = pinned.sends.filter(
+      (argument) => !accepted.includes(argument),
     );
-    if (missing.length > 0 || added.length > 0) {
-      return `Razorpay changed the required arguments of ${allowed}.`;
+    if (withdrawn.length > 0) {
+      return `Razorpay no longer accepts ${withdrawn.join(", ")} for ${allowed}, which this Storefront depends on.`;
     }
   }
   return null;
@@ -260,4 +284,17 @@ function requiredArguments(inputSchema: unknown): string[] {
   return Array.isArray(required)
     ? [...required].filter((value): value is string => typeof value === "string").sort()
     : [];
+}
+
+/**
+ * The arguments a remote tool advertises that it accepts.
+ *
+ * @returns The argument names, or `null` when the tool advertises none at all,
+ *   which is a silence about its surface rather than a claim to accept nothing.
+ */
+function acceptedArguments(inputSchema: unknown): string[] | null {
+  const properties = (inputSchema as { properties?: unknown } | undefined)
+    ?.properties;
+  if (typeof properties !== "object" || properties === null) return null;
+  return Object.keys(properties as Record<string, unknown>).sort();
 }

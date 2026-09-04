@@ -8,18 +8,59 @@ import {
 import {
   RAZORPAY_ALLOWED_TOOLS,
   RAZORPAY_MCP_ENDPOINT,
-  RAZORPAY_TOOL_SCHEMAS,
 } from "./razorpay-tools";
 
 const SECRET = "rzp_test_key:super-secret-value";
 const AUTHORIZATION = `Basic ${Buffer.from(SECRET).toString("base64")}`;
 
-/** Tool definitions matching the surface this application was written against. */
+/**
+ * Razorpay's hosted tool surface as it actually is, transcribed from the live
+ * server rather than derived from this application's own pin.
+ *
+ * Deriving the fake from `RAZORPAY_TOOL_SCHEMAS` would make it echo whatever we
+ * believe back at us, so every drift test would pass no matter how wrong the
+ * belief was — which is exactly how a pin that demanded `receipt` be *required*
+ * by `create_order` reached production and blocked every Provider Write.
+ */
+const RAZORPAY_LIVE_SURFACE: Record<
+  string,
+  { required?: string[]; properties: string[] }
+> = {
+  create_order: {
+    required: ["amount", "currency"],
+    properties: [
+      "amount",
+      "currency",
+      "customer_id",
+      "first_payment_min_amount",
+      "method",
+      "notes",
+      "partial_payment",
+      "receipt",
+      "token",
+      "transfers",
+    ],
+  },
+  fetch_order: { required: ["order_id"], properties: ["order_id"] },
+  fetch_all_orders: {
+    properties: ["authorized", "count", "expand", "from", "receipt", "skip", "to"],
+  },
+  fetch_payment: { required: ["payment_id"], properties: ["payment_id"] },
+};
+
 function compatibleTools() {
-  return RAZORPAY_ALLOWED_TOOLS.map((name) => ({
-    name,
-    inputSchema: { required: [...RAZORPAY_TOOL_SCHEMAS[name].required] },
-  }));
+  return RAZORPAY_ALLOWED_TOOLS.map((name) => {
+    const live = RAZORPAY_LIVE_SURFACE[name];
+    return {
+      name,
+      inputSchema: {
+        ...(live.required ? { required: [...live.required] } : {}),
+        properties: Object.fromEntries(
+          live.properties.map((property) => [property, { type: "string" }]),
+        ),
+      },
+    };
+  });
 }
 
 const createdOrder = {
@@ -167,10 +208,29 @@ test("arguments are validated locally before anything is dispatched", async () =
   assert.deepEqual(transport.configs, []);
 });
 
-test("incompatible remote tool drift blocks the Provider Write", async () => {
+test("requiring less than the Storefront sends is not drift", async () => {
+  // Razorpay leaves `receipt` optional on `create_order`. The Storefront always
+  // sends one anyway, because the receipt is how a lost response is reconciled.
+  const { adapter, transport } = adapterFor(() => ({
+    structuredContent: createdOrder,
+  }));
+
+  const outcome = await adapter.createOrder(createOrderInput);
+
+  assert.equal(outcome.status, "SUCCEEDED");
+  assert.deepEqual(transport.calls.map((call) => call.name), ["create_order"]);
+});
+
+test("an argument Razorpay newly requires blocks the Provider Write", async () => {
   const drifted = compatibleTools().map((tool) =>
     tool.name === "create_order"
-      ? { ...tool, inputSchema: { required: ["amount", "currency"] } }
+      ? {
+          ...tool,
+          inputSchema: {
+            ...tool.inputSchema,
+            required: ["amount", "currency", "customer_id"],
+          },
+        }
       : tool,
   );
   const { adapter, transport } = adapterFor(
@@ -181,6 +241,38 @@ test("incompatible remote tool drift blocks the Provider Write", async () => {
   const outcome = await adapter.createOrder(createOrderInput);
 
   assert.equal(outcome.status, "FAILED");
+  assert.equal(
+    outcome.status === "FAILED" && outcome.reasonCode,
+    "PROVIDER_TOOL_DRIFT",
+  );
+  assert.deepEqual(transport.calls, []);
+});
+
+test("an argument the Storefront depends on going away blocks the Provider Write", async () => {
+  // Losing `receipt` would not fail loudly: Razorpay would create the payment
+  // and the Storefront could never look it up again after a lost response.
+  const drifted = compatibleTools().map((tool) =>
+    tool.name === "create_order"
+      ? {
+          ...tool,
+          inputSchema: {
+            ...tool.inputSchema,
+            properties: {
+              amount: { type: "string" },
+              currency: { type: "string" },
+              notes: { type: "string" },
+            },
+          },
+        }
+      : tool,
+  );
+  const { adapter, transport } = adapterFor(
+    () => ({ structuredContent: createdOrder }),
+    drifted,
+  );
+
+  const outcome = await adapter.createOrder(createOrderInput);
+
   assert.equal(
     outcome.status === "FAILED" && outcome.reasonCode,
     "PROVIDER_TOOL_DRIFT",
