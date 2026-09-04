@@ -1,3 +1,18 @@
+/**
+ * The Gemini model both agent stages use unless a deployment overrides it.
+ *
+ * The model is configuration rather than code so a Brand Admin can move off a
+ * degraded model without a deploy. An unset or blank `GOOGLE_GENERATIVE_AI_MODEL`
+ * means "use the default" rather than "use no model at all".
+ */
+const DEFAULT_AGENT_MODEL_ID = "gemini-3.1-flash-lite";
+
+export function agentModelId(): string {
+  return (
+    process.env.GOOGLE_GENERATIVE_AI_MODEL?.trim() || DEFAULT_AGENT_MODEL_ID
+  );
+}
+
 export const intentAnalyzerConfig = {
   name: "intent_analysis_v1",
   description:

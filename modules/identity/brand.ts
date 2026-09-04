@@ -17,7 +17,35 @@ export class BrandConfigurationError extends Error {
   }
 }
 
-export async function requireBrand(): Promise<BrandIdentity> {
+/**
+ * Reads the Brand once and keeps the answer for the life of the process.
+ *
+ * Each deployment serves exactly one Brand and that row does not change within
+ * a deployment, so re-reading it on every Conversation Turn spends a database
+ * round trip on an answer that cannot have changed. A failed read is not kept:
+ * a Storefront that starts before its Brand row exists recovers without a
+ * restart.
+ *
+ * @param readBrand - Reads the configured Brand from storage.
+ * @returns The process-wide Brand reader.
+ */
+export function createBrandReader(
+  readBrand: () => Promise<BrandIdentity>,
+): () => Promise<BrandIdentity> {
+  let configuredBrand: Promise<BrandIdentity> | null = null;
+  return () => {
+    configuredBrand ??= readBrand().catch((error: unknown) => {
+      configuredBrand = null;
+      throw error;
+    });
+    return configuredBrand;
+  };
+}
+
+export const requireBrand: () => Promise<BrandIdentity> =
+  createBrandReader(readConfiguredBrand);
+
+async function readConfiguredBrand(): Promise<BrandIdentity> {
   const configuredBrands = await db
     .select({
       id: brands.id,

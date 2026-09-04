@@ -7,7 +7,7 @@ import {
   ToolLoopAgent,
   type LanguageModel,
 } from "ai";
-import { commerceAgentConfig } from "@/config/agent/promts";
+import { agentModelId, commerceAgentConfig } from "@/config/agent/promts";
 import { isUuid } from "@/lib/validation";
 import type { CatalogSearch } from "@/modules/catalog/types";
 import {
@@ -24,10 +24,13 @@ type AiLoopOutput = {
   missingInformation: string[];
 };
 
+const MAX_AGENT_MESSAGE_LENGTH = 1_200;
+const MAX_AGENT_QUESTION_LENGTH = 320;
+const MAX_MISSING_INFORMATION = 8;
+const MAX_MISSING_INFORMATION_LENGTH = 160;
+
 export function createAiCommerceAgentLoop(
-  model: LanguageModel = google(
-    process.env.GOOGLE_GENERATIVE_AI_MODEL ?? "gemini-3.5-flash-lite",
-  ),
+  model: LanguageModel = google(agentModelId()),
 ): CommerceAgentLoop {
   return {
     async run({ message, intentBrief, capabilities, limits, signal }) {
@@ -118,10 +121,7 @@ function outputTokensUsed(
 }
 
 function toLoopResult(output: AiLoopOutput): CommerceAgentLoopResult {
-  if (output.status === "NEEDS_INPUT") {
-    if (output.question === null) {
-      throw new Error("A NEEDS_INPUT result must include a question.");
-    }
+  if (output.status === "NEEDS_INPUT" && output.question !== null) {
     return {
       status: "NEEDS_INPUT",
       message: output.message,
@@ -130,6 +130,8 @@ function toLoopResult(output: AiLoopOutput): CommerceAgentLoopResult {
     };
   }
 
+  // A NEEDS_INPUT answer carrying no question asks the Customer nothing, so it
+  // is read as the ordinary answer it actually is rather than discarded.
   return {
     status: "COMPLETED",
     message: output.message,
@@ -195,88 +197,134 @@ const agentOutputSchema = jsonSchema<AiLoopOutput>(
   {
     type: "object",
     additionalProperties: false,
-    required: [
-      "status",
-      "message",
-      "productIds",
-      "question",
-      "missingInformation",
-    ],
+    required: ["status", "message"],
     properties: {
       status: { type: "string", enum: ["COMPLETED", "NEEDS_INPUT"] },
-      message: { type: "string", minLength: 1, maxLength: 1_200 },
+      message: {
+        type: "string",
+        minLength: 1,
+        maxLength: MAX_AGENT_MESSAGE_LENGTH,
+      },
       productIds: {
         type: "array",
         uniqueItems: true,
         maxItems: MAX_COMMERCE_AGENT_TOOL_PRODUCTS,
         items: { type: "string", format: "uuid" },
       },
-      question: { type: ["string", "null"], maxLength: 320 },
+      question: {
+        type: ["string", "null"],
+        maxLength: MAX_AGENT_QUESTION_LENGTH,
+      },
       missingInformation: {
         type: "array",
-        maxItems: 8,
-        items: { type: "string", minLength: 1, maxLength: 160 },
+        maxItems: MAX_MISSING_INFORMATION,
+        items: {
+          type: "string",
+          minLength: 1,
+          maxLength: MAX_MISSING_INFORMATION_LENGTH,
+        },
       },
     },
   },
   {
     validate(value) {
-      if (!isAiLoopOutput(value)) {
+      const output = coerceAiLoopOutput(value);
+      if (output === null) {
         return {
           success: false,
-          error: new Error("The model returned an invalid Agent Outcome."),
+          error: new Error(
+            "The model returned an Agent Outcome the Storefront cannot trust.",
+          ),
         };
       }
-      return { success: true, value };
+      return { success: true, value: output };
     },
   },
 );
 
-function isAiLoopOutput(value: unknown): value is AiLoopOutput {
-  if (typeof value !== "object" || value === null) return false;
+/**
+ * Reads the model's answer, rejecting it on facts and normalising it on form.
+ *
+ * A deviation in *presentation* — a refinement question attached to a
+ * completed answer, an absent optional field, an extra key, a value past a
+ * length or cardinality cap — is normalised into a valid Agent Outcome,
+ * because discarding a correct answer over its shape costs the Customer the
+ * Products it found. A deviation in *fact* still fails: a Product ID that is
+ * not a well-formed identifier is refused outright, and the Commerce Agent
+ * only ever quotes Products it read through a Catalog tool.
+ *
+ * @param value - The parsed model output.
+ * @returns A normalised Agent Outcome, or null when the answer cannot be
+ * trusted.
+ */
+function coerceAiLoopOutput(value: unknown): AiLoopOutput | null {
+  if (typeof value !== "object" || value === null) return null;
   const output = value as Record<string, unknown>;
-  return (
-    hasExactlyKeys(output, [
-      "status",
-      "message",
-      "productIds",
-      "question",
-      "missingInformation",
-    ]) &&
-    (output.status === "COMPLETED" || output.status === "NEEDS_INPUT") &&
-    typeof output.message === "string" &&
-    output.message.trim().length > 0 &&
-    output.message.length <= 1_200 &&
-    Array.isArray(output.productIds) &&
-    output.productIds.length <= MAX_COMMERCE_AGENT_TOOL_PRODUCTS &&
-    new Set(output.productIds).size === output.productIds.length &&
-    output.productIds.every((id) => typeof id === "string" && isUuid(id)) &&
-    (output.question === null ||
-      (typeof output.question === "string" &&
-        output.question.trim().length > 0 &&
-        output.question.length <= 320)) &&
-    (output.status === "COMPLETED"
-      ? output.question === null
-      : typeof output.question === "string") &&
-    Array.isArray(output.missingInformation) &&
-    output.missingInformation.length <= 8 &&
-    output.missingInformation.every(
-      (item) =>
-        typeof item === "string" &&
-        item.trim().length > 0 &&
-        item.length <= 160,
-    )
-  );
+  if (output.status !== "COMPLETED" && output.status !== "NEEDS_INPUT") {
+    return null;
+  }
+
+  const message = boundedText(output.message, MAX_AGENT_MESSAGE_LENGTH);
+  if (message === null) return null;
+
+  const productIds = groundedProductIds(output.productIds);
+  if (productIds === null) return null;
+
+  return {
+    status: output.status,
+    message,
+    productIds,
+    // A completed answer keeps its Products and loses the refinement it
+    // offered. Presenting that refinement needs its own field on the completed
+    // outcome; routing it through NEEDS_INPUT would suppress the Context
+    // Summary and silently drop the Customer's own constraint chips.
+    question:
+      output.status === "COMPLETED"
+        ? null
+        : boundedText(output.question, MAX_AGENT_QUESTION_LENGTH),
+    missingInformation: boundedList(
+      output.missingInformation,
+      MAX_MISSING_INFORMATION,
+      MAX_MISSING_INFORMATION_LENGTH,
+    ),
+  };
 }
 
-function hasExactlyKeys(
-  value: Record<string, unknown>,
-  expectedKeys: string[],
-): boolean {
-  const actualKeys = Object.keys(value).sort();
-  const sortedExpectedKeys = [...expectedKeys].sort();
-  return (
-    actualKeys.length === sortedExpectedKeys.length &&
-    actualKeys.every((key, index) => key === sortedExpectedKeys[index])
-  );
+/**
+ * Reads the Product IDs the model claims, refusing any that is not one.
+ *
+ * Absent IDs mean the answer named no Product. A repeated or surplus ID is
+ * form and is trimmed. Anything that is not a well-formed Product ID is fact,
+ * and fails the whole answer rather than being quietly dropped: an answer that
+ * describes Products it cannot identify must never reach a Customer.
+ */
+function groundedProductIds(value: unknown): string[] | null {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) return null;
+
+  const productIds: string[] = [];
+  for (const productId of value) {
+    if (typeof productId !== "string" || !isUuid(productId)) return null;
+    if (!productIds.includes(productId)) productIds.push(productId);
+  }
+  return productIds.slice(0, MAX_COMMERCE_AGENT_TOOL_PRODUCTS);
+}
+
+function boundedText(value: unknown, maxLength: number): string | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  return value.slice(0, maxLength);
+}
+
+function boundedList(
+  value: unknown,
+  maxItems: number,
+  maxLength: number,
+): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .flatMap((item) => {
+      const text = boundedText(item, maxLength);
+      return text === null ? [] : [text];
+    })
+    .slice(0, maxItems);
 }

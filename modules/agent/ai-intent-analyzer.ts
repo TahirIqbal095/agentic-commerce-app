@@ -10,13 +10,14 @@ import {
 import {
   applyProductConstraintDelta,
   createEmptyConversationContext,
+  IntentAnalysisTimeoutError,
   type IntentAnalysis,
   type IntentAnalyzer,
   isShoppingIntent,
   PRODUCT_CONSTRAINT_KEYS,
   type ShoppingIntent,
 } from "./intent";
-import { intentAnalyzerConfig } from "@/config/agent/promts";
+import { agentModelId, intentAnalyzerConfig } from "@/config/agent/promts";
 
 const shoppingIntentSchema = jsonSchema<ShoppingIntent>(
   {
@@ -302,35 +303,87 @@ function hasRequiredAndAllowedKeys(
   );
 }
 
+/**
+ * How long one Conversation Turn may spend resolving its Intent Brief.
+ *
+ * The analysis was previously unbounded and was measured at 69 seconds against
+ * a degraded model, which a Customer experiences as a Turn that may never
+ * finish. The budget covers the retry too, so a malformed first answer cannot
+ * double a Customer's wait.
+ */
+export const INTENT_ANALYSIS_TIMEOUT_MS = 15_000;
+
 export function createAiIntentAnalyzer(
-  model: LanguageModel = google(
-    process.env.GOOGLE_GENERATIVE_AI_MODEL ?? "gemini-3.5-flash-lite",
-  ),
+  model: LanguageModel = google(agentModelId()),
+  timeoutMs: number = INTENT_ANALYSIS_TIMEOUT_MS,
 ): IntentAnalyzer {
   return {
     async analyze(input) {
+      const deadline = Date.now() + timeoutMs;
       for (let attempt = 0; ; attempt += 1) {
         try {
-          const { output } = await generateText({
-            model,
-            system: intentAnalyzerConfig.prompt,
-            prompt: JSON.stringify({
-              conversationContext: input.context,
-              newestCustomerMessage: input.message,
-            }),
-            output: Output.object({
-              name: intentAnalyzerConfig.name,
-              description: intentAnalyzerConfig.description,
-              schema: intentAnalysisSchema,
-            }),
-          });
-          return output;
+          return await withinDeadline(deadline, (abortSignal) =>
+            generateText({
+              model,
+              system: intentAnalyzerConfig.prompt,
+              prompt: JSON.stringify({
+                conversationContext: input.context,
+                newestCustomerMessage: input.message,
+              }),
+              output: Output.object({
+                name: intentAnalyzerConfig.name,
+                description: intentAnalyzerConfig.description,
+                schema: intentAnalysisSchema,
+              }),
+              abortSignal,
+            }).then(({ output }) => output),
+          );
         } catch (error) {
-          if (attempt === 0 && NoObjectGeneratedError.isInstance(error))
+          if (
+            attempt === 0 &&
+            NoObjectGeneratedError.isInstance(error) &&
+            Date.now() < deadline
+          ) {
             continue;
+          }
           throw error;
         }
       }
     },
   };
+}
+
+/**
+ * Runs one analysis attempt against the Turn's remaining time.
+ *
+ * The deadline is the Storefront's own rather than the provider's: the
+ * provider is asked to stop, and the Turn stops waiting whether or not it
+ * does.
+ *
+ * @throws {IntentAnalysisTimeoutError} When the remaining time runs out.
+ */
+async function withinDeadline<Result>(
+  deadline: number,
+  run: (signal: AbortSignal) => Promise<Result>,
+): Promise<Result> {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) throw new IntentAnalysisTimeoutError();
+
+  const controller = new AbortController();
+  let rejectTimeout: (reason: Error) => void = () => {};
+  const timedOut = new Promise<never>((_resolve, reject) => {
+    rejectTimeout = reject;
+  });
+  // The deadline is not unref'd: it is the only thing that ends a Turn whose
+  // provider never answers, and it is always cleared below.
+  const timeout = setTimeout(() => {
+    controller.abort();
+    rejectTimeout(new IntentAnalysisTimeoutError());
+  }, remainingMs);
+
+  try {
+    return await Promise.race([run(controller.signal), timedOut]);
+  } finally {
+    clearTimeout(timeout);
+  }
 }

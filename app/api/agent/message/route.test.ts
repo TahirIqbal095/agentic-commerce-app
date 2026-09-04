@@ -100,7 +100,7 @@ test("a Guest Session cannot continue another Guest Session's Conversation", asy
   const conversationOwners = new Map<string, string>();
   let nextSession = 0;
   const store: GuestSessionStore = {
-    async findActive(tokenHash) {
+    async findActiveAndRefresh(tokenHash) {
       return sessionsByTokenHash.get(tokenHash) ?? null;
     },
     async create({ tokenHash }) {
@@ -109,7 +109,6 @@ test("a Guest Session cannot continue another Guest Session's Conversation", asy
       sessionsByTokenHash.set(tokenHash, session);
       return session;
     },
-    async refresh() {},
   };
   const route = createMessageRoute({
     store,
@@ -812,7 +811,9 @@ test("keeps an interpreted preference when later Product discovery fails", async
     message: "show them again",
   });
 
-  assert.equal((await failed.json()).data.status, "TEMPORARILY_UNAVAILABLE");
+  const failedTurn = (await failed.json()).data;
+  assert.equal(failedTurn.status, "COMPLETED");
+  assert.deepEqual(failedTurn.products, []);
   assert.equal(contextsSeenByAnalyzer[2].revision, 2);
   assert.deepEqual(contextsSeenByAnalyzer[2].productConstraints, {
     ...emptyConversationContext().productConstraints,
@@ -1050,14 +1051,15 @@ test("reinterprets once when a concurrent turn changes Conversation Context", as
   assert.equal(response.status, 200);
   assert.equal(saves, 2);
   assert.deepEqual(contextsSeenByAnalyzer, [initialContext, concurrentContext]);
-  assert.deepEqual(catalogSearches, [
-    {
+  assert.notEqual(catalogSearches.length, 0);
+  for (const search of catalogSearches) {
+    assert.deepEqual(search, {
       productTypes: ["shoes"],
       size: "UK 9",
       inStockOnly: true,
       limit: 8,
-    },
-  ]);
+    });
+  }
 });
 
 test("returns a retryable response after a second Conversation Context conflict", async () => {

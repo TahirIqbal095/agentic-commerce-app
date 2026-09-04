@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { MockLanguageModelV4 } from "ai/test";
 import { createAiIntentAnalyzer } from "./ai-intent-analyzer";
-import { createEmptyConversationContext } from "./intent";
+import {
+  createEmptyConversationContext,
+  IntentAnalysisTimeoutError,
+} from "./intent";
 
 const validAnalysis = {
   goal: "Find breathable shoes for road running",
@@ -159,6 +162,44 @@ test("rejects undeclared private fields after one retry", async () => {
       context: createEmptyConversationContext(),
       message: "show me running shoes",
     }),
+  );
+  assert.equal(attempts, 2);
+});
+
+test("an Intent Brief analysis that outlives its budget stops instead of hanging", async () => {
+  const model = new MockLanguageModelV4({
+    doGenerate: () => new Promise<never>(() => {}),
+  });
+
+  const analyzer = createAiIntentAnalyzer(model, 20);
+
+  await assert.rejects(
+    analyzer.analyze({
+      context: createEmptyConversationContext(),
+      message: "show me running shoes",
+    }),
+    IntentAnalysisTimeoutError,
+  );
+});
+
+test("the retry of a malformed Intent Brief shares the first attempt's budget", async () => {
+  let attempts = 0;
+  const model = new MockLanguageModelV4({
+    doGenerate: async () => {
+      attempts += 1;
+      if (attempts === 1) return modelResponse({ goal: "incomplete" });
+      return new Promise<never>(() => {});
+    },
+  });
+
+  const analyzer = createAiIntentAnalyzer(model, 40);
+
+  await assert.rejects(
+    analyzer.analyze({
+      context: createEmptyConversationContext(),
+      message: "show me running shoes",
+    }),
+    IntentAnalysisTimeoutError,
   );
   assert.equal(attempts, 2);
 });

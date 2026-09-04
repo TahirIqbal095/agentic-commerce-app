@@ -11,15 +11,12 @@ test("the first stateful request receives a secure Guest Session cookie", async 
     expiresAt: Date;
   }> = [];
   const store: GuestSessionStore = {
-    async findActive() {
+    async findActiveAndRefresh() {
       return null;
     },
     async create(input) {
       createdSessions.push(input);
       return { id: "guest-session-id" };
-    },
-    async refresh() {
-      throw new Error("A new Guest Session must not be refreshed");
     },
   };
   const route = createGuestSessionRoute(
@@ -58,22 +55,15 @@ test("the first stateful request receives a secure Guest Session cookie", async 
   assert.match(cookie ?? "", /Max-Age=2592000/i);
 });
 
-test("an existing Guest Session is reused with a sliding 30-day expiry", async () => {
-  const refreshedSessions: Array<{ id: string; expiresAt: Date }> = [];
+test("an existing Guest Session is reused and refreshed in one round trip", async () => {
+  const reads: Array<{ tokenHash: string; now: Date; expiresAt: Date }> = [];
   const store: GuestSessionStore = {
-    async findActive(tokenHash, now) {
-      assert.equal(
-        tokenHash,
-        "be76020019b4a283b1a917ffb86da2788d11459191ccc0da98d3e7b9950a8c62",
-      );
-      assert.equal(now.toISOString(), "2026-09-15T12:00:00.000Z");
+    async findActiveAndRefresh(tokenHash, now, expiresAt) {
+      reads.push({ tokenHash, now, expiresAt });
       return { id: "existing-guest-session-id" };
     },
     async create() {
       throw new Error("An active Guest Session must be reused");
-    },
-    async refresh(id, expiresAt) {
-      refreshedSessions.push({ id, expiresAt });
     },
   };
   const route = createGuestSessionRoute(
@@ -99,13 +89,16 @@ test("an existing Guest Session is reused with a sliding 30-day expiry", async (
     guestSessionId: "existing-guest-session-id",
   });
   assert.deepEqual(
-    refreshedSessions.map(({ id, expiresAt }) => ({
-      id,
+    reads.map(({ tokenHash, now, expiresAt }) => ({
+      tokenHash,
+      now: now.toISOString(),
       expiresAt: expiresAt.toISOString(),
     })),
     [
       {
-        id: "existing-guest-session-id",
+        tokenHash:
+          "be76020019b4a283b1a917ffb86da2788d11459191ccc0da98d3e7b9950a8c62",
+        now: "2026-09-15T12:00:00.000Z",
         expiresAt: "2026-10-15T12:00:00.000Z",
       },
     ],
@@ -122,16 +115,13 @@ test("the next stateful request after expiry starts a fresh Guest Session", asyn
     expiresAt: Date;
   }> = [];
   const store: GuestSessionStore = {
-    async findActive(_tokenHash, now) {
+    async findActiveAndRefresh(_tokenHash, now) {
       assert.equal(now.toISOString(), "2026-09-01T00:00:00.001Z");
       return null;
     },
     async create(input) {
       createdSessions.push(input);
       return { id: "fresh-guest-session-id" };
-    },
-    async refresh() {
-      throw new Error("An expired Guest Session must not be refreshed");
     },
   };
   const route = createGuestSessionRoute(
