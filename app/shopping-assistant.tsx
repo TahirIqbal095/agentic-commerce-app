@@ -397,6 +397,18 @@ export function ShoppingAssistant({
     await sendMessage(message);
   }
 
+  /**
+   * Sends one message the opening state offered, as a typed message is sent.
+   *
+   * An example prompt and a Catalog category are entry points, not shortcuts to
+   * the composer: tapping either starts a Conversation Turn rather than filling
+   * the composer and leaving the Customer to find the send control.
+   */
+  function askFor(message: string) {
+    if (isLoading) return;
+    void sendMessage(message);
+  }
+
   async function sendMessage(message: string) {
     const turnId = crypto.randomUUID();
     setEntries((currentEntries) => [
@@ -1036,6 +1048,21 @@ export function ShoppingAssistant({
     itemFeedback: cartItemFeedback,
   };
 
+  // One composer, in one of two places. It is hoisted into the opening state
+  // while there is nothing else on screen, and returns to its dock once the
+  // Conversation Transcript needs the room — never both at once.
+  const hasConversation = entries.length > 0;
+  const composer = (
+    <Composer
+      brandName={brandName}
+      placement={hasConversation ? "docked" : "hoisted"}
+      prompt={prompt}
+      setPrompt={setPrompt}
+      isLoading={isLoading}
+      onSubmit={submitPrompt}
+    />
+  );
+
   return (
     <main
       className={cn(
@@ -1051,7 +1078,7 @@ export function ShoppingAssistant({
         brandName={brandName}
         cart={cart}
         cartState={cartState}
-        hasConversation={entries.length > 0}
+        hasConversation={hasConversation}
         onNewConversation={startNewConversation}
         cartControls={cartControls}
         checkoutReadiness={{
@@ -1070,7 +1097,13 @@ export function ShoppingAssistant({
       />
 
       <div
-        className="mx-auto flex min-h-[calc(100vh-var(--storefront-header-height))] w-full max-w-[var(--storefront-column)] flex-col px-4 pb-44 sm:px-8 sm:pb-48"
+        className={cn(
+          "mx-auto flex min-h-[calc(100vh-var(--storefront-header-height))] w-full max-w-[var(--storefront-column)] flex-col px-4 sm:px-8",
+          // Clearance for the dock, which only exists once the Conversation
+          // does. Reserving it in the opening state would push the composer
+          // off the centre it was hoisted into.
+          hasConversation ? "pb-44 sm:pb-48" : "pb-14 sm:pb-20",
+        )}
       >
         <div className="flex w-full flex-1 gap-8">
           {railCheckout ? (
@@ -1086,7 +1119,8 @@ export function ShoppingAssistant({
               <OpeningState
                 brandName={brandName}
                 brandDescription={brandDescription}
-                onSuggestion={setPrompt}
+                composer={composer}
+                onPrompt={askFor}
               />
             ) : (
               <>
@@ -1129,13 +1163,7 @@ export function ShoppingAssistant({
         />
       ) : null}
 
-      <Composer
-        brandName={brandName}
-        prompt={prompt}
-        setPrompt={setPrompt}
-        isLoading={isLoading}
-        onSubmit={submitPrompt}
-      />
+      {hasConversation ? composer : null}
     </main>
   );
 }

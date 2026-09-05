@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Radio } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 
@@ -12,15 +13,24 @@ import { EXAMPLE_PROMPTS } from "./brand-presentation";
  * arriving for the first time can answer "what is sold here?" without
  * experimenting. The Storefront invents no pitch of its own: change the Brand
  * record and this changes with it.
+ *
+ * The composer sits directly beneath the headline rather than at the viewport's
+ * edge, because the one control that does anything belongs where the Customer
+ * is already looking. Under it are examples written as whole requests, so a
+ * Customer learns that a use case, a budget, or a mood is a thing they may say.
+ * Tapping one starts a Conversation Turn rather than filling the composer and
+ * leaving them to find the send control.
  */
 export function OpeningState({
   brandName,
   brandDescription,
-  onSuggestion,
+  composer,
+  onPrompt,
 }: {
   brandName: string;
   brandDescription: string;
-  onSuggestion: (suggestion: string) => void;
+  composer: ReactNode;
+  onPrompt: (message: string) => void;
 }) {
   const reduceMotion = useReducedMotion();
 
@@ -38,12 +48,14 @@ export function OpeningState({
       <h1 className="text-balance text-4xl font-bold leading-[1.05] tracking-tight sm:text-6xl lg:text-7xl">
         {brandDescription}
       </h1>
-      <p className="mx-auto mt-8 max-w-xl text-pretty text-base leading-7 text-muted-foreground sm:text-lg">
-        Describe the need, the mood, or the budget. I&apos;ll turn it into a
-        thoughtful shortlist from {brandName}&apos;s live Catalog.
-      </p>
 
-      <div className="mt-9 flex flex-wrap justify-center gap-3">
+      <div className="mx-auto mt-10 w-full max-w-3xl">{composer}</div>
+
+      <div
+        role="group"
+        aria-label="Example prompts"
+        className="mt-7 flex flex-wrap justify-center gap-3"
+      >
         {EXAMPLE_PROMPTS.map((prompt, index) => (
           <motion.div
             key={prompt}
@@ -55,7 +67,7 @@ export function OpeningState({
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => onSuggestion(prompt)}
+              onClick={() => onPrompt(prompt)}
             >
               {prompt}
             </Button>
