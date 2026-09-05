@@ -27,7 +27,8 @@ export async function generateMetadata(): Promise<Metadata> {
 async function readCatalogCategories(): Promise<CatalogCategory[]> {
   try {
     return await createCatalogModule().listCategories();
-  } catch {
+  } catch (error) {
+    console.error("Catalog categories could not be read", error);
     return [];
   }
 }
