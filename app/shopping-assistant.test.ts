@@ -57,6 +57,7 @@ test("Customer increments one Cart Item without optimistic commercial changes", 
   const view = render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
     }),
   );
@@ -194,6 +195,7 @@ test("a Cart command failure reloads the authoritative Cart and shows an Item-le
   const view = render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
     }),
   );
@@ -286,6 +288,7 @@ test("Customer explicitly removes the final Cart Item", async (t) => {
   const view = render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
     }),
   );
@@ -330,6 +333,7 @@ test("historical Cart Summaries in the Conversation remain read-only", async (t)
   const view = render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       initialConversation: {
         conversationId: "41000000-0000-4000-8000-000000000001",
         transcript: [
@@ -437,6 +441,7 @@ async function askAboutTheCart(
   const view = testingLibrary.render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
     }),
   );
@@ -670,6 +675,7 @@ test("retrying a timed-out Cart command reuses its mutation key", async (t) => {
   const view = render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
     }),
   );
@@ -775,6 +781,7 @@ test("a Cart command answered with a conflict starts the next command with a new
   const view = render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
     }),
   );
@@ -902,6 +909,7 @@ test("retrying a failed Add reuses its mutation key instead of adding twice", as
   const view = render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
     }),
   );
@@ -990,6 +998,7 @@ test("a conflict replaces stale drawer and badge state even when the authoritati
   const view = render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
     }),
   );
@@ -1077,6 +1086,7 @@ test("a Cart rule rejection never rolls the drawer back to an older Cart", async
   const view = render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
     }),
   );
@@ -1160,6 +1170,7 @@ test("a replayed retry frees its key so the next Customer action still applies",
   const view = render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
     }),
   );
@@ -1224,6 +1235,7 @@ test("a pending Conversation Turn announces the Catalog search once and reports 
   const view = render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
     }),
   );
@@ -1324,6 +1336,7 @@ test("a pending Conversation Turn promises no Recommendation cards it may not ha
   const view = render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
     }),
   );

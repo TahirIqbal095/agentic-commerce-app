@@ -1,4 +1,4 @@
-import { ArrowRight, Headphones, Package, ShoppingBag } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 
 import { Button } from "@/components/ui/button";
@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { formatMoney } from "@/lib/format-money";
 import { cn } from "@/lib/utils";
 import type { CatalogProduct } from "@/modules/catalog/catalog";
+import { CategoryGlyph } from "./brand-presentation";
 import { CartFeedbackMessage } from "./cart-feedback-message";
 import { categoryBlockColor } from "./category-block";
 import { StockState } from "./stock-state";
@@ -27,14 +28,6 @@ export function ProductCard({
   cartFeedback?: CartFeedback;
 }) {
   const reduceMotion = useReducedMotion();
-  const category = product.category.toLowerCase();
-  const artwork = category.includes("audio") ? (
-    <Headphones />
-  ) : category.includes("bag") || category.includes("accessor") ? (
-    <ShoppingBag />
-  ) : (
-    <Package />
-  );
 
   return (
     <motion.article
@@ -54,7 +47,7 @@ export function ProductCard({
             !product.inStock && "grayscale",
           )}
         >
-          {artwork}
+          <CategoryGlyph category={product.category} />
           <span className="absolute bottom-2.5 left-4 eyebrow text-[10px] font-bold text-accent-foreground">
             {product.category}
           </span>

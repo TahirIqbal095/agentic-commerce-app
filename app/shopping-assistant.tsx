@@ -14,7 +14,7 @@ import {
   TIMELINE_RAIL_MEDIA_QUERY,
 } from "./_components/shopping-assistant/checkout-timeline-rail";
 import { Header } from "./_components/shopping-assistant/header";
-import { Hero } from "./_components/shopping-assistant/hero";
+import { OpeningState } from "./_components/shopping-assistant/opening-state";
 import { ProductDetails } from "./_components/shopping-assistant/product-details";
 import { useMediaQuery } from "./_components/shopping-assistant/media-query";
 import { ResultArea } from "./_components/shopping-assistant/result-area";
@@ -37,7 +37,10 @@ import { launchRazorpayCheckout } from "@/modules/checkout/checkout-launcher";
 import { formatMoney } from "@/lib/format-money";
 import { cn } from "@/lib/utils";
 import type { CartView } from "@/modules/cart/cart";
-import type { CatalogProduct } from "@/modules/catalog/catalog";
+import type {
+  CatalogCategory,
+  CatalogProduct,
+} from "@/modules/catalog/catalog";
 import type {
   ProductConstraintKey,
   ShoppingIntent,
@@ -193,11 +196,25 @@ function wasReconciled(requestError: unknown) {
 
 export function ShoppingAssistant({
   brandName,
+  brandDescription,
+  categories = [],
   initialConversation = null,
   resumeConversation = false,
   launchCheckout = launchRazorpayCheckout,
 }: {
   brandName: string;
+  /**
+   * The Brand's own description of what it sells, read from the Brand record on
+   * the server. It is the Storefront's headline, so the claim a Customer reads
+   * is the Brand's rather than the Storefront's invention.
+   */
+  brandDescription: string;
+  /**
+   * What the Catalog offers, largest category first, read on the server. A
+   * Catalog the Storefront could not read arrives as an empty list: the strip
+   * it would have filled is missing, and everything else still works.
+   */
+  categories?: CatalogCategory[];
   initialConversation?: CurrentConversation | null;
   resumeConversation?: boolean;
   /**
@@ -388,6 +405,18 @@ export function ShoppingAssistant({
     if (!message || isLoading) return;
     setPrompt("");
     await sendMessage(message);
+  }
+
+  /**
+   * Sends one message the opening state offered, as a typed message is sent.
+   *
+   * An example prompt and a Catalog category are entry points, not shortcuts to
+   * the composer: tapping either starts a Conversation Turn rather than filling
+   * the composer and leaving the Customer to find the send control.
+   */
+  function startConversationTurn(message: string) {
+    if (isLoading) return;
+    void sendMessage(message);
   }
 
   async function sendMessage(message: string) {
@@ -1029,6 +1058,21 @@ export function ShoppingAssistant({
     itemFeedback: cartItemFeedback,
   };
 
+  // One composer, in one of two places. It is hoisted into the opening state
+  // while there is nothing else on screen, and returns to its dock once the
+  // Conversation Transcript needs the room — never both at once.
+  const hasConversation = entries.length > 0;
+  const composer = (
+    <Composer
+      brandName={brandName}
+      placement={hasConversation ? "docked" : "hoisted"}
+      prompt={prompt}
+      setPrompt={setPrompt}
+      isLoading={isLoading}
+      onSubmit={submitPrompt}
+    />
+  );
+
   return (
     <main
       className={cn(
@@ -1044,7 +1088,7 @@ export function ShoppingAssistant({
         brandName={brandName}
         cart={cart}
         cartState={cartState}
-        hasConversation={entries.length > 0}
+        hasConversation={hasConversation}
         onNewConversation={startNewConversation}
         cartControls={cartControls}
         checkoutReadiness={{
@@ -1063,7 +1107,13 @@ export function ShoppingAssistant({
       />
 
       <div
-        className="mx-auto flex min-h-[calc(100vh-var(--storefront-header-height))] w-full max-w-[var(--storefront-column)] flex-col px-4 pb-44 sm:px-8 sm:pb-48"
+        className={cn(
+          "mx-auto flex min-h-[calc(100vh-var(--storefront-header-height))] w-full max-w-[var(--storefront-column)] flex-col px-4 sm:px-8",
+          // Clearance for the dock, which only exists once the Conversation
+          // does. Reserving it in the opening state would push the composer
+          // off the centre it was hoisted into.
+          hasConversation ? "pb-44 sm:pb-48" : "pb-14 sm:pb-20",
+        )}
       >
         <div className="flex w-full flex-1 gap-8">
           {railCheckout ? (
@@ -1076,7 +1126,13 @@ export function ShoppingAssistant({
             )}
           >
             {entries.length === 0 ? (
-              <Hero brandName={brandName} onSuggestion={setPrompt} />
+              <OpeningState
+                brandName={brandName}
+                brandDescription={brandDescription}
+                categories={categories}
+                composer={composer}
+                onPrompt={startConversationTurn}
+              />
             ) : (
               <>
                 {contextSummary ? (
@@ -1118,13 +1174,7 @@ export function ShoppingAssistant({
         />
       ) : null}
 
-      <Composer
-        brandName={brandName}
-        prompt={prompt}
-        setPrompt={setPrompt}
-        isLoading={isLoading}
-        onSubmit={submitPrompt}
-      />
+      {hasConversation ? composer : null}
     </main>
   );
 }

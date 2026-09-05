@@ -20,7 +20,7 @@ import {
 } from "./intent";
 import type { CartInspection } from "@/modules/cart/cart-inspection";
 import type { CartView } from "@/modules/cart/cart";
-import type { CatalogModule } from "@/modules/catalog/catalog";
+import type { ProductCatalog } from "@/modules/catalog/catalog";
 import type { CatalogProduct, CatalogSearch } from "@/modules/catalog/types";
 
 const CONVERSATION_ID = "21000000-0000-4000-8000-000000000001";
@@ -98,7 +98,7 @@ function recordingConversation(
   };
 }
 
-const unusedCatalog: CatalogModule = {
+const unusedCatalog: ProductCatalog = {
   async search() {
     throw new Error("Cart inspection must not search the Catalog.");
   },
@@ -354,7 +354,7 @@ function modelReplaying(
 function catalogReturning(
   products: CatalogProduct[],
   observe?: (search: CatalogSearch) => void,
-): CatalogModule {
+): ProductCatalog {
   return {
     async search(search) {
       observe?.(search);
@@ -376,7 +376,7 @@ function catalogReturning(
   };
 }
 
-const unavailableCatalog: CatalogModule = {
+const unavailableCatalog: ProductCatalog = {
   async search() {
     throw new Error("The Catalog is unavailable.");
   },
@@ -394,7 +394,7 @@ const CUT_SHORT_LIMITS: CommerceAgentLimits = {
 };
 
 function discoveryAgent(
-  catalog: CatalogModule,
+  catalog: ProductCatalog,
   model: MockLanguageModelV4,
   conversation: ConversationModule,
   limits?: CommerceAgentLimits,

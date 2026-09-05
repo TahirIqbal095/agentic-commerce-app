@@ -1,55 +1,93 @@
-import type { FormEvent } from "react";
-import { ArrowUp, Radio, Sparkles } from "lucide-react";
+import { useEffect, useRef, type FormEvent } from "react";
+import { ArrowUp, Radio } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { AgentMark } from "./brand-presentation";
+import { useMediaQuery } from "./media-query";
 
 /**
- * The Storefront's composer dock.
+ * Whether this Customer's device indicates a hardware keyboard.
  *
- * The dock is opaque and spans the viewport with a structural top border, so
+ * A fine pointer is the honest proxy: a Customer with a mouse or trackpad has
+ * a keyboard to type on, so the opening state can take focus and save them
+ * aiming at it. A touch screen has none, and taking focus there opens a
+ * software keyboard over the opening state before it has been read.
+ */
+export const FINE_POINTER_MEDIA_QUERY = "(pointer: fine)";
+
+/**
+ * Where the composer sits.
+ *
+ * Hoisted, it is the centre of the opening state, where a Customer with
+ * nothing on screen yet is already looking. Docked, it is pinned to the
+ * viewport's bottom edge for the rest of the Conversation. Exactly one of the
+ * two is on screen, so a Customer never has to work out which input is live.
+ */
+export type ComposerPlacement = "hoisted" | "docked";
+
+/**
+ * The Storefront's message composer.
+ *
+ * Docked, it is opaque and spans the viewport with a structural top border, so
  * the Conversation Transcript stops cleanly at its edge rather than scrolling
  * confusingly beneath the control the Customer is typing into.
  */
 export function Composer({
   brandName,
+  placement,
   prompt,
   setPrompt,
   isLoading,
   onSubmit,
 }: {
   brandName: string;
+  placement: ComposerPlacement;
   prompt: string;
   setPrompt: (prompt: string) => void;
   isLoading: boolean;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const reduceMotion = useReducedMotion();
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const takesFocus =
+    useMediaQuery(FINE_POINTER_MEDIA_QUERY) && placement === "hoisted";
+
+  useEffect(() => {
+    if (takesFocus) promptRef.current?.focus();
+  }, [takesFocus]);
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 border-t-2 border-sidebar-border bg-background px-4 pb-4 pt-4 sm:pb-5">
+    <div
+      className={
+        placement === "docked"
+          ? "fixed inset-x-0 bottom-0 z-40 border-t-2 border-sidebar-border bg-background px-4 pb-4 pt-4 sm:pb-5"
+          : "w-full"
+      }
+    >
       <motion.form
         onSubmit={onSubmit}
         initial={{ opacity: 0, y: reduceMotion ? 0 : 10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: reduceMotion ? 0 : 0.25 }}
-        className="group mx-auto w-full max-w-3xl rounded-lg border-2 border-sidebar-border bg-card p-2 text-card-foreground shadow-hard"
+        className="group mx-auto w-full max-w-3xl rounded-lg border-2 border-sidebar-border bg-card p-2 text-left text-card-foreground shadow-hard"
       >
         <div className="flex items-end gap-2">
           <div className="flex min-w-0 flex-1 items-start gap-3 pl-2">
             <span className="mt-3 grid size-7 shrink-0 place-items-center rounded-sm border border-border bg-muted text-foreground transition-colors group-focus-within:bg-primary group-focus-within:text-primary-foreground motion-reduce:transition-none">
-              <Sparkles className="size-3.5" />
+              <AgentMark className="size-3.5" />
             </span>
             <label htmlFor="shopping-prompt" className="sr-only">
               Message the {brandName} Commerce Agent
             </label>
             <Textarea
               id="shopping-prompt"
+              ref={promptRef}
               value={prompt}
               rows={1}
               onChange={(event) => setPrompt(event.target.value)}
-              placeholder="What are you looking for?"
+              placeholder="Describe what you need"
               autoComplete="off"
               className="max-h-36 min-h-16 flex-1 resize-none overflow-x-hidden overflow-y-auto border-0 bg-transparent px-0 py-3 text-lg font-medium leading-6 shadow-none field-sizing-content"
             />

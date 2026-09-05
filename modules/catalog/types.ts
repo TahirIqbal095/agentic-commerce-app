@@ -28,6 +28,17 @@ export type CatalogSearch = {
   limit: number;
 };
 
+/**
+ * One category the Catalog offers, with how many active Products it holds.
+ *
+ * This is Catalog metadata, not a Recommendation Set: it exists before any
+ * Conversation Turn has happened and carries no price or stock.
+ */
+export type CatalogCategory = {
+  category: string;
+  productCount: number;
+};
+
 export type CatalogSearchResult = {
   products: CatalogProduct[];
   nextCursor?: string;

@@ -1,6 +1,8 @@
 import {
   and,
   asc,
+  count,
+  desc,
   eq,
   gt,
   gte,
@@ -13,6 +15,7 @@ import {
 import { db } from "@/db";
 import { products } from "@/db/schema/catalog";
 import type {
+  CatalogCategory,
   CatalogProduct,
   CatalogSearch,
   CatalogSearchResult,
@@ -53,7 +56,24 @@ function toCatalogProduct(
 export interface CatalogModule {
   search(input: CatalogSearch): Promise<CatalogSearchResult>;
   getProduct(productId: string): Promise<ProductDetailResult>;
+  /**
+   * Every category the Catalog offers, largest first.
+   *
+   * Only active Products count, so stock the Brand has retired cannot promote
+   * a category the Catalog can no longer serve. Ordering is the query's, not
+   * the caller's: nothing above this decides which category leads.
+   */
+  listCategories(): Promise<CatalogCategory[]>;
 }
+
+/**
+ * The Catalog operations that answer one Customer's request about Products.
+ *
+ * The Commerce Agent and the Cart authority search and read Products. Neither
+ * asks the Catalog what it stocks in aggregate, and depending on the narrower
+ * port keeps that true rather than trusted.
+ */
+export type ProductCatalog = Pick<CatalogModule, "search" | "getProduct">;
 
 export function createCatalogModule(): CatalogModule {
   return {
@@ -191,6 +211,18 @@ export function createCatalogModule(): CatalogModule {
           ? { nextCursor: visibleRows[visibleRows.length - 1].id }
           : {}),
       };
+    },
+
+    async listCategories(): Promise<CatalogCategory[]> {
+      const productCount = count();
+      return db
+        .select({ category: products.category, productCount })
+        .from(products)
+        .where(eq(products.active, true))
+        .groupBy(products.category)
+        // The largest category leads because the Catalog says so. Ties are
+        // broken by name so the strip does not reshuffle between reads.
+        .orderBy(desc(productCount), asc(products.category));
     },
 
     async getProduct(productId: string): Promise<ProductDetailResult> {
