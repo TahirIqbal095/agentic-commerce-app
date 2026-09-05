@@ -37,7 +37,10 @@ import { launchRazorpayCheckout } from "@/modules/checkout/checkout-launcher";
 import { formatMoney } from "@/lib/format-money";
 import { cn } from "@/lib/utils";
 import type { CartView } from "@/modules/cart/cart";
-import type { CatalogProduct } from "@/modules/catalog/catalog";
+import type {
+  CatalogCategory,
+  CatalogProduct,
+} from "@/modules/catalog/catalog";
 import type {
   ProductConstraintKey,
   ShoppingIntent,
@@ -194,6 +197,7 @@ function wasReconciled(requestError: unknown) {
 export function ShoppingAssistant({
   brandName,
   brandDescription,
+  categories = [],
   initialConversation = null,
   resumeConversation = false,
   launchCheckout = launchRazorpayCheckout,
@@ -205,6 +209,12 @@ export function ShoppingAssistant({
    * is the Brand's rather than the Storefront's invention.
    */
   brandDescription: string;
+  /**
+   * What the Catalog offers, largest category first, read on the server. A
+   * Catalog the Storefront could not read arrives as an empty list: the strip
+   * it would have filled is missing, and everything else still works.
+   */
+  categories?: CatalogCategory[];
   initialConversation?: CurrentConversation | null;
   resumeConversation?: boolean;
   /**
@@ -1119,6 +1129,7 @@ export function ShoppingAssistant({
               <OpeningState
                 brandName={brandName}
                 brandDescription={brandDescription}
+                categories={categories}
                 composer={composer}
                 onPrompt={askFor}
               />

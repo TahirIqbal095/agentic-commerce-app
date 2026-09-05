@@ -6,7 +6,7 @@ import {
   type CartModule,
   type CartView,
 } from "@/modules/cart/cart";
-import type { CatalogModule } from "@/modules/catalog/catalog";
+import type { ProductCatalog } from "@/modules/catalog/catalog";
 import {
   createGuestSessionRoute,
   type GuestSession,
@@ -55,7 +55,7 @@ test("an explicit Add Product command returns the complete authoritative Cart", 
       return { id: "guest-session-1" };
     },
   };
-  const catalog: CatalogModule = {
+  const catalog: ProductCatalog = {
     async search() {
       throw new Error("Search is not part of an explicit Add command");
     },

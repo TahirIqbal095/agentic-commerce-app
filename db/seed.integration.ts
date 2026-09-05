@@ -794,6 +794,45 @@ test("catalog retrieval combines intent, commerce, and availability criteria", a
   );
 });
 
+test("the Catalog offers its categories with the Brand's largest leading", async () => {
+  await runSeedCommand();
+  const catalog = createCatalogModule();
+
+  const categories = await catalog.listCategories();
+
+  assert.deepEqual(
+    new Set(categories.map((entry) => entry.category)),
+    SHOE_CATALOG_CATEGORIES,
+  );
+  // The Storefront never names a category in code, so what leads has to be
+  // decided here: the counts must already be descending as they arrive.
+  assert.deepEqual(
+    categories,
+    [...categories].sort(
+      (one, other) =>
+        other.productCount - one.productCount ||
+        one.category.localeCompare(other.category),
+    ),
+  );
+  assert.equal(categories[0].category, "Footwear");
+});
+
+test("a deactivated Product cannot promote the category it left", async () => {
+  await runSeedCommand();
+  const catalog = createCatalogModule();
+  const beforeRetiring = await catalog.listCategories();
+
+  await db
+    .update(products)
+    .set({ active: false })
+    .where(eq(products.slug, "strideflow-daily-running-shoes"));
+  const afterRetiring = await catalog.listCategories();
+
+  const footwearIn = (categories: Awaited<ReturnType<typeof catalog.listCategories>>) =>
+    categories.find((entry) => entry.category === "Footwear")?.productCount;
+  assert.equal(footwearIn(afterRetiring), footwearIn(beforeRetiring)! - 1);
+});
+
 test("concurrent Customer turns retain every authoritative Cart addition", async () => {
   await runSeedCommand();
   await db.delete(carts).where(eq(carts.guestSessionId, TEST_GUEST_SESSION_ID));

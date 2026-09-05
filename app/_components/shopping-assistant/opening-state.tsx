@@ -4,7 +4,12 @@ import { motion, useReducedMotion } from "motion/react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { EXAMPLE_PROMPTS } from "./brand-presentation";
+import type { CatalogCategory } from "@/modules/catalog/catalog";
+import {
+  categoryPrompt,
+  CategoryGlyph,
+  EXAMPLE_PROMPTS,
+} from "./brand-presentation";
 
 /**
  * The Storefront before a Customer has said anything.
@@ -20,15 +25,23 @@ import { EXAMPLE_PROMPTS } from "./brand-presentation";
  * Customer learns that a use case, a budget, or a mood is a thing they may say.
  * Tapping one starts a Conversation Turn rather than filling the composer and
  * leaving them to find the send control.
+ *
+ * Beneath them, the Catalog's own categories prove what is actually sold. The
+ * strip is Catalog metadata, not a Recommendation Set: it exists before any
+ * Conversation Turn has, and carries no price or stock. Tapping one starts a
+ * Conversation Turn about that category, so the proof of subject is also a way
+ * in rather than a competing browse path.
  */
 export function OpeningState({
   brandName,
   brandDescription,
+  categories,
   composer,
   onPrompt,
 }: {
   brandName: string;
   brandDescription: string;
+  categories: CatalogCategory[];
   composer: ReactNode;
   onPrompt: (message: string) => void;
 }) {
@@ -74,6 +87,40 @@ export function OpeningState({
           </motion.div>
         ))}
       </div>
+
+      {categories.length > 0 ? (
+        <div
+          role="group"
+          aria-label="Shop by category"
+          className="mt-6 flex flex-wrap justify-center gap-2.5"
+        >
+          {categories.map((entry, index) => (
+            <motion.div
+              key={entry.category}
+              initial={{ opacity: 0, y: reduceMotion ? 0 : 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: reduceMotion ? 0 : 0.22 + index * 0.04 }}
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-label={`${entry.category}, ${entry.productCount} ${
+                  entry.productCount === 1 ? "Product" : "Products"
+                }`}
+                onClick={() => onPrompt(categoryPrompt(entry.category))}
+                className="gap-2 rounded-full border border-border"
+              >
+                <CategoryGlyph category={entry.category} />
+                {entry.category}
+                <span className="font-mono text-[11px] text-muted-foreground">
+                  {entry.productCount}
+                </span>
+              </Button>
+            </motion.div>
+          ))}
+        </div>
+      ) : null}
     </motion.section>
   );
 }

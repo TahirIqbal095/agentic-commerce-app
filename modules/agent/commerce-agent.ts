@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CatalogModule } from "@/modules/catalog/catalog";
+import type { ProductCatalog } from "@/modules/catalog/catalog";
 import type { CartInspection } from "@/modules/cart/cart-inspection";
 import type {
   CatalogProduct,
@@ -163,7 +163,7 @@ function checkoutMessage(checkout: CheckoutPreparation): string {
 }
 
 export function createCommerceAgent(
-  catalog: CatalogModule,
+  catalog: ProductCatalog,
   analyzer: IntentAnalyzer,
   conversation: ConversationModule,
   options: CommerceAgentOptions,
@@ -553,7 +553,7 @@ function resolveCapabilities({
   signal,
   observedProducts,
 }: {
-  catalog: CatalogModule;
+  catalog: ProductCatalog;
   intentBrief: IntentBrief;
   limits: CommerceAgentLimits;
   signal: AbortSignal;
@@ -722,7 +722,7 @@ type SpeculativeCatalogSearch =
  * nothing — never a rejected promise.
  */
 function searchCatalogSpeculatively(
-  catalog: CatalogModule,
+  catalog: ProductCatalog,
   intentBrief: IntentBrief,
   limits: CommerceAgentLimits,
 ): Promise<SpeculativeCatalogSearch> {

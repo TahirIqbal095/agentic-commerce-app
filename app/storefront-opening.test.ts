@@ -4,9 +4,13 @@ import { JSDOM } from "jsdom";
 import React from "react";
 import { answerMediaQueries, installBrowser } from "./_test/browser";
 import { FINE_POINTER_MEDIA_QUERY } from "./_components/shopping-assistant/composer";
-import { EXAMPLE_PROMPTS } from "./_components/shopping-assistant/brand-presentation";
+import {
+  categoryPrompt,
+  EXAMPLE_PROMPTS,
+} from "./_components/shopping-assistant/brand-presentation";
 import { createEmptyConversationContext } from "@/modules/agent/intent";
 import type { CartView } from "@/modules/cart/cart";
+import type { CatalogCategory } from "@/modules/catalog/catalog";
 
 /**
  * The Brand's own description, as the Brand record holds it. The Storefront
@@ -23,6 +27,13 @@ const emptyCart: CartView = {
   subtotalMinor: 0,
   currency: "INR",
 };
+
+/** What this Brand's Catalog holds, largest category first, as the query orders it. */
+const catalogCategories: CatalogCategory[] = [
+  { category: "Footwear", productCount: 58 },
+  { category: "Socks", productCount: 20 },
+  { category: "Shoe Care", productCount: 9 },
+];
 
 /** Whatever the Commerce Agent answers with. These cases are about the way in. */
 const turnResult = {
@@ -66,6 +77,8 @@ const turnResult = {
 async function openStorefront(
   t: TestContext,
   options: {
+    /** What the Catalog offers, as the page component read it on the server. */
+    categories?: CatalogCategory[];
     /** Which media queries this Customer's device matches. */
     matchesMedia?: (query: string) => boolean;
   } = {},
@@ -102,6 +115,7 @@ async function openStorefront(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
       brandDescription: BRAND_DESCRIPTION,
+      categories: options.categories ?? catalogCategories,
       resumeConversation: true,
     }),
   );
@@ -186,5 +200,56 @@ test("a Customer on a touch screen keeps the opening state unobscured", async (t
   assert.notEqual(
     dom.window.document.activeElement,
     view.getByRole("textbox", { name: /message/i }),
+  );
+});
+
+test("the category strip shows the Catalog in the order the Catalog gives", async (t) => {
+  const { view, within } = await openStorefront(t);
+
+  const strip = view.getByRole("group", { name: "Shop by category" });
+  assert.deepEqual(
+    within(strip)
+      .getAllByRole("button")
+      .map((tile) => tile.getAttribute("aria-label")),
+    ["Footwear, 58 Products", "Socks, 20 Products", "Shoe Care, 9 Products"],
+  );
+});
+
+test("tapping a category starts a Conversation Turn for that category", async (t) => {
+  const { view, user, requests } = await openStorefront(t);
+
+  await user.click(view.getByRole("button", { name: /^Socks/ }));
+
+  const turn = requests.find((request) => request.url === "/api/agent/message");
+  assert.equal(
+    (turn?.body as { message: string } | undefined)?.message,
+    categoryPrompt("Socks"),
+  );
+  assert.match(
+    (turn?.body as { idempotencyKey: string }).idempotencyKey,
+    /^[0-9a-f-]{36}$/,
+  );
+  assert.ok(await view.findByText("Here is a shortlist."));
+});
+
+test("a Catalog the Storefront could not read still leaves a way in", async (t) => {
+  const { view, user, requests } = await openStorefront(t, { categories: [] });
+
+  assert.equal(
+    view.getByRole("heading", { level: 1 }).textContent,
+    BRAND_DESCRIPTION,
+  );
+  assert.equal(view.queryByRole("group", { name: "Shop by category" }), null);
+
+  await user.type(
+    view.getByRole("textbox", { name: /message/i }),
+    "Something for the rain",
+  );
+  await user.click(view.getByRole("button", { name: /send/i }));
+
+  const turn = requests.find((request) => request.url === "/api/agent/message");
+  assert.equal(
+    (turn?.body as { message: string } | undefined)?.message,
+    "Something for the rain",
   );
 });

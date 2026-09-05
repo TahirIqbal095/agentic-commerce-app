@@ -12,7 +12,7 @@ import {
 } from "@/modules/agent/intent";
 import { createCartInspection } from "@/modules/cart/cart-inspection";
 import type { CartView } from "@/modules/cart/cart";
-import type { CatalogModule } from "@/modules/catalog/catalog";
+import type { ProductCatalog } from "@/modules/catalog/catalog";
 import type { GuestSessionStore } from "@/modules/identity/guest-session";
 import { createMessageRoute } from "./route-factory";
 
@@ -66,7 +66,7 @@ const CARTS_BY_GUEST_SESSION = new Map<string, CartView>([
   ["guest-session-2", SOMEONE_ELSES_CART],
 ]);
 
-const unusedCatalog: CatalogModule = {
+const unusedCatalog: ProductCatalog = {
   async search() {
     throw new Error("Cart inspection must not search the Catalog.");
   },

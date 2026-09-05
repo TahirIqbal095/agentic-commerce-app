@@ -5,7 +5,7 @@ import {
   type CommerceAgent,
   type CommerceAgentLoop,
 } from "@/modules/agent/commerce-agent";
-import type { CatalogModule } from "@/modules/catalog/catalog";
+import type { ProductCatalog } from "@/modules/catalog/catalog";
 import type { CartModule } from "@/modules/cart/cart";
 import { createCartInspection } from "@/modules/cart/cart-inspection";
 import {
@@ -456,7 +456,7 @@ function createConversationPost({
   analyzer: IntentAnalyzer;
   agentLoop: CommerceAgentLoop;
   cart?: Pick<CartModule, "inspect">;
-  catalog?: CatalogModule;
+  catalog?: ProductCatalog;
 }) {
   const agent = createCommerceAgent(
     catalog,

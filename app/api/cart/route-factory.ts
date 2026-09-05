@@ -5,7 +5,7 @@ import {
 } from "@/lib/http/responses";
 import { isUuid } from "@/lib/validation";
 import { CartError, type CartModule, type CartView } from "@/modules/cart/cart";
-import type { CatalogModule } from "@/modules/catalog/catalog";
+import type { ProductCatalog } from "@/modules/catalog/catalog";
 import {
   createGuestSessionRoute,
   createGuestSessionBrowsingRoute,
@@ -54,7 +54,7 @@ function retireProposalsAfter(
 }
 
 type AddToCartRouteOptions = CartRouteOptions & {
-  catalog: CatalogModule;
+  catalog: ProductCatalog;
   issueToken?: () => string;
 };
 
