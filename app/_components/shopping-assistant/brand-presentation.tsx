@@ -95,12 +95,14 @@ export function categoryPrompt(category: string): string {
  * What the document says before the Brand record has been read.
  *
  * The Storefront's own page titles itself from the Brand, so this is reached
- * only when there is no Brand to ask. It describes what is sold rather than
- * how the Storefront is built, because a Customer reading a browser tab or a
- * search result is owed the former.
+ * only when there is no Brand to ask. It names what is sold rather than how the
+ * Storefront is built, because a Customer reading a browser tab or a search
+ * result is owed the former. It names no category: what the Catalog contains
+ * comes from the Catalog, and a list frozen here would go on claiming a
+ * category after the Brand retired it.
  */
 export const FALLBACK_METADATA = {
   title: "Everyday footwear and accessories",
   description:
-    "Shop footwear, socks, laces, insoles, and shoe care by describing what you need.",
+    "Describe what you need — a use case, a budget, or a mood — and shop for it in one conversation.",
 };

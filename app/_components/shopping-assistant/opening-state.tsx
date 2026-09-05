@@ -28,9 +28,11 @@ import {
  *
  * Beneath them, the Catalog's own categories prove what is actually sold. The
  * strip is Catalog metadata, not a Recommendation Set: it exists before any
- * Conversation Turn has, and carries no price or stock. Tapping one starts a
- * Conversation Turn about that category, so the proof of subject is also a way
- * in rather than a competing browse path.
+ * Conversation Turn has, and carries no price or stock. Its Product counts
+ * order it and are not shown — a bare number beside a category reads as how
+ * many are left, which is a claim about stock the strip is not making. Tapping
+ * one starts a Conversation Turn about that category, so the proof of subject
+ * is also a way in rather than a competing browse path.
  */
 export function OpeningState({
   brandName,
@@ -110,17 +112,11 @@ export function OpeningState({
                 type="button"
                 variant="ghost"
                 size="sm"
-                aria-label={`${entry.category}, ${entry.productCount} ${
-                  entry.productCount === 1 ? "Product" : "Products"
-                }`}
                 onClick={() => onPrompt(categoryPrompt(entry.category))}
                 className="gap-2 rounded-full border border-border"
               >
                 <CategoryGlyph category={entry.category} />
                 {entry.category}
-                <span className="font-mono text-[11px] text-muted-foreground">
-                  {entry.productCount}
-                </span>
               </Button>
             </motion.div>
           ))}

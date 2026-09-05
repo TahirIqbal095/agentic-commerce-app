@@ -87,7 +87,7 @@ export function Composer({
               value={prompt}
               rows={1}
               onChange={(event) => setPrompt(event.target.value)}
-              placeholder="What are you looking for?"
+              placeholder="Describe what you need"
               autoComplete="off"
               className="max-h-36 min-h-16 flex-1 resize-none overflow-x-hidden overflow-y-auto border-0 bg-transparent px-0 py-3 text-lg font-medium leading-6 shadow-none field-sizing-content"
             />

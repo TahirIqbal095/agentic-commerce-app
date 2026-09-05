@@ -206,8 +206,8 @@ test("the category strip shows the Catalog in the order the Catalog gives", asyn
   assert.deepEqual(
     within(strip)
       .getAllByRole("button")
-      .map((tile) => tile.getAttribute("aria-label")),
-    ["Footwear, 58 Products", "Socks, 20 Products", "Shoe Care, 9 Products"],
+      .map((tile) => tile.textContent),
+    catalogCategories.map((entry) => entry.category),
   );
 });
 
