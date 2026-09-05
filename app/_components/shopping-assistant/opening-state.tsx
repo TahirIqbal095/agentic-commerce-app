@@ -81,6 +81,11 @@ export function OpeningState({
               variant="outline"
               size="sm"
               onClick={() => onPrompt(prompt)}
+              // An example is a whole sentence, and the button language is
+              // written for labels that fit on one line. It wraps instead, so
+              // a narrow viewport reads the example rather than scrolling
+              // sideways past it.
+              className="h-auto whitespace-normal py-2 text-left leading-5"
             >
               {prompt}
             </Button>
