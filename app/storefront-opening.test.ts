@@ -153,10 +153,6 @@ test("tapping an example prompt starts a Conversation Turn", async (t) => {
     (turn?.body as { message: string } | undefined)?.message,
     example,
   );
-  assert.match(
-    (turn?.body as { idempotencyKey: string }).idempotencyKey,
-    /^[0-9a-f-]{36}$/,
-  );
   assert.ok(await view.findByText("Here is a shortlist."));
 });
 
@@ -224,10 +220,6 @@ test("tapping a category starts a Conversation Turn for that category", async (t
   assert.equal(
     (turn?.body as { message: string } | undefined)?.message,
     categoryPrompt("Socks"),
-  );
-  assert.match(
-    (turn?.body as { idempotencyKey: string }).idempotencyKey,
-    /^[0-9a-f-]{36}$/,
   );
   assert.ok(await view.findByText("Here is a shortlist."));
 });

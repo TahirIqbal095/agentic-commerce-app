@@ -3,18 +3,20 @@
  *
  * Everything structural the Storefront says comes from data: what the Brand
  * sells comes from the Brand record, and what the Catalog holds comes from the
- * Catalog. Two things cannot be derived from either, and they live here
- * together so a deployment for another Brand has exactly one file to edit.
+ * Catalog. What cannot be derived from either lives here, so a deployment for
+ * another Brand has exactly one file to edit.
  *
- * The first is iconography. A category is a string in the Catalog, and no
- * amount of reading it yields a drawing; the map below is hand-written and
- * deliberately so.
+ * Iconography cannot. A category is a string in the Catalog, and no amount of
+ * reading it yields a drawing; the map below is hand-written, deliberately so.
  *
- * The second is the example prompts. A sentence generated from Catalog data
- * would teach a Customer query syntax — the very thing the Commerce Agent
- * exists not to require. The examples are written as full sentences carrying a
- * use case, a budget, and a mood, because that is the register the Agent is
- * built for.
+ * The example sentences cannot. A sentence generated from Catalog data would
+ * teach a Customer query syntax — the very thing the Commerce Agent exists not
+ * to require. They are written as whole requests carrying a use case, a
+ * budget, and a mood, because that is the register the Agent is built for.
+ *
+ * Nor can the document's words before the Brand record has been read, which
+ * are the last export here for the same reason: there is nothing to derive
+ * them from.
  */
 
 import type { ReactElement } from "react";

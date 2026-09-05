@@ -414,7 +414,7 @@ export function ShoppingAssistant({
    * the composer: tapping either starts a Conversation Turn rather than filling
    * the composer and leaving the Customer to find the send control.
    */
-  function askFor(message: string) {
+  function startConversationTurn(message: string) {
     if (isLoading) return;
     void sendMessage(message);
   }
@@ -1131,7 +1131,7 @@ export function ShoppingAssistant({
                 brandDescription={brandDescription}
                 categories={categories}
                 composer={composer}
-                onPrompt={askFor}
+                onPrompt={startConversationTurn}
               />
             ) : (
               <>
