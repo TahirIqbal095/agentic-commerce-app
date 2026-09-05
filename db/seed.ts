@@ -444,7 +444,7 @@ export async function seedDemoCatalog(): Promise<void> {
         name: "Arc",
         slug: "arc",
         description:
-          "Everyday footwear and accessories, discovered with the Arc Commerce Agent.",
+          "Everyday footwear and accessories.",
         logoUrl: null,
         currency: "INR",
       })
@@ -454,7 +454,7 @@ export async function seedDemoCatalog(): Promise<void> {
           name: "Arc",
           slug: "arc",
           description:
-            "Everyday footwear and accessories, discovered with the Arc Commerce Agent.",
+            "Everyday footwear and accessories.",
           logoUrl: null,
           currency: "INR",
           updatedAt: now,

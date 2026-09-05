@@ -103,6 +103,7 @@ async function reviewTheCart(
   const view = testingLibrary.render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
     }),
   );
@@ -229,6 +230,7 @@ async function resumeTranscript(t: TestContext, dom: JSDOM) {
   const view = testingLibrary.render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       initialConversation: {
         conversationId: "41000000-0000-4000-8000-000000000001",
         transcript: [
@@ -550,6 +552,7 @@ test("a readiness card recorded before a Cart mutation survives the refresh as O
   const view = testingLibrary.render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
     }),
   );
@@ -577,6 +580,7 @@ test("a blocked readiness card withholds its Cart controls while the current Car
   const view = testingLibrary.render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       initialConversation: {
         conversationId: "41000000-0000-4000-8000-000000000001",
         transcript: [readinessEntry(shortStockReadiness)],

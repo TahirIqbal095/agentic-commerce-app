@@ -230,6 +230,7 @@ export async function openStorefront(
   const view = testingLibrary.render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
       launchCheckout: async (request: unknown) => {
         launches.push(request);

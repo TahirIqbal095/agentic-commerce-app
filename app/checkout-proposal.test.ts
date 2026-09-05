@@ -330,6 +330,7 @@ test("a reloaded Transcript recovers a checkout already in flight", async (t) =>
   const view = testingLibrary.render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
     }),
   );

@@ -6,7 +6,7 @@ import { ShoppingAssistant } from "./shopping-assistant";
 export async function generateMetadata(): Promise<Metadata> {
   const brand = await requireBrand();
   return {
-    title: `${brand.name} | Agentic Commerce Storefront`,
+    title: `${brand.name} — ${brand.description}`,
     description: brand.description,
   };
 }
@@ -14,5 +14,11 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function Home() {
   await connection();
   const brand = await requireBrand();
-  return <ShoppingAssistant brandName={brand.name} resumeConversation />;
+  return (
+    <ShoppingAssistant
+      brandName={brand.name}
+      brandDescription={brand.description}
+      resumeConversation
+    />
+  );
 }

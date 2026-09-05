@@ -90,6 +90,7 @@ async function openTranscript(
   const view = testingLibrary.render(
     React.createElement(ShoppingAssistant, {
       brandName: "Arc",
+      brandDescription: "Everyday footwear and accessories.",
       resumeConversation: true,
     }),
   );

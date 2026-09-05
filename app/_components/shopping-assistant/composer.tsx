@@ -1,9 +1,10 @@
 import type { FormEvent } from "react";
-import { ArrowUp, Radio, Sparkles } from "lucide-react";
+import { ArrowUp, Radio } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { AgentMark } from "./brand-presentation";
 
 /**
  * The Storefront's composer dock.
@@ -39,7 +40,7 @@ export function Composer({
         <div className="flex items-end gap-2">
           <div className="flex min-w-0 flex-1 items-start gap-3 pl-2">
             <span className="mt-3 grid size-7 shrink-0 place-items-center rounded-sm border border-border bg-muted text-foreground transition-colors group-focus-within:bg-primary group-focus-within:text-primary-foreground motion-reduce:transition-none">
-              <Sparkles className="size-3.5" />
+              <AgentMark className="size-3.5" />
             </span>
             <label htmlFor="shopping-prompt" className="sr-only">
               Message the {brandName} Commerce Agent

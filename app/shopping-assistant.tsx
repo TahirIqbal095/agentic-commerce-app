@@ -14,7 +14,7 @@ import {
   TIMELINE_RAIL_MEDIA_QUERY,
 } from "./_components/shopping-assistant/checkout-timeline-rail";
 import { Header } from "./_components/shopping-assistant/header";
-import { Hero } from "./_components/shopping-assistant/hero";
+import { OpeningState } from "./_components/shopping-assistant/opening-state";
 import { ProductDetails } from "./_components/shopping-assistant/product-details";
 import { useMediaQuery } from "./_components/shopping-assistant/media-query";
 import { ResultArea } from "./_components/shopping-assistant/result-area";
@@ -193,11 +193,18 @@ function wasReconciled(requestError: unknown) {
 
 export function ShoppingAssistant({
   brandName,
+  brandDescription,
   initialConversation = null,
   resumeConversation = false,
   launchCheckout = launchRazorpayCheckout,
 }: {
   brandName: string;
+  /**
+   * The Brand's own description of what it sells, read from the Brand record on
+   * the server. It is the Storefront's headline, so the claim a Customer reads
+   * is the Brand's rather than the Storefront's invention.
+   */
+  brandDescription: string;
   initialConversation?: CurrentConversation | null;
   resumeConversation?: boolean;
   /**
@@ -1076,7 +1083,11 @@ export function ShoppingAssistant({
             )}
           >
             {entries.length === 0 ? (
-              <Hero brandName={brandName} onSuggestion={setPrompt} />
+              <OpeningState
+                brandName={brandName}
+                brandDescription={brandDescription}
+                onSuggestion={setPrompt}
+              />
             ) : (
               <>
                 {contextSummary ? (

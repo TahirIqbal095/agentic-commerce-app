@@ -1,6 +1,7 @@
-import { MessageSquarePlus, Radio, Sparkles } from "lucide-react";
+import { MessageSquarePlus, Radio } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { BrandMark } from "./brand-presentation";
 import type { CartView } from "@/modules/cart/cart";
 import type { CartControls } from "./cart-panel";
 import {
@@ -58,7 +59,7 @@ export function Header({
           aria-label={`${brandName} Storefront`}
         >
           <span className="grid size-9 place-items-center rounded-md border-2 border-sidebar-border bg-primary text-primary-foreground">
-            <Sparkles className="size-4" />
+            <BrandMark className="size-4" />
           </span>
           <span className="text-sm font-bold tracking-tight">{brandName}</span>
         </div>
